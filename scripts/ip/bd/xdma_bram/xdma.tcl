@@ -9,9 +9,9 @@ if {$xdma_0 eq ""} {
 set_property -dict [list \
   CONFIG.PCIE_BOARD_INTERFACE {pci_express_x8} \
   CONFIG.axi_data_width {256_bit} \
-  CONFIG.axilite_master_en {true} \
-  CONFIG.axilite_master_size {8} \
+  CONFIG.axilite_master_en {false} \
   CONFIG.axisten_freq {250} \
+  CONFIG.cfg_mgmt_if {false} \
   CONFIG.mode_selection {Advanced} \
   CONFIG.pf0_device_id {9024} \
   CONFIG.pf0_interrupt_pin {NONE} \
@@ -22,8 +22,6 @@ set_property -dict [list \
   CONFIG.xdma_rnum_chnl {4} \
   CONFIG.xdma_wnum_chnl {4} \
 ] $xdma_0
-set_property CONFIG.cfg_mgmt_if {false} [get_bd_cells xdma_0]
-set_property CONFIG.axilite_master_en {false} [get_bd_cells xdma_0]
 
 make_bd_pins_external  [get_bd_pins xdma_0/user_lnk_up]
 

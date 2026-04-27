@@ -2,7 +2,7 @@
 //Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 //--------------------------------------------------------------------------------
 //Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-//Date        : Tue Apr 28 04:34:25 2026
+//Date        : Tue Apr 28 04:54:12 2026
 //Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
 //Command     : generate_target xdma_bram.bd
 //Design      : xdma_bram
@@ -182,14 +182,6 @@ module xdma_bram
         .m_axi_wready(xdma_0_M_AXI_WREADY),
         .m_axi_wstrb(xdma_0_M_AXI_WSTRB),
         .m_axi_wvalid(xdma_0_M_AXI_WVALID),
-        .m_axil_arready(1'b0),
-        .m_axil_awready(1'b0),
-        .m_axil_bresp({1'b0,1'b0}),
-        .m_axil_bvalid(1'b0),
-        .m_axil_rdata({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-        .m_axil_rresp({1'b0,1'b0}),
-        .m_axil_rvalid(1'b0),
-        .m_axil_wready(1'b0),
         .pci_exp_rxn(pci_express_x8_rxn),
         .pci_exp_rxp(pci_express_x8_rxp),
         .pci_exp_txn(pci_express_x8_txn),

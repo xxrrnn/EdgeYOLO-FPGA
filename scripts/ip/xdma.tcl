@@ -69,8 +69,7 @@ set_property -dict [list \
   CONFIG.SYS_RST_N_BOARD_INTERFACE {cpu_reset} \
   CONFIG.axi_data_width {256_bit} \
   CONFIG.axil_master_64bit_en {false} \
-  CONFIG.axilite_master_en {true} \
-  CONFIG.axilite_master_size {8} \
+  CONFIG.axilite_master_en {false} \
   CONFIG.axisten_freq {250} \
   CONFIG.cfg_mgmt_if {false} \
   CONFIG.en_ext_ch_gt_drp {false} \
@@ -79,7 +78,6 @@ set_property -dict [list \
   CONFIG.enable_jtag_dbg {false} \
   CONFIG.mode_selection {Advanced} \
   CONFIG.pcie_extended_tag {true} \
-  CONFIG.pciebar2axibar_axil_master {0x0000_0000} \
   CONFIG.pf0_device_id {9024} \
   CONFIG.pf0_interrupt_pin {NONE} \
   CONFIG.pf0_msix_cap_pba_bir {BAR_3:2} \
