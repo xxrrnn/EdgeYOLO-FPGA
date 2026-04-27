@@ -122,14 +122,7 @@ module xdma_bram_xdma_0_0 (
   m_axil_rdata,
   m_axil_rresp,
   m_axil_rvalid,
-  m_axil_rready,
-  cfg_mgmt_addr,
-  cfg_mgmt_write,
-  cfg_mgmt_write_data,
-  cfg_mgmt_byte_enable,
-  cfg_mgmt_read,
-  cfg_mgmt_read_data,
-  cfg_mgmt_read_write_done
+  m_axil_rready
 );
 
 (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 CLK.SYS_CLK CLK" *)
@@ -172,7 +165,7 @@ output wire [2 : 0] msi_vector_width;
 (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 M_AXI AWREADY" *)
 (* X_INTERFACE_MODE = "master" *)
 (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME M_AXI, NUM_READ_OUTSTANDING 32, NUM_WRITE_OUTSTANDING 16, SUPPORTS_NARROW_BURST 0, HAS_BURST 0, HAS_BURST.VALUE_SRC CONSTANT, DATA_WIDTH 256, PROTOCOL AXI4, FREQ_HZ 250000000, ID_WIDTH 4, ADDR_WIDTH 64, AWUSER_WIDTH 0, ARUSER_WIDTH 0, WUSER_WIDTH 0, RUSER_WIDTH 0, BUSER_WIDTH 0, READ_WRITE_MODE READ_WRITE, HAS_LOCK 1, HAS_PROT 1, HAS_CACHE 1, HAS_QOS 0, HAS_REGION 0, HAS_WSTRB 1, HAS_BRESP 1, HAS_RRESP 1, MAX_BURST_LENGTH 256, PHASE 0.0, CLK_DOMAIN xdma_bram_xdma_0_0_axi_aclk, \
-NUM_READ_THREADS 2, NUM_WRITE_THREADS 2, RUSER_BITS_PER_BYTE 0, WUSER_BITS_PER_BYTE 0, INSERT_VIP 0" *)
+NUM_READ_THREADS 4, NUM_WRITE_THREADS 4, RUSER_BITS_PER_BYTE 0, WUSER_BITS_PER_BYTE 0, INSERT_VIP 0" *)
 input wire m_axi_awready;
 (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 M_AXI WREADY" *)
 input wire m_axi_wready;
@@ -283,21 +276,6 @@ input wire [1 : 0] m_axil_rresp;
 input wire m_axil_rvalid;
 (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 M_AXI_LITE RREADY" *)
 output wire m_axil_rready;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt ADDR" *)
-(* X_INTERFACE_MODE = "slave" *)
-input wire [18 : 0] cfg_mgmt_addr;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt WRITE_EN" *)
-input wire cfg_mgmt_write;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt WRITE_DATA" *)
-input wire [31 : 0] cfg_mgmt_write_data;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt BYTE_EN" *)
-input wire [3 : 0] cfg_mgmt_byte_enable;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt READ_EN" *)
-input wire cfg_mgmt_read;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt READ_DATA" *)
-output wire [31 : 0] cfg_mgmt_read_data;
-(* X_INTERFACE_INFO = "xilinx.com:interface:pcie_cfg_mgmt:1.0 pcie_cfg_mgmt READ_WRITE_DONE" *)
-output wire cfg_mgmt_read_write_done;
 
   xdma_bram_xdma_0_0_core_top #(
     .COMPONENT_NAME("xdma_0"),
@@ -324,7 +302,7 @@ output wire cfg_mgmt_read_write_done;
     .MCAP_ENABLEMENT("NONE"),
     .EXT_STARTUP_PRIMITIVE("false"),
     .PF0_VENDOR_ID(16'H10EE),
-    .PF0_DEVICE_ID(16'H9038),
+    .PF0_DEVICE_ID(16'H9024),
     .PF0_REVISION_ID(8'H00),
     .PF0_SUBSYSTEM_VENDOR_ID(16'H10EE),
     .PF0_SUBSYSTEM_ID(16'H0007),
@@ -375,8 +353,8 @@ output wire cfg_mgmt_read_write_done;
     .XDMA_PCIE_64BIT_EN("xdma_pcie_64bit_en"),
     .XDMA_AXILITE_MASTER("TRUE"),
     .XDMA_AXIST_BYPASS("FALSE"),
-    .XDMA_RNUM_CHNL(2),
-    .XDMA_WNUM_CHNL(2),
+    .XDMA_RNUM_CHNL(4),
+    .XDMA_WNUM_CHNL(4),
     .XDMA_AXILITE_SLAVE("FALSE"),
     .XDMA_NUM_USR_IRQ(1),
     .XDMA_RNUM_RIDS(32),
@@ -389,16 +367,16 @@ output wire cfg_mgmt_read_write_done;
     .EN_AXI_MASTER_IF("TRUE"),
     .EN_WCHNL_0("TRUE"),
     .EN_WCHNL_1("TRUE"),
-    .EN_WCHNL_2("FALSE"),
-    .EN_WCHNL_3("FALSE"),
+    .EN_WCHNL_2("TRUE"),
+    .EN_WCHNL_3("TRUE"),
     .EN_WCHNL_4("FALSE"),
     .EN_WCHNL_5("FALSE"),
     .EN_WCHNL_6("FALSE"),
     .EN_WCHNL_7("FALSE"),
     .EN_RCHNL_0("TRUE"),
     .EN_RCHNL_1("TRUE"),
-    .EN_RCHNL_2("FALSE"),
-    .EN_RCHNL_3("FALSE"),
+    .EN_RCHNL_2("TRUE"),
+    .EN_RCHNL_3("TRUE"),
     .EN_RCHNL_4("FALSE"),
     .EN_RCHNL_5("FALSE"),
     .EN_RCHNL_6("FALSE"),
@@ -422,7 +400,7 @@ output wire cfg_mgmt_read_write_done;
     .RD_CH1_ENABLED("FALSE"),
     .RD_CH2_ENABLED("FALSE"),
     .RD_CH3_ENABLED("FALSE"),
-    .CFG_MGMT_IF("TRUE"),
+    .CFG_MGMT_IF("FALSE"),
     .RQ_SEQ_NUM_IGNORE(0),
     .CFG_EXT_IF("FALSE"),
     .LEGACY_CFG_EXT_IF("FALSE"),
@@ -578,8 +556,8 @@ output wire cfg_mgmt_read_write_done;
     .VF_BARLITE_INT_PF1(6'H01),
     .VF_BARLITE_INT_PF2(6'H01),
     .VF_BARLITE_INT_PF3(6'H01),
-    .C_C2H_NUM_CHNL(2),
-    .C_H2C_NUM_CHNL(2),
+    .C_C2H_NUM_CHNL(4),
+    .C_H2C_NUM_CHNL(4),
     .H2C_XDMA_CHNL(8'H0F),
     .C2H_XDMA_CHNL(8'H0F),
     .AXISTEN_IF_ENABLE_MSG_ROUTE(18'H00000),
@@ -631,7 +609,7 @@ output wire cfg_mgmt_read_write_done;
     .pci_exp_rxn(pci_exp_rxn),
     .cfg_subsys_vend_id(16'H10EE),
     .cfg_vend_id(16'H10EE),
-    .cfg_dev_id_pf0(16'H9038),
+    .cfg_dev_id_pf0(16'H9024),
     .cfg_dev_id_pf1(16'H1041),
     .cfg_dev_id_pf2(16'H1040),
     .cfg_dev_id_pf3(16'H1039),
@@ -711,13 +689,13 @@ output wire cfg_mgmt_read_write_done;
     .m_axil_rresp(m_axil_rresp),
     .m_axil_rvalid(m_axil_rvalid),
     .m_axil_rready(m_axil_rready),
-    .cfg_mgmt_addr(cfg_mgmt_addr),
-    .cfg_mgmt_write(cfg_mgmt_write),
-    .cfg_mgmt_write_data(cfg_mgmt_write_data),
-    .cfg_mgmt_byte_enable(cfg_mgmt_byte_enable),
-    .cfg_mgmt_read(cfg_mgmt_read),
-    .cfg_mgmt_read_data(cfg_mgmt_read_data),
-    .cfg_mgmt_read_write_done(cfg_mgmt_read_write_done),
+    .cfg_mgmt_addr(19'B0),
+    .cfg_mgmt_write(1'B0),
+    .cfg_mgmt_write_data(32'B0),
+    .cfg_mgmt_byte_enable(4'B0),
+    .cfg_mgmt_read(1'B0),
+    .cfg_mgmt_read_data(),
+    .cfg_mgmt_read_write_done(),
     .cfg_mgmt_type1_cfg_reg_access(1'B0),
     .cfg_mgmt_addr_sd(),
     .cfg_mgmt_write_sd(),

@@ -2,10 +2,10 @@
 -- Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -- --------------------------------------------------------------------------------
 -- Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
--- Date        : Tue Apr 28 00:44:41 2026
+-- Date        : Tue Apr 28 00:44:40 2026
 -- Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
--- Command     : write_vhdl -force -mode funcsim
---               /home/triton/task/YOLO_on_FPGA/fpga/local/bd/xdma_bram/ip/xdma_bram_util_ds_buf_0/xdma_bram_util_ds_buf_0_sim_netlist.vhdl
+-- Command     : write_vhdl -force -mode funcsim -rename_top xdma_bram_util_ds_buf_0 -prefix
+--               xdma_bram_util_ds_buf_0_ xdma_bram_util_ds_buf_0_sim_netlist.vhdl
 -- Design      : xdma_bram_util_ds_buf_0
 -- Purpose     : This VHDL netlist is a functional simulation representation of the design and should not be modified or
 --               synthesized. This netlist cannot be used for SDF annotated simulation.
@@ -141,8 +141,6 @@ entity xdma_bram_util_ds_buf_0_util_ds_buf is
   attribute C_SIM_DEVICE of xdma_bram_util_ds_buf_0_util_ds_buf : entity is "VERSAL_AI_CORE_ES1";
   attribute C_SIZE : integer;
   attribute C_SIZE of xdma_bram_util_ds_buf_0_util_ds_buf : entity is 1;
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_util_ds_buf_0_util_ds_buf : entity is "util_ds_buf";
 end xdma_bram_util_ds_buf_0_util_ds_buf;
 
 architecture STRUCTURE of xdma_bram_util_ds_buf_0_util_ds_buf is

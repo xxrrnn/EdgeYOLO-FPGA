@@ -1,7 +1,7 @@
 {
   "design": {
     "design_info": {
-      "boundary_crc": "0xD383B4C48C46A5C7",
+      "boundary_crc": "0xA4EB2879B0EB86F8",
       "device": "xcvu37p-fsvh2892-2L-e",
       "name": "xdma_bram",
       "rev_ctrl_bd_flag": "RevCtrlBdOff",
@@ -11,6 +11,8 @@
     },
     "design_tree": {
       "xdma_0": "",
+      "xdma_constant": "",
+      "xdma_inv": "",
       "axi_bram_ctrl_0": "",
       "axi_bram_ctrl_0_bram": "",
       "util_ds_buf": ""
@@ -76,7 +78,7 @@
       "user_lnk_up_0": {
         "direction": "O"
       },
-      "pcie_perstn": {
+      "cpu_reset": {
         "type": "rst",
         "direction": "I",
         "parameters": {
@@ -85,7 +87,7 @@
             "value_src": "default"
           },
           "POLARITY": {
-            "value": "ACTIVE_LOW"
+            "value": "ACTIVE_HIGH"
           }
         }
       }
@@ -101,9 +103,6 @@
           "PCIE_BOARD_INTERFACE": {
             "value": "pci_express_x8"
           },
-          "SYS_RST_N_BOARD_INTERFACE": {
-            "value": "pcie_perstn"
-          },
           "axi_data_width": {
             "value": "256_bit"
           },
@@ -116,11 +115,14 @@
           "axisten_freq": {
             "value": "250"
           },
+          "cfg_mgmt_if": {
+            "value": "false"
+          },
           "mode_selection": {
             "value": "Advanced"
           },
           "pf0_device_id": {
-            "value": "9038"
+            "value": "9024"
           },
           "pf0_interrupt_pin": {
             "value": "NONE"
@@ -131,9 +133,6 @@
           "pl_link_cap_max_link_speed": {
             "value": "8.0_GT/s"
           },
-          "plltype": {
-            "value": "QPLL1"
-          },
           "xdma_axi_intf_mm": {
             "value": "AXI_Memory_Mapped"
           },
@@ -141,10 +140,10 @@
             "value": "true"
           },
           "xdma_rnum_chnl": {
-            "value": "2"
+            "value": "4"
           },
           "xdma_wnum_chnl": {
-            "value": "2"
+            "value": "4"
           }
         },
         "interface_ports": {
@@ -179,6 +178,33 @@
               "range": "4G",
               "width": "32"
             }
+          }
+        }
+      },
+      "xdma_constant": {
+        "vlnv": "xilinx.com:ip:xlconstant:1.1",
+        "ip_revision": "9",
+        "xci_name": "xdma_bram_xdma_constant_0",
+        "xci_path": "ip/xdma_bram_xdma_constant_0/xdma_bram_xdma_constant_0.xci",
+        "inst_hier_path": "xdma_constant",
+        "parameters": {
+          "CONST_VAL": {
+            "value": "0"
+          }
+        }
+      },
+      "xdma_inv": {
+        "vlnv": "xilinx.com:ip:util_vector_logic:2.0",
+        "ip_revision": "4",
+        "xci_name": "xdma_bram_xdma_inv_0",
+        "xci_path": "ip/xdma_bram_xdma_inv_0/xdma_bram_xdma_inv_0.xci",
+        "inst_hier_path": "xdma_inv",
+        "parameters": {
+          "C_OPERATION": {
+            "value": "not"
+          },
+          "C_SIZE": {
+            "value": "1"
           }
         }
       },
@@ -252,10 +278,10 @@
       }
     },
     "nets": {
-      "pcie_perstn_1": {
+      "cpu_reset_1": {
         "ports": [
-          "pcie_perstn",
-          "xdma_0/sys_rst_n"
+          "cpu_reset",
+          "xdma_inv/Op1"
         ]
       },
       "util_ds_buf_IBUF_DS_ODIV2": {
@@ -286,6 +312,18 @@
         "ports": [
           "xdma_0/user_lnk_up",
           "user_lnk_up_0"
+        ]
+      },
+      "xdma_constant_dout": {
+        "ports": [
+          "xdma_constant/dout",
+          "xdma_0/usr_irq_req"
+        ]
+      },
+      "xdma_inv_Res": {
+        "ports": [
+          "xdma_inv/Res",
+          "xdma_0/sys_rst_n"
         ]
       }
     },

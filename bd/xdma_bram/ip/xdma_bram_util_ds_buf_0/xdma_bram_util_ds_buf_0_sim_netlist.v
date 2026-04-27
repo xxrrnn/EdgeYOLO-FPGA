@@ -2,10 +2,10 @@
 // Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 // --------------------------------------------------------------------------------
 // Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-// Date        : Tue Apr 28 00:44:41 2026
+// Date        : Tue Apr 28 00:44:40 2026
 // Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
-// Command     : write_verilog -force -mode funcsim
-//               /home/triton/task/YOLO_on_FPGA/fpga/local/bd/xdma_bram/ip/xdma_bram_util_ds_buf_0/xdma_bram_util_ds_buf_0_sim_netlist.v
+// Command     : write_verilog -force -mode funcsim -rename_top xdma_bram_util_ds_buf_0 -prefix
+//               xdma_bram_util_ds_buf_0_ xdma_bram_util_ds_buf_0_sim_netlist.v
 // Design      : xdma_bram_util_ds_buf_0
 // Purpose     : This verilog netlist is a functional simulation representation of the design and should not be modified
 //               or synthesized. This netlist cannot be used for SDF annotated simulation.
@@ -13,190 +13,9 @@
 // --------------------------------------------------------------------------------
 `timescale 1 ps / 1 ps
 
-(* CHECK_LICENSE_TYPE = "xdma_bram_util_ds_buf_0,util_ds_buf,{}" *) (* downgradeipidentifiedwarnings = "yes" *) (* x_core_info = "util_ds_buf,Vivado 2024.2.2" *) 
-(* NotValidForBitStream *)
-module xdma_bram_util_ds_buf_0
-   (IBUF_DS_P,
-    IBUF_DS_N,
-    IBUF_OUT,
-    IBUF_DS_ODIV2);
-  (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_P" *) (* x_interface_mode = "slave CLK_IN_D" *) (* x_interface_parameter = "XIL_INTERFACENAME CLK_IN_D, BOARD.ASSOCIATED_PARAM DIFF_CLK_IN_BOARD_INTERFACE, CAN_DEBUG false, FREQ_HZ 100000000" *) input [0:0]IBUF_DS_P;
-  (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_N" *) input [0:0]IBUF_DS_N;
-  (* x_interface_info = "xilinx.com:signal:clock:1.0 IBUF_OUT CLK" *) (* x_interface_mode = "master IBUF_OUT" *) (* x_interface_parameter = "XIL_INTERFACENAME IBUF_OUT, FREQ_HZ 100000000, FREQ_TOLERANCE_HZ 0, PHASE 0.0, CLK_DOMAIN xdma_bram_util_ds_buf_0_IBUF_OUT, INSERT_VIP 0" *) output [0:0]IBUF_OUT;
-  (* x_interface_info = "xilinx.com:signal:clock:1.0 IBUF_DS_ODIV2 CLK" *) (* x_interface_mode = "master IBUF_DS_ODIV2" *) (* x_interface_parameter = "XIL_INTERFACENAME IBUF_DS_ODIV2, FREQ_HZ 100000000, FREQ_TOLERANCE_HZ 0, PHASE 0.0, CLK_DOMAIN xdma_bram_util_ds_buf_0_IBUF_DS_ODIV2, INSERT_VIP 0" *) output [0:0]IBUF_DS_ODIV2;
-
-  (* RTL_KEEP = "yes" *) (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_N" *) wire [0:0]IBUF_DS_N;
-  wire [0:0]IBUF_DS_ODIV2;
-  (* RTL_KEEP = "yes" *) (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_P" *) (* x_interface_mode = "slave CLK_IN_D" *) 
-  (* x_interface_parameter = "XIL_INTERFACENAME CLK_IN_D, BOARD.ASSOCIATED_PARAM DIFF_CLK_IN_BOARD_INTERFACE, CAN_DEBUG false, FREQ_HZ 100000000" *) wire [0:0]IBUF_DS_P;
-  wire [0:0]IBUF_OUT;
-  wire [0:0]NLW_U0_BUFGCE_O_UNCONNECTED;
-  wire [0:0]NLW_U0_BUFG_FABRIC_O_UNCONNECTED;
-  wire [0:0]NLW_U0_BUFG_GT_O_UNCONNECTED;
-  wire [0:0]NLW_U0_BUFG_O_UNCONNECTED;
-  wire [0:0]NLW_U0_BUFG_PS_O_UNCONNECTED;
-  wire [0:0]NLW_U0_BUFHCE_O_UNCONNECTED;
-  wire [0:0]NLW_U0_BUFH_O_UNCONNECTED;
-  wire [0:0]NLW_U0_IBUFDS_GTME5_O_UNCONNECTED;
-  wire [0:0]NLW_U0_IBUFDS_GTME5_ODIV2_UNCONNECTED;
-  wire [0:0]NLW_U0_IBUFDS_GTM_O_UNCONNECTED;
-  wire [0:0]NLW_U0_IBUFDS_GTM_ODIV2_UNCONNECTED;
-  wire [0:0]NLW_U0_IOBUF_DS_N_UNCONNECTED;
-  wire [0:0]NLW_U0_IOBUF_DS_P_UNCONNECTED;
-  wire [0:0]NLW_U0_IOBUF_IO_IO_UNCONNECTED;
-  wire [0:0]NLW_U0_IOBUF_IO_O_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_GT_O1_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_GT_O2_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_GT_O3_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_GT_O4_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_PS_O1_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_PS_O2_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_PS_O3_UNCONNECTED;
-  wire [0:0]NLW_U0_MBUFG_PS_O4_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE3_ADV_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE3_ADV_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE3_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE3_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE4_ADV_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE4_ADV_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE4_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE4_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE5_ADV_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE5_ADV_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE5_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTE5_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTME5_ADV_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTME5_ADV_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTME5_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTME5_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTM_ADV_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTM_ADV_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTM_O_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUFDS_GTM_OB_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUF_DS_N_UNCONNECTED;
-  wire [0:0]NLW_U0_OBUF_DS_P_UNCONNECTED;
-
-  (* C_BUFGCE_DIV = "1" *) 
-  (* C_BUFG_GT_SYNC = "0" *) 
-  (* C_BUF_TYPE = "ibufdsgte4" *) 
-  (* C_MODE = "PERFORMANCE" *) 
-  (* C_OBUFDS_GTE5_ADV = "2'b00" *) 
-  (* C_REFCLK_ICNTL_TX = "5'b00000" *) 
-  (* C_SIM_DEVICE = "VERSAL_AI_CORE_ES1" *) 
-  (* C_SIZE = "1" *) 
-  xdma_bram_util_ds_buf_0_util_ds_buf U0
-       (.BUFGCE_CE(1'b0),
-        .BUFGCE_CLR(1'b0),
-        .BUFGCE_I(1'b0),
-        .BUFGCE_O(NLW_U0_BUFGCE_O_UNCONNECTED[0]),
-        .BUFG_FABRIC_I(1'b0),
-        .BUFG_FABRIC_O(NLW_U0_BUFG_FABRIC_O_UNCONNECTED[0]),
-        .BUFG_GT_CE(1'b1),
-        .BUFG_GT_CEMASK(1'b0),
-        .BUFG_GT_CLR(1'b0),
-        .BUFG_GT_CLRMASK(1'b0),
-        .BUFG_GT_DIV({1'b0,1'b0,1'b0}),
-        .BUFG_GT_I(1'b0),
-        .BUFG_GT_O(NLW_U0_BUFG_GT_O_UNCONNECTED[0]),
-        .BUFG_I(1'b0),
-        .BUFG_O(NLW_U0_BUFG_O_UNCONNECTED[0]),
-        .BUFG_PS_I(1'b0),
-        .BUFG_PS_O(NLW_U0_BUFG_PS_O_UNCONNECTED[0]),
-        .BUFHCE_CE(1'b0),
-        .BUFHCE_I(1'b0),
-        .BUFHCE_O(NLW_U0_BUFHCE_O_UNCONNECTED[0]),
-        .BUFH_I(1'b0),
-        .BUFH_O(NLW_U0_BUFH_O_UNCONNECTED[0]),
-        .IBUFDS_GTME5_CEB(1'b0),
-        .IBUFDS_GTME5_I(1'b0),
-        .IBUFDS_GTME5_IB(1'b0),
-        .IBUFDS_GTME5_O(NLW_U0_IBUFDS_GTME5_O_UNCONNECTED[0]),
-        .IBUFDS_GTME5_ODIV2(NLW_U0_IBUFDS_GTME5_ODIV2_UNCONNECTED[0]),
-        .IBUFDS_GTM_CEB(1'b0),
-        .IBUFDS_GTM_I(1'b0),
-        .IBUFDS_GTM_IB(1'b0),
-        .IBUFDS_GTM_O(NLW_U0_IBUFDS_GTM_O_UNCONNECTED[0]),
-        .IBUFDS_GTM_ODIV2(NLW_U0_IBUFDS_GTM_ODIV2_UNCONNECTED[0]),
-        .IBUF_DS_CEB(1'b0),
-        .IBUF_DS_N(IBUF_DS_N),
-        .IBUF_DS_ODIV2(IBUF_DS_ODIV2),
-        .IBUF_DS_P(IBUF_DS_P),
-        .IBUF_OUT(IBUF_OUT),
-        .IOBUF_DS_N(NLW_U0_IOBUF_DS_N_UNCONNECTED[0]),
-        .IOBUF_DS_P(NLW_U0_IOBUF_DS_P_UNCONNECTED[0]),
-        .IOBUF_IO_I(1'b0),
-        .IOBUF_IO_IO(NLW_U0_IOBUF_IO_IO_UNCONNECTED[0]),
-        .IOBUF_IO_O(NLW_U0_IOBUF_IO_O_UNCONNECTED[0]),
-        .IOBUF_IO_T(1'b0),
-        .MBUFG_GT_CE(1'b1),
-        .MBUFG_GT_CEMASK(1'b0),
-        .MBUFG_GT_CLR(1'b0),
-        .MBUFG_GT_CLRB_LEAF(1'b1),
-        .MBUFG_GT_CLRMASK(1'b0),
-        .MBUFG_GT_DIV({1'b0,1'b0,1'b0}),
-        .MBUFG_GT_I(1'b0),
-        .MBUFG_GT_O1(NLW_U0_MBUFG_GT_O1_UNCONNECTED[0]),
-        .MBUFG_GT_O2(NLW_U0_MBUFG_GT_O2_UNCONNECTED[0]),
-        .MBUFG_GT_O3(NLW_U0_MBUFG_GT_O3_UNCONNECTED[0]),
-        .MBUFG_GT_O4(NLW_U0_MBUFG_GT_O4_UNCONNECTED[0]),
-        .MBUFG_PS_CLRB_LEAF(1'b1),
-        .MBUFG_PS_I(1'b0),
-        .MBUFG_PS_O1(NLW_U0_MBUFG_PS_O1_UNCONNECTED[0]),
-        .MBUFG_PS_O2(NLW_U0_MBUFG_PS_O2_UNCONNECTED[0]),
-        .MBUFG_PS_O3(NLW_U0_MBUFG_PS_O3_UNCONNECTED[0]),
-        .MBUFG_PS_O4(NLW_U0_MBUFG_PS_O4_UNCONNECTED[0]),
-        .OBUFDS_GTE3_ADV_CEB(1'b0),
-        .OBUFDS_GTE3_ADV_I({1'b0,1'b0,1'b0,1'b0}),
-        .OBUFDS_GTE3_ADV_O(NLW_U0_OBUFDS_GTE3_ADV_O_UNCONNECTED[0]),
-        .OBUFDS_GTE3_ADV_OB(NLW_U0_OBUFDS_GTE3_ADV_OB_UNCONNECTED[0]),
-        .OBUFDS_GTE3_CEB(1'b0),
-        .OBUFDS_GTE3_I(1'b0),
-        .OBUFDS_GTE3_O(NLW_U0_OBUFDS_GTE3_O_UNCONNECTED[0]),
-        .OBUFDS_GTE3_OB(NLW_U0_OBUFDS_GTE3_OB_UNCONNECTED[0]),
-        .OBUFDS_GTE4_ADV_CEB(1'b0),
-        .OBUFDS_GTE4_ADV_I({1'b0,1'b0,1'b0,1'b0}),
-        .OBUFDS_GTE4_ADV_O(NLW_U0_OBUFDS_GTE4_ADV_O_UNCONNECTED[0]),
-        .OBUFDS_GTE4_ADV_OB(NLW_U0_OBUFDS_GTE4_ADV_OB_UNCONNECTED[0]),
-        .OBUFDS_GTE4_CEB(1'b0),
-        .OBUFDS_GTE4_I(1'b0),
-        .OBUFDS_GTE4_O(NLW_U0_OBUFDS_GTE4_O_UNCONNECTED[0]),
-        .OBUFDS_GTE4_OB(NLW_U0_OBUFDS_GTE4_OB_UNCONNECTED[0]),
-        .OBUFDS_GTE5_ADV_CEB(1'b0),
-        .OBUFDS_GTE5_ADV_I({1'b0,1'b0,1'b0,1'b0}),
-        .OBUFDS_GTE5_ADV_O(NLW_U0_OBUFDS_GTE5_ADV_O_UNCONNECTED[0]),
-        .OBUFDS_GTE5_ADV_OB(NLW_U0_OBUFDS_GTE5_ADV_OB_UNCONNECTED[0]),
-        .OBUFDS_GTE5_ADV_RXRECCLKSEL({1'b0,1'b0}),
-        .OBUFDS_GTE5_CEB(1'b0),
-        .OBUFDS_GTE5_I(1'b0),
-        .OBUFDS_GTE5_O(NLW_U0_OBUFDS_GTE5_O_UNCONNECTED[0]),
-        .OBUFDS_GTE5_OB(NLW_U0_OBUFDS_GTE5_OB_UNCONNECTED[0]),
-        .OBUFDS_GTME5_ADV_CEB(1'b0),
-        .OBUFDS_GTME5_ADV_I({1'b0,1'b0,1'b0,1'b0}),
-        .OBUFDS_GTME5_ADV_O(NLW_U0_OBUFDS_GTME5_ADV_O_UNCONNECTED[0]),
-        .OBUFDS_GTME5_ADV_OB(NLW_U0_OBUFDS_GTME5_ADV_OB_UNCONNECTED[0]),
-        .OBUFDS_GTME5_ADV_RXRECCLKSEL({1'b0,1'b0}),
-        .OBUFDS_GTME5_CEB(1'b0),
-        .OBUFDS_GTME5_I(1'b0),
-        .OBUFDS_GTME5_O(NLW_U0_OBUFDS_GTME5_O_UNCONNECTED[0]),
-        .OBUFDS_GTME5_OB(NLW_U0_OBUFDS_GTME5_OB_UNCONNECTED[0]),
-        .OBUFDS_GTM_ADV_CEB(1'b0),
-        .OBUFDS_GTM_ADV_I({1'b0,1'b0,1'b0,1'b0}),
-        .OBUFDS_GTM_ADV_O(NLW_U0_OBUFDS_GTM_ADV_O_UNCONNECTED[0]),
-        .OBUFDS_GTM_ADV_OB(NLW_U0_OBUFDS_GTM_ADV_OB_UNCONNECTED[0]),
-        .OBUFDS_GTM_CEB(1'b0),
-        .OBUFDS_GTM_I(1'b0),
-        .OBUFDS_GTM_O(NLW_U0_OBUFDS_GTM_O_UNCONNECTED[0]),
-        .OBUFDS_GTM_OB(NLW_U0_OBUFDS_GTM_OB_UNCONNECTED[0]),
-        .OBUF_DS_N(NLW_U0_OBUF_DS_N_UNCONNECTED[0]),
-        .OBUF_DS_P(NLW_U0_OBUF_DS_P_UNCONNECTED[0]),
-        .OBUF_IN(1'b0),
-        .RXRECCLK_SEL_GTE3_ADV({1'b0,1'b0}),
-        .RXRECCLK_SEL_GTE4_ADV({1'b0,1'b0}));
-endmodule
-
 (* C_BUFGCE_DIV = "1" *) (* C_BUFG_GT_SYNC = "0" *) (* C_BUF_TYPE = "ibufdsgte4" *) 
 (* C_MODE = "PERFORMANCE" *) (* C_OBUFDS_GTE5_ADV = "2'b00" *) (* C_REFCLK_ICNTL_TX = "5'b00000" *) 
-(* C_SIM_DEVICE = "VERSAL_AI_CORE_ES1" *) (* C_SIZE = "1" *) (* ORIG_REF_NAME = "util_ds_buf" *) 
+(* C_SIM_DEVICE = "VERSAL_AI_CORE_ES1" *) (* C_SIZE = "1" *) 
 module xdma_bram_util_ds_buf_0_util_ds_buf
    (IBUF_DS_P,
     IBUF_DS_N,
@@ -475,6 +294,187 @@ module xdma_bram_util_ds_buf_0_util_ds_buf
         .IB(IBUF_DS_N),
         .O(IBUF_OUT),
         .ODIV2(IBUF_DS_ODIV2));
+endmodule
+
+(* CHECK_LICENSE_TYPE = "xdma_bram_util_ds_buf_0,util_ds_buf,{}" *) (* downgradeipidentifiedwarnings = "yes" *) (* x_core_info = "util_ds_buf,Vivado 2024.2.2" *) 
+(* NotValidForBitStream *)
+module xdma_bram_util_ds_buf_0
+   (IBUF_DS_P,
+    IBUF_DS_N,
+    IBUF_OUT,
+    IBUF_DS_ODIV2);
+  (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_P" *) (* x_interface_mode = "slave CLK_IN_D" *) (* x_interface_parameter = "XIL_INTERFACENAME CLK_IN_D, BOARD.ASSOCIATED_PARAM DIFF_CLK_IN_BOARD_INTERFACE, CAN_DEBUG false, FREQ_HZ 100000000" *) input [0:0]IBUF_DS_P;
+  (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_N" *) input [0:0]IBUF_DS_N;
+  (* x_interface_info = "xilinx.com:signal:clock:1.0 IBUF_OUT CLK" *) (* x_interface_mode = "master IBUF_OUT" *) (* x_interface_parameter = "XIL_INTERFACENAME IBUF_OUT, FREQ_HZ 100000000, FREQ_TOLERANCE_HZ 0, PHASE 0.0, CLK_DOMAIN xdma_bram_util_ds_buf_0_IBUF_OUT, INSERT_VIP 0" *) output [0:0]IBUF_OUT;
+  (* x_interface_info = "xilinx.com:signal:clock:1.0 IBUF_DS_ODIV2 CLK" *) (* x_interface_mode = "master IBUF_DS_ODIV2" *) (* x_interface_parameter = "XIL_INTERFACENAME IBUF_DS_ODIV2, FREQ_HZ 100000000, FREQ_TOLERANCE_HZ 0, PHASE 0.0, CLK_DOMAIN xdma_bram_util_ds_buf_0_IBUF_DS_ODIV2, INSERT_VIP 0" *) output [0:0]IBUF_DS_ODIV2;
+
+  (* RTL_KEEP = "yes" *) (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_N" *) wire [0:0]IBUF_DS_N;
+  wire [0:0]IBUF_DS_ODIV2;
+  (* RTL_KEEP = "yes" *) (* x_interface_info = "xilinx.com:interface:diff_clock:1.0 CLK_IN_D CLK_P" *) (* x_interface_mode = "slave CLK_IN_D" *) 
+  (* x_interface_parameter = "XIL_INTERFACENAME CLK_IN_D, BOARD.ASSOCIATED_PARAM DIFF_CLK_IN_BOARD_INTERFACE, CAN_DEBUG false, FREQ_HZ 100000000" *) wire [0:0]IBUF_DS_P;
+  wire [0:0]IBUF_OUT;
+  wire [0:0]NLW_U0_BUFGCE_O_UNCONNECTED;
+  wire [0:0]NLW_U0_BUFG_FABRIC_O_UNCONNECTED;
+  wire [0:0]NLW_U0_BUFG_GT_O_UNCONNECTED;
+  wire [0:0]NLW_U0_BUFG_O_UNCONNECTED;
+  wire [0:0]NLW_U0_BUFG_PS_O_UNCONNECTED;
+  wire [0:0]NLW_U0_BUFHCE_O_UNCONNECTED;
+  wire [0:0]NLW_U0_BUFH_O_UNCONNECTED;
+  wire [0:0]NLW_U0_IBUFDS_GTME5_O_UNCONNECTED;
+  wire [0:0]NLW_U0_IBUFDS_GTME5_ODIV2_UNCONNECTED;
+  wire [0:0]NLW_U0_IBUFDS_GTM_O_UNCONNECTED;
+  wire [0:0]NLW_U0_IBUFDS_GTM_ODIV2_UNCONNECTED;
+  wire [0:0]NLW_U0_IOBUF_DS_N_UNCONNECTED;
+  wire [0:0]NLW_U0_IOBUF_DS_P_UNCONNECTED;
+  wire [0:0]NLW_U0_IOBUF_IO_IO_UNCONNECTED;
+  wire [0:0]NLW_U0_IOBUF_IO_O_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_GT_O1_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_GT_O2_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_GT_O3_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_GT_O4_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_PS_O1_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_PS_O2_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_PS_O3_UNCONNECTED;
+  wire [0:0]NLW_U0_MBUFG_PS_O4_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE3_ADV_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE3_ADV_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE3_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE3_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE4_ADV_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE4_ADV_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE4_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE4_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE5_ADV_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE5_ADV_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE5_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTE5_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTME5_ADV_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTME5_ADV_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTME5_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTME5_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTM_ADV_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTM_ADV_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTM_O_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUFDS_GTM_OB_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUF_DS_N_UNCONNECTED;
+  wire [0:0]NLW_U0_OBUF_DS_P_UNCONNECTED;
+
+  (* C_BUFGCE_DIV = "1" *) 
+  (* C_BUFG_GT_SYNC = "0" *) 
+  (* C_BUF_TYPE = "ibufdsgte4" *) 
+  (* C_MODE = "PERFORMANCE" *) 
+  (* C_OBUFDS_GTE5_ADV = "2'b00" *) 
+  (* C_REFCLK_ICNTL_TX = "5'b00000" *) 
+  (* C_SIM_DEVICE = "VERSAL_AI_CORE_ES1" *) 
+  (* C_SIZE = "1" *) 
+  xdma_bram_util_ds_buf_0_util_ds_buf U0
+       (.BUFGCE_CE(1'b0),
+        .BUFGCE_CLR(1'b0),
+        .BUFGCE_I(1'b0),
+        .BUFGCE_O(NLW_U0_BUFGCE_O_UNCONNECTED[0]),
+        .BUFG_FABRIC_I(1'b0),
+        .BUFG_FABRIC_O(NLW_U0_BUFG_FABRIC_O_UNCONNECTED[0]),
+        .BUFG_GT_CE(1'b1),
+        .BUFG_GT_CEMASK(1'b0),
+        .BUFG_GT_CLR(1'b0),
+        .BUFG_GT_CLRMASK(1'b0),
+        .BUFG_GT_DIV({1'b0,1'b0,1'b0}),
+        .BUFG_GT_I(1'b0),
+        .BUFG_GT_O(NLW_U0_BUFG_GT_O_UNCONNECTED[0]),
+        .BUFG_I(1'b0),
+        .BUFG_O(NLW_U0_BUFG_O_UNCONNECTED[0]),
+        .BUFG_PS_I(1'b0),
+        .BUFG_PS_O(NLW_U0_BUFG_PS_O_UNCONNECTED[0]),
+        .BUFHCE_CE(1'b0),
+        .BUFHCE_I(1'b0),
+        .BUFHCE_O(NLW_U0_BUFHCE_O_UNCONNECTED[0]),
+        .BUFH_I(1'b0),
+        .BUFH_O(NLW_U0_BUFH_O_UNCONNECTED[0]),
+        .IBUFDS_GTME5_CEB(1'b0),
+        .IBUFDS_GTME5_I(1'b0),
+        .IBUFDS_GTME5_IB(1'b0),
+        .IBUFDS_GTME5_O(NLW_U0_IBUFDS_GTME5_O_UNCONNECTED[0]),
+        .IBUFDS_GTME5_ODIV2(NLW_U0_IBUFDS_GTME5_ODIV2_UNCONNECTED[0]),
+        .IBUFDS_GTM_CEB(1'b0),
+        .IBUFDS_GTM_I(1'b0),
+        .IBUFDS_GTM_IB(1'b0),
+        .IBUFDS_GTM_O(NLW_U0_IBUFDS_GTM_O_UNCONNECTED[0]),
+        .IBUFDS_GTM_ODIV2(NLW_U0_IBUFDS_GTM_ODIV2_UNCONNECTED[0]),
+        .IBUF_DS_CEB(1'b0),
+        .IBUF_DS_N(IBUF_DS_N),
+        .IBUF_DS_ODIV2(IBUF_DS_ODIV2),
+        .IBUF_DS_P(IBUF_DS_P),
+        .IBUF_OUT(IBUF_OUT),
+        .IOBUF_DS_N(NLW_U0_IOBUF_DS_N_UNCONNECTED[0]),
+        .IOBUF_DS_P(NLW_U0_IOBUF_DS_P_UNCONNECTED[0]),
+        .IOBUF_IO_I(1'b0),
+        .IOBUF_IO_IO(NLW_U0_IOBUF_IO_IO_UNCONNECTED[0]),
+        .IOBUF_IO_O(NLW_U0_IOBUF_IO_O_UNCONNECTED[0]),
+        .IOBUF_IO_T(1'b0),
+        .MBUFG_GT_CE(1'b1),
+        .MBUFG_GT_CEMASK(1'b0),
+        .MBUFG_GT_CLR(1'b0),
+        .MBUFG_GT_CLRB_LEAF(1'b1),
+        .MBUFG_GT_CLRMASK(1'b0),
+        .MBUFG_GT_DIV({1'b0,1'b0,1'b0}),
+        .MBUFG_GT_I(1'b0),
+        .MBUFG_GT_O1(NLW_U0_MBUFG_GT_O1_UNCONNECTED[0]),
+        .MBUFG_GT_O2(NLW_U0_MBUFG_GT_O2_UNCONNECTED[0]),
+        .MBUFG_GT_O3(NLW_U0_MBUFG_GT_O3_UNCONNECTED[0]),
+        .MBUFG_GT_O4(NLW_U0_MBUFG_GT_O4_UNCONNECTED[0]),
+        .MBUFG_PS_CLRB_LEAF(1'b1),
+        .MBUFG_PS_I(1'b0),
+        .MBUFG_PS_O1(NLW_U0_MBUFG_PS_O1_UNCONNECTED[0]),
+        .MBUFG_PS_O2(NLW_U0_MBUFG_PS_O2_UNCONNECTED[0]),
+        .MBUFG_PS_O3(NLW_U0_MBUFG_PS_O3_UNCONNECTED[0]),
+        .MBUFG_PS_O4(NLW_U0_MBUFG_PS_O4_UNCONNECTED[0]),
+        .OBUFDS_GTE3_ADV_CEB(1'b0),
+        .OBUFDS_GTE3_ADV_I({1'b0,1'b0,1'b0,1'b0}),
+        .OBUFDS_GTE3_ADV_O(NLW_U0_OBUFDS_GTE3_ADV_O_UNCONNECTED[0]),
+        .OBUFDS_GTE3_ADV_OB(NLW_U0_OBUFDS_GTE3_ADV_OB_UNCONNECTED[0]),
+        .OBUFDS_GTE3_CEB(1'b0),
+        .OBUFDS_GTE3_I(1'b0),
+        .OBUFDS_GTE3_O(NLW_U0_OBUFDS_GTE3_O_UNCONNECTED[0]),
+        .OBUFDS_GTE3_OB(NLW_U0_OBUFDS_GTE3_OB_UNCONNECTED[0]),
+        .OBUFDS_GTE4_ADV_CEB(1'b0),
+        .OBUFDS_GTE4_ADV_I({1'b0,1'b0,1'b0,1'b0}),
+        .OBUFDS_GTE4_ADV_O(NLW_U0_OBUFDS_GTE4_ADV_O_UNCONNECTED[0]),
+        .OBUFDS_GTE4_ADV_OB(NLW_U0_OBUFDS_GTE4_ADV_OB_UNCONNECTED[0]),
+        .OBUFDS_GTE4_CEB(1'b0),
+        .OBUFDS_GTE4_I(1'b0),
+        .OBUFDS_GTE4_O(NLW_U0_OBUFDS_GTE4_O_UNCONNECTED[0]),
+        .OBUFDS_GTE4_OB(NLW_U0_OBUFDS_GTE4_OB_UNCONNECTED[0]),
+        .OBUFDS_GTE5_ADV_CEB(1'b0),
+        .OBUFDS_GTE5_ADV_I({1'b0,1'b0,1'b0,1'b0}),
+        .OBUFDS_GTE5_ADV_O(NLW_U0_OBUFDS_GTE5_ADV_O_UNCONNECTED[0]),
+        .OBUFDS_GTE5_ADV_OB(NLW_U0_OBUFDS_GTE5_ADV_OB_UNCONNECTED[0]),
+        .OBUFDS_GTE5_ADV_RXRECCLKSEL({1'b0,1'b0}),
+        .OBUFDS_GTE5_CEB(1'b0),
+        .OBUFDS_GTE5_I(1'b0),
+        .OBUFDS_GTE5_O(NLW_U0_OBUFDS_GTE5_O_UNCONNECTED[0]),
+        .OBUFDS_GTE5_OB(NLW_U0_OBUFDS_GTE5_OB_UNCONNECTED[0]),
+        .OBUFDS_GTME5_ADV_CEB(1'b0),
+        .OBUFDS_GTME5_ADV_I({1'b0,1'b0,1'b0,1'b0}),
+        .OBUFDS_GTME5_ADV_O(NLW_U0_OBUFDS_GTME5_ADV_O_UNCONNECTED[0]),
+        .OBUFDS_GTME5_ADV_OB(NLW_U0_OBUFDS_GTME5_ADV_OB_UNCONNECTED[0]),
+        .OBUFDS_GTME5_ADV_RXRECCLKSEL({1'b0,1'b0}),
+        .OBUFDS_GTME5_CEB(1'b0),
+        .OBUFDS_GTME5_I(1'b0),
+        .OBUFDS_GTME5_O(NLW_U0_OBUFDS_GTME5_O_UNCONNECTED[0]),
+        .OBUFDS_GTME5_OB(NLW_U0_OBUFDS_GTME5_OB_UNCONNECTED[0]),
+        .OBUFDS_GTM_ADV_CEB(1'b0),
+        .OBUFDS_GTM_ADV_I({1'b0,1'b0,1'b0,1'b0}),
+        .OBUFDS_GTM_ADV_O(NLW_U0_OBUFDS_GTM_ADV_O_UNCONNECTED[0]),
+        .OBUFDS_GTM_ADV_OB(NLW_U0_OBUFDS_GTM_ADV_OB_UNCONNECTED[0]),
+        .OBUFDS_GTM_CEB(1'b0),
+        .OBUFDS_GTM_I(1'b0),
+        .OBUFDS_GTM_O(NLW_U0_OBUFDS_GTM_O_UNCONNECTED[0]),
+        .OBUFDS_GTM_OB(NLW_U0_OBUFDS_GTM_OB_UNCONNECTED[0]),
+        .OBUF_DS_N(NLW_U0_OBUF_DS_N_UNCONNECTED[0]),
+        .OBUF_DS_P(NLW_U0_OBUF_DS_P_UNCONNECTED[0]),
+        .OBUF_IN(1'b0),
+        .RXRECCLK_SEL_GTE3_ADV({1'b0,1'b0}),
+        .RXRECCLK_SEL_GTE4_ADV({1'b0,1'b0}));
 endmodule
 module xVIA(.a(w),.b(w));
 inout w;

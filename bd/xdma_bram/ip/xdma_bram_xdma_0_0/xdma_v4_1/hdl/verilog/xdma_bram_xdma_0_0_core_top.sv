@@ -4779,19 +4779,19 @@ assign cfg_interrupt_pending                             = pcie_dma_out.cfg_inte
    .s_axi_rdataeccparity(s_axib_ruser),
    .s_axi_rready(s_axib_rready),
    
-     .s_axis_c2h_tdata         ({s_axis_c2h_tdata_1,s_axis_c2h_tdata_0}),
-     .s_axis_c2h_tlast         ({s_axis_c2h_tlast_1,s_axis_c2h_tlast_0}),
-     .s_axis_c2h_tvalid        ({s_axis_c2h_tvalid_1,s_axis_c2h_tvalid_0}),
-     .s_axis_c2h_tready        ({s_axis_c2h_tready_1,s_axis_c2h_tready_0}),
-     .s_axis_c2h_tkeep         ({s_axis_c2h_tkeep_1, s_axis_c2h_tkeep_0}),
-     .s_axis_c2h_tparity       ({s_axis_c2h_tuser_1,s_axis_c2h_tuser_0}),
+     .s_axis_c2h_tdata         ({s_axis_c2h_tdata_3,s_axis_c2h_tdata_2,s_axis_c2h_tdata_1,s_axis_c2h_tdata_0}),
+     .s_axis_c2h_tlast         ({s_axis_c2h_tlast_3,s_axis_c2h_tlast_2,s_axis_c2h_tlast_1,s_axis_c2h_tlast_0}),
+     .s_axis_c2h_tvalid        ({s_axis_c2h_tvalid_3,s_axis_c2h_tvalid_2,s_axis_c2h_tvalid_1,s_axis_c2h_tvalid_0}),
+     .s_axis_c2h_tready        ({s_axis_c2h_tready_3,s_axis_c2h_tready_2,s_axis_c2h_tready_1,s_axis_c2h_tready_0}),
+     .s_axis_c2h_tkeep         ({s_axis_c2h_tkeep_3, s_axis_c2h_tkeep_2, s_axis_c2h_tkeep_1, s_axis_c2h_tkeep_0}),
+     .s_axis_c2h_tparity       ({s_axis_c2h_tuser_3,s_axis_c2h_tuser_2,s_axis_c2h_tuser_1,s_axis_c2h_tuser_0}),
     .s_axis_c2h_tuser   (64'h0),
-     .m_axis_h2c_tdata         ({m_axis_h2c_tdata_1,m_axis_h2c_tdata_0}),
-     .m_axis_h2c_tlast         ({m_axis_h2c_tlast_1,m_axis_h2c_tlast_0}),
-     .m_axis_h2c_tvalid        ({m_axis_h2c_tvalid_1,m_axis_h2c_tvalid_0}),
-     .m_axis_h2c_tkeep         ({m_axis_h2c_tkeep_1,m_axis_h2c_tkeep_0}),
-     .m_axis_h2c_tready        ({m_axis_h2c_tready_1,m_axis_h2c_tready_0}),
-     .m_axis_h2c_tparity       ({m_axis_h2c_tuser_1,m_axis_h2c_tuser_0}),
+     .m_axis_h2c_tdata         ({m_axis_h2c_tdata_3,m_axis_h2c_tdata_2,m_axis_h2c_tdata_1,m_axis_h2c_tdata_0}),
+     .m_axis_h2c_tlast         ({m_axis_h2c_tlast_3,m_axis_h2c_tlast_2,m_axis_h2c_tlast_1,m_axis_h2c_tlast_0}),
+     .m_axis_h2c_tvalid        ({m_axis_h2c_tvalid_3,m_axis_h2c_tvalid_2,m_axis_h2c_tvalid_1,m_axis_h2c_tvalid_0}),
+     .m_axis_h2c_tkeep         ({m_axis_h2c_tkeep_3,m_axis_h2c_tkeep_2,m_axis_h2c_tkeep_1,m_axis_h2c_tkeep_0}),
+     .m_axis_h2c_tready        ({m_axis_h2c_tready_3,m_axis_h2c_tready_2,m_axis_h2c_tready_1,m_axis_h2c_tready_0}),
+     .m_axis_h2c_tparity       ({m_axis_h2c_tuser_3,m_axis_h2c_tuser_2,m_axis_h2c_tuser_1,m_axis_h2c_tuser_0}),
     .m_axis_h2c_tuser   (),
 
     .usr_irq_req        (usr_irq_req),
@@ -4800,19 +4800,19 @@ assign cfg_interrupt_pending                             = pcie_dma_out.cfg_inte
     .usr_irq_fail       (usr_irq_fail),
 
 
-     .c2h_dsc_byp_ready ({c2h_dsc_byp_ready_1,c2h_dsc_byp_ready_0}),
-     .c2h_dsc_byp_src_addr   ({c2h_dsc_byp_src_addr_1,c2h_dsc_byp_src_addr_0}),
-     .c2h_dsc_byp_dst_addr   ({c2h_dsc_byp_dst_addr_1,c2h_dsc_byp_dst_addr_0}),
-     .c2h_dsc_byp_len        ({c2h_dsc_byp_len_1,c2h_dsc_byp_len_0}),
-     .c2h_dsc_byp_ctl        ({c2h_dsc_byp_ctl_1,c2h_dsc_byp_ctl_0}),
-     .c2h_dsc_byp_load       ({c2h_dsc_byp_load_1,c2h_dsc_byp_load_0}),
+     .c2h_dsc_byp_ready ({c2h_dsc_byp_ready_3,c2h_dsc_byp_ready_2,c2h_dsc_byp_ready_1,c2h_dsc_byp_ready_0}),
+     .c2h_dsc_byp_src_addr   ({c2h_dsc_byp_src_addr_3,c2h_dsc_byp_src_addr_2,c2h_dsc_byp_src_addr_1,c2h_dsc_byp_src_addr_0}),
+     .c2h_dsc_byp_dst_addr   ({c2h_dsc_byp_dst_addr_3,c2h_dsc_byp_dst_addr_2,c2h_dsc_byp_dst_addr_1,c2h_dsc_byp_dst_addr_0}),
+     .c2h_dsc_byp_len        ({c2h_dsc_byp_len_3,c2h_dsc_byp_len_2,c2h_dsc_byp_len_1,c2h_dsc_byp_len_0}),
+     .c2h_dsc_byp_ctl        ({c2h_dsc_byp_ctl_3,c2h_dsc_byp_ctl_2,c2h_dsc_byp_ctl_1,c2h_dsc_byp_ctl_0}),
+     .c2h_dsc_byp_load       ({c2h_dsc_byp_load_3,c2h_dsc_byp_load_2,c2h_dsc_byp_load_1,c2h_dsc_byp_load_0}),
 
-     .h2c_dsc_byp_ready ({h2c_dsc_byp_ready_1,h2c_dsc_byp_ready_0}),
-     .h2c_dsc_byp_src_addr   ({h2c_dsc_byp_src_addr_1,h2c_dsc_byp_src_addr_0}),
-     .h2c_dsc_byp_dst_addr   ({h2c_dsc_byp_dst_addr_1,h2c_dsc_byp_dst_addr_0}),
-     .h2c_dsc_byp_len        ({h2c_dsc_byp_len_1,h2c_dsc_byp_len_0}),
-     .h2c_dsc_byp_ctl        ({h2c_dsc_byp_ctl_1,h2c_dsc_byp_ctl_0}),
-     .h2c_dsc_byp_load       ({h2c_dsc_byp_load_1,h2c_dsc_byp_load_0}),
+     .h2c_dsc_byp_ready ({h2c_dsc_byp_ready_3,h2c_dsc_byp_ready_2,h2c_dsc_byp_ready_1,h2c_dsc_byp_ready_0}),
+     .h2c_dsc_byp_src_addr   ({h2c_dsc_byp_src_addr_3,h2c_dsc_byp_src_addr_2,h2c_dsc_byp_src_addr_1,h2c_dsc_byp_src_addr_0}),
+     .h2c_dsc_byp_dst_addr   ({h2c_dsc_byp_dst_addr_3,h2c_dsc_byp_dst_addr_2,h2c_dsc_byp_dst_addr_1,h2c_dsc_byp_dst_addr_0}),
+     .h2c_dsc_byp_len        ({h2c_dsc_byp_len_3,h2c_dsc_byp_len_2,h2c_dsc_byp_len_1,h2c_dsc_byp_len_0}),
+     .h2c_dsc_byp_ctl        ({h2c_dsc_byp_ctl_3,h2c_dsc_byp_ctl_2,h2c_dsc_byp_ctl_1,h2c_dsc_byp_ctl_0}),
+     .h2c_dsc_byp_load       ({h2c_dsc_byp_load_3,h2c_dsc_byp_load_2,h2c_dsc_byp_load_1,h2c_dsc_byp_load_0}),
 
     // H2C Descriptor Output Interface
     .h2c_desc_cmd_out_rdy              (1'b0),
@@ -4943,23 +4943,7 @@ xdma_v4_1_33_udma_ram_top
     .mi_c2h_wr_brg_dat            (mi_c2h_wr_brg_dat)
 );
 
-   assign s_axis_c2h_tready_2 = 1'b0;
-   assign s_axis_c2h_tready_3 = 1'b0;
-//   assign s_axis_c2h_tuser_2 = 1'b0;
-//   assign s_axis_c2h_tuser_3 = 1'b0;
-//   assign s_axis_c2h_tkeep_2 = 1'b0;
-//   assign s_axis_c2h_tkeep_3 = 1'b0;
-   assign c2h_dsc_byp_ready_2 = 1'b0;
-   assign c2h_dsc_byp_ready_3 = 1'b0;
 
-   assign m_axis_h2c_tdata_2 = {C_M_AXIS_DATA_WIDTH{1'h0}};
-   assign m_axis_h2c_tlast_2 = 1'b0;
-   assign m_axis_h2c_tvalid_2 = 1'b0;
-   assign m_axis_h2c_tdata_3 = {C_M_AXIS_DATA_WIDTH{1'h0}};
-   assign m_axis_h2c_tlast_3 = 1'b0;
-   assign m_axis_h2c_tvalid_3 = 1'b0;
-   assign h2c_dsc_byp_ready_2 = 1'b0;
-   assign h2c_dsc_byp_ready_3 = 1'b0;
   xdma_bram_xdma_0_0_pcie4c_ip  pcie4c_ip_i (
 
 
@@ -5044,16 +5028,6 @@ xdma_v4_1_33_udma_ram_top
     .cfg_vf_power_state                             (),
     .cfg_link_power_state                           ( cfg_link_power_state ),
 
-    // Management Interface
-     .cfg_mgmt_read_data           ( cfg_mgmt_read_data ),
-     .cfg_mgmt_read_write_done     ( cfg_mgmt_read_write_done ),
-     .cfg_mgmt_addr                ( cfg_mgmt_addr[9:0] ),
-     .cfg_mgmt_write               ( cfg_mgmt_write ),
-     .cfg_mgmt_write_data          ( cfg_mgmt_write_data ),
-     .cfg_mgmt_byte_enable         ( cfg_mgmt_byte_enable ),
-     .cfg_mgmt_read                ( cfg_mgmt_read ),
-     .cfg_mgmt_debug_access        ( cfg_mgmt_type1_cfg_reg_access ),
-     .cfg_mgmt_function_number     ( cfg_mgmt_function_number ), 
     // Error Reporting Interface
     .cfg_err_cor_out                                ( cfg_err_cor_out ),
     .cfg_err_nonfatal_out                           ( cfg_err_nonfatal_out ),
@@ -5192,6 +5166,8 @@ xdma_v4_1_33_udma_ram_top
 
    assign drp_rdy = 1'b0;
    assign drp_do  = 16'b0;
+   assign cfg_mgmt_read_data       = 32'b0;
+   assign cfg_mgmt_read_write_done = 1'b0;
    assign  blk_cfg_ext_read_received = 1'b0;
    assign  blk_cfg_ext_write_received = 1'b0;
    assign  blk_cfg_ext_register_number = 10'b0;

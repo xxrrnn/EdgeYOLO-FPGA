@@ -114,8 +114,8 @@ void xdma_bram_axi_bram_ctrl_0_0::before_end_of_elaboration()
     S_AXI_transactor_param_props.addLong("NUM_READ_OUTSTANDING", "32");
     S_AXI_transactor_param_props.addLong("NUM_WRITE_OUTSTANDING", "16");
     S_AXI_transactor_param_props.addLong("MAX_BURST_LENGTH", "256");
-    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "2");
-    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "2");
+    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "4");
+    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "4");
     S_AXI_transactor_param_props.addLong("RUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("WUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("HAS_SIZE", "1");
@@ -237,8 +237,8 @@ void xdma_bram_axi_bram_ctrl_0_0::before_end_of_elaboration()
     S_AXI_transactor_param_props.addLong("NUM_READ_OUTSTANDING", "32");
     S_AXI_transactor_param_props.addLong("NUM_WRITE_OUTSTANDING", "16");
     S_AXI_transactor_param_props.addLong("MAX_BURST_LENGTH", "256");
-    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "2");
-    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "2");
+    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "4");
+    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "4");
     S_AXI_transactor_param_props.addLong("RUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("WUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("HAS_SIZE", "1");
@@ -360,8 +360,8 @@ void xdma_bram_axi_bram_ctrl_0_0::before_end_of_elaboration()
     S_AXI_transactor_param_props.addLong("NUM_READ_OUTSTANDING", "32");
     S_AXI_transactor_param_props.addLong("NUM_WRITE_OUTSTANDING", "16");
     S_AXI_transactor_param_props.addLong("MAX_BURST_LENGTH", "256");
-    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "2");
-    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "2");
+    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "4");
+    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "4");
     S_AXI_transactor_param_props.addLong("RUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("WUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("HAS_SIZE", "1");
@@ -472,8 +472,8 @@ xdma_bram_axi_bram_ctrl_0_0::xdma_bram_axi_bram_ctrl_0_0(const sc_core::sc_modul
     S_AXI_transactor_param_props.addLong("NUM_READ_OUTSTANDING", "32");
     S_AXI_transactor_param_props.addLong("NUM_WRITE_OUTSTANDING", "16");
     S_AXI_transactor_param_props.addLong("MAX_BURST_LENGTH", "256");
-    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "2");
-    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "2");
+    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "4");
+    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "4");
     S_AXI_transactor_param_props.addLong("RUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("WUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("HAS_SIZE", "1");
@@ -596,8 +596,8 @@ xdma_bram_axi_bram_ctrl_0_0::xdma_bram_axi_bram_ctrl_0_0(const sc_core::sc_modul
     S_AXI_transactor_param_props.addLong("NUM_READ_OUTSTANDING", "32");
     S_AXI_transactor_param_props.addLong("NUM_WRITE_OUTSTANDING", "16");
     S_AXI_transactor_param_props.addLong("MAX_BURST_LENGTH", "256");
-    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "2");
-    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "2");
+    S_AXI_transactor_param_props.addLong("NUM_READ_THREADS", "4");
+    S_AXI_transactor_param_props.addLong("NUM_WRITE_THREADS", "4");
     S_AXI_transactor_param_props.addLong("RUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("WUSER_BITS_PER_BYTE", "0");
     S_AXI_transactor_param_props.addLong("HAS_SIZE", "1");

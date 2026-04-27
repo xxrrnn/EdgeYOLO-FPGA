@@ -2,7 +2,7 @@
 //Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 //--------------------------------------------------------------------------------
 //Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-//Date        : Tue Apr 28 00:44:10 2026
+//Date        : Tue Apr 28 04:34:25 2026
 //Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
 //Command     : generate_target xdma_bram.bd
 //Design      : xdma_bram
@@ -10,21 +10,21 @@
 //--------------------------------------------------------------------------------
 `timescale 1 ps / 1 ps
 
-(* CORE_GENERATION_INFO = "xdma_bram,IP_Integrator,{x_ipVendor=xilinx.com,x_ipLibrary=BlockDiagram,x_ipName=xdma_bram,x_ipVersion=1.00.a,x_ipLanguage=VERILOG,numBlks=4,numReposBlks=4,numNonXlnxBlks=0,numHierBlks=0,maxHierDepth=0,numSysgenBlks=0,numHlsBlks=0,numHdlrefBlks=0,numPkgbdBlks=0,bdsource=USER,synth_mode=Hierarchical}" *) (* HW_HANDOFF = "xdma_bram.hwdef" *) 
+(* CORE_GENERATION_INFO = "xdma_bram,IP_Integrator,{x_ipVendor=xilinx.com,x_ipLibrary=BlockDiagram,x_ipName=xdma_bram,x_ipVersion=1.00.a,x_ipLanguage=VERILOG,numBlks=6,numReposBlks=6,numNonXlnxBlks=0,numHierBlks=0,maxHierDepth=0,numSysgenBlks=0,numHlsBlks=0,numHdlrefBlks=0,numPkgbdBlks=0,bdsource=USER,synth_mode=Hierarchical}" *) (* HW_HANDOFF = "xdma_bram.hwdef" *) 
 module xdma_bram
-   (pci_express_x8_rxn,
+   (cpu_reset,
+    pci_express_x8_rxn,
     pci_express_x8_rxp,
     pci_express_x8_txn,
     pci_express_x8_txp,
-    pcie_perstn,
     pcie_refclk_clk_n,
     pcie_refclk_clk_p,
     user_lnk_up_0);
+  (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 RST.CPU_RESET RST" *) (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME RST.CPU_RESET, INSERT_VIP 0, POLARITY ACTIVE_HIGH" *) input cpu_reset;
   (* X_INTERFACE_INFO = "xilinx.com:interface:pcie_7x_mgt:1.0 pci_express_x8 rxn" *) (* X_INTERFACE_MODE = "Master" *) input [7:0]pci_express_x8_rxn;
   (* X_INTERFACE_INFO = "xilinx.com:interface:pcie_7x_mgt:1.0 pci_express_x8 rxp" *) input [7:0]pci_express_x8_rxp;
   (* X_INTERFACE_INFO = "xilinx.com:interface:pcie_7x_mgt:1.0 pci_express_x8 txn" *) output [7:0]pci_express_x8_txn;
   (* X_INTERFACE_INFO = "xilinx.com:interface:pcie_7x_mgt:1.0 pci_express_x8 txp" *) output [7:0]pci_express_x8_txp;
-  (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 RST.PCIE_PERSTN RST" *) (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME RST.PCIE_PERSTN, INSERT_VIP 0, POLARITY ACTIVE_LOW" *) input pcie_perstn;
   (* X_INTERFACE_INFO = "xilinx.com:interface:diff_clock:1.0 pcie_refclk CLK_N" *) (* X_INTERFACE_MODE = "Slave" *) (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME pcie_refclk, CAN_DEBUG false, FREQ_HZ 100000000" *) input pcie_refclk_clk_n;
   (* X_INTERFACE_INFO = "xilinx.com:interface:diff_clock:1.0 pcie_refclk CLK_P" *) input pcie_refclk_clk_p;
   output user_lnk_up_0;
@@ -36,11 +36,11 @@ module xdma_bram
   wire axi_bram_ctrl_0_BRAM_PORTA_EN;
   wire axi_bram_ctrl_0_BRAM_PORTA_RST;
   wire [31:0]axi_bram_ctrl_0_BRAM_PORTA_WE;
+  wire cpu_reset;
   wire [7:0]pci_express_x8_rxn;
   wire [7:0]pci_express_x8_rxp;
   wire [7:0]pci_express_x8_txn;
   wire [7:0]pci_express_x8_txp;
-  wire pcie_perstn;
   wire pcie_refclk_clk_n;
   wire pcie_refclk_clk_p;
   wire user_lnk_up_0;
@@ -83,6 +83,8 @@ module xdma_bram
   wire xdma_0_M_AXI_WVALID;
   wire xdma_0_axi_aclk;
   wire xdma_0_axi_aresetn;
+  wire [0:0]xdma_constant_dout;
+  wire [0:0]xdma_inv_Res;
 
   xdma_bram_axi_bram_ctrl_0_0 axi_bram_ctrl_0
        (.bram_addr_a(axi_bram_ctrl_0_BRAM_PORTA_ADDR),
@@ -145,11 +147,6 @@ module xdma_bram
   xdma_bram_xdma_0_0 xdma_0
        (.axi_aclk(xdma_0_axi_aclk),
         .axi_aresetn(xdma_0_axi_aresetn),
-        .cfg_mgmt_addr({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-        .cfg_mgmt_byte_enable({1'b0,1'b0,1'b0,1'b0}),
-        .cfg_mgmt_read(1'b0),
-        .cfg_mgmt_write(1'b0),
-        .cfg_mgmt_write_data({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
         .m_axi_araddr(xdma_0_M_AXI_ARADDR),
         .m_axi_arburst(xdma_0_M_AXI_ARBURST),
         .m_axi_arcache(xdma_0_M_AXI_ARCACHE),
@@ -199,7 +196,12 @@ module xdma_bram
         .pci_exp_txp(pci_express_x8_txp),
         .sys_clk(util_ds_buf_IBUF_DS_ODIV2),
         .sys_clk_gt(util_ds_buf_IBUF_OUT),
-        .sys_rst_n(pcie_perstn),
+        .sys_rst_n(xdma_inv_Res),
         .user_lnk_up(user_lnk_up_0),
-        .usr_irq_req(1'b0));
+        .usr_irq_req(xdma_constant_dout));
+  xdma_bram_xdma_constant_0 xdma_constant
+       (.dout(xdma_constant_dout));
+  xdma_bram_xdma_inv_0 xdma_inv
+       (.Op1(cpu_reset),
+        .Res(xdma_inv_Res));
 endmodule

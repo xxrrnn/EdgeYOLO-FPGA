@@ -1720,7 +1720,7 @@
         </spirit:parameter>
         <spirit:parameter>
           <spirit:name>NUM_READ_THREADS</spirit:name>
-          <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="BUSIFPARAM_VALUE.M_AXI.NUM_READ_THREADS">2</spirit:value>
+          <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="BUSIFPARAM_VALUE.M_AXI.NUM_READ_THREADS">4</spirit:value>
           <spirit:vendorExtensions>
             <xilinx:parameterInfo>
               <xilinx:parameterUsage>none</xilinx:parameterUsage>
@@ -1729,7 +1729,7 @@
         </spirit:parameter>
         <spirit:parameter>
           <spirit:name>NUM_WRITE_THREADS</spirit:name>
-          <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="BUSIFPARAM_VALUE.M_AXI.NUM_WRITE_THREADS">2</spirit:value>
+          <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="BUSIFPARAM_VALUE.M_AXI.NUM_WRITE_THREADS">4</spirit:value>
           <spirit:vendorExtensions>
             <xilinx:parameterInfo>
               <xilinx:parameterUsage>none</xilinx:parameterUsage>
@@ -8550,7 +8550,7 @@
       <spirit:vendorExtensions>
         <xilinx:busInterfaceInfo>
           <xilinx:enablement>
-            <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="BUSIF_ENABLEMENT.pcie_cfg_mgmt" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+            <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="BUSIF_ENABLEMENT.pcie_cfg_mgmt" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
           </xilinx:enablement>
         </xilinx:busInterfaceInfo>
       </spirit:vendorExtensions>
@@ -20277,7 +20277,7 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:3d88da24</spirit:value>
+            <spirit:value>9:e9fb25b1</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20288,7 +20288,7 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:c3131eea</spirit:value>
+            <spirit:value>9:e92ddef8</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20302,11 +20302,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:44:09 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:34:18 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:63ea2ef2</spirit:value>
+            <spirit:value>9:7694b5ed</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20320,11 +20320,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:46:53 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:37:32 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:3d88da24</spirit:value>
+            <spirit:value>9:e9fb25b1</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20338,11 +20338,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:44:10 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:34:26 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:3d88da24</spirit:value>
+            <spirit:value>9:e9fb25b1</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20353,7 +20353,7 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:3d88da24</spirit:value>
+            <spirit:value>9:e9fb25b1</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20369,11 +20369,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:44:10 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:34:26 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:aaf3a969</spirit:value>
+            <spirit:value>9:9e74a959</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20389,11 +20389,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:44:10 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:34:26 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:aaf3a969</spirit:value>
+            <spirit:value>9:9e74a959</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20409,11 +20409,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:44:10 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:34:26 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:3d88da24</spirit:value>
+            <spirit:value>9:e9fb25b1</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20429,11 +20429,11 @@
         <spirit:parameters>
           <spirit:parameter>
             <spirit:name>GENtimestamp</spirit:name>
-            <spirit:value>Mon Apr 27 16:44:10 UTC 2026</spirit:value>
+            <spirit:value>Mon Apr 27 20:34:26 UTC 2026</spirit:value>
           </spirit:parameter>
           <spirit:parameter>
             <spirit:name>outputProductCRC</spirit:name>
-            <spirit:value>9:3d88da24</spirit:value>
+            <spirit:value>9:e9fb25b1</spirit:value>
           </spirit:parameter>
         </spirit:parameters>
       </spirit:view>
@@ -20787,7 +20787,7 @@
             </spirit:wireTypeDef>
           </spirit:wireTypeDefs>
           <spirit:driver>
-            <spirit:defaultValue spirit:format="bitString" spirit:resolve="dependent" spirit:dependency="spirit:decode(id(&apos;MODELPARAM_VALUE.PF0_DEVICE_ID&apos;))" spirit:bitStringLength="16">0x9038</spirit:defaultValue>
+            <spirit:defaultValue spirit:format="bitString" spirit:resolve="dependent" spirit:dependency="spirit:decode(id(&apos;MODELPARAM_VALUE.PF0_DEVICE_ID&apos;))" spirit:bitStringLength="16">0x9024</spirit:defaultValue>
           </spirit:driver>
         </spirit:wire>
         <spirit:vendorExtensions>
@@ -22684,7 +22684,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_addr" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_addr" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -22707,7 +22707,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_write" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_write" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -22734,7 +22734,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_write_data" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_write_data" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -22761,7 +22761,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_byte_enable" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_byte_enable" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -22784,7 +22784,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_read" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_read" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -22808,7 +22808,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_read_data" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_read_data" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -22828,7 +22828,7 @@
         <spirit:vendorExtensions>
           <xilinx:portInfo>
             <xilinx:enablement>
-              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_read_write_done" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">true</xilinx:isEnabled>
+              <xilinx:isEnabled xilinx:resolve="dependent" xilinx:id="PORT_ENABLEMENT.cfg_mgmt_read_write_done" xilinx:dependency="(spirit:decode(id(&apos;MODELPARAM_VALUE.CFG_MGMT_IF&apos;)) = &quot;TRUE&quot; and (spirit:decode(id(&apos;MODELPARAM_VALUE.DMA_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULTQ_EN&apos;)) = 1 or spirit:decode(id(&apos;MODELPARAM_VALUE.FUNC_MODE&apos;)) = 2 or spirit:decode(id(&apos;MODELPARAM_VALUE.MULT_PF_DES&apos;)) = &quot;TRUE&quot;) and (spirit:decode(id(&apos;MODELPARAM_VALUE.SPLIT_DMA&apos;)) != &quot;TRUE&quot;))">false</xilinx:isEnabled>
             </xilinx:enablement>
           </xilinx:portInfo>
         </spirit:vendorExtensions>
@@ -51806,7 +51806,7 @@
       <spirit:modelParameter spirit:dataType="std_logic_vector">
         <spirit:name>PF0_DEVICE_ID</spirit:name>
         <spirit:displayName>Pf0 Device Id</spirit:displayName>
-        <spirit:value spirit:format="bitString" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.PF0_DEVICE_ID" spirit:bitStringLength="16">0x9038</spirit:value>
+        <spirit:value spirit:format="bitString" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.PF0_DEVICE_ID" spirit:bitStringLength="16">0x9024</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="std_logic_vector">
         <spirit:name>PF0_REVISION_ID</spirit:name>
@@ -52036,11 +52036,11 @@
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="integer">
         <spirit:name>XDMA_RNUM_CHNL</spirit:name>
-        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.XDMA_RNUM_CHNL">2</spirit:value>
+        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.XDMA_RNUM_CHNL">4</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="integer">
         <spirit:name>XDMA_WNUM_CHNL</spirit:name>
-        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.XDMA_WNUM_CHNL">2</spirit:value>
+        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.XDMA_WNUM_CHNL">4</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>XDMA_AXILITE_SLAVE</spirit:name>
@@ -52093,11 +52093,11 @@
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>EN_WCHNL_2</spirit:name>
-        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_WCHNL_2">FALSE</spirit:value>
+        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_WCHNL_2">TRUE</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>EN_WCHNL_3</spirit:name>
-        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_WCHNL_3">FALSE</spirit:value>
+        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_WCHNL_3">TRUE</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>EN_WCHNL_4</spirit:name>
@@ -52125,11 +52125,11 @@
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>EN_RCHNL_2</spirit:name>
-        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_RCHNL_2">FALSE</spirit:value>
+        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_RCHNL_2">TRUE</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>EN_RCHNL_3</spirit:name>
-        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_RCHNL_3">FALSE</spirit:value>
+        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.EN_RCHNL_3">TRUE</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>EN_RCHNL_4</spirit:name>
@@ -52228,7 +52228,7 @@
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="string">
         <spirit:name>CFG_MGMT_IF</spirit:name>
-        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.CFG_MGMT_IF">TRUE</spirit:value>
+        <spirit:value spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.CFG_MGMT_IF">FALSE</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="integer">
         <spirit:name>RQ_SEQ_NUM_IGNORE</spirit:name>
@@ -52893,11 +52893,11 @@
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="integer">
         <spirit:name>C_C2H_NUM_CHNL</spirit:name>
-        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_C2H_NUM_CHNL">2</spirit:value>
+        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_C2H_NUM_CHNL">4</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="integer">
         <spirit:name>C_H2C_NUM_CHNL</spirit:name>
-        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_H2C_NUM_CHNL">2</spirit:value>
+        <spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_H2C_NUM_CHNL">4</spirit:value>
       </spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="std_logic_vector">
         <spirit:name>H2C_XDMA_CHNL</spirit:name>
@@ -53369,6 +53369,25 @@
       <spirit:enumeration>5</spirit:enumeration>
     </spirit:choice>
     <spirit:choice>
+      <spirit:name>choice_list_8dba019c</spirit:name>
+      <spirit:enumeration>0000</spirit:enumeration>
+      <spirit:enumeration>0001</spirit:enumeration>
+      <spirit:enumeration>0010</spirit:enumeration>
+      <spirit:enumeration>0011</spirit:enumeration>
+      <spirit:enumeration>0100</spirit:enumeration>
+      <spirit:enumeration>0101</spirit:enumeration>
+      <spirit:enumeration>0110</spirit:enumeration>
+      <spirit:enumeration>0111</spirit:enumeration>
+      <spirit:enumeration>1000</spirit:enumeration>
+      <spirit:enumeration>1001</spirit:enumeration>
+      <spirit:enumeration>1010</spirit:enumeration>
+      <spirit:enumeration>1011</spirit:enumeration>
+      <spirit:enumeration>1100</spirit:enumeration>
+      <spirit:enumeration>1101</spirit:enumeration>
+      <spirit:enumeration>1110</spirit:enumeration>
+      <spirit:enumeration>1111</spirit:enumeration>
+    </spirit:choice>
+    <spirit:choice>
       <spirit:name>choice_list_914704bd</spirit:name>
       <spirit:enumeration>100_MHz</spirit:enumeration>
       <spirit:enumeration>125_MHz</spirit:enumeration>
@@ -53644,13 +53663,6 @@
       <spirit:enumeration>INTB</spirit:enumeration>
       <spirit:enumeration>INTC</spirit:enumeration>
       <spirit:enumeration>INTD</spirit:enumeration>
-    </spirit:choice>
-    <spirit:choice>
-      <spirit:name>choice_list_f62b0abd</spirit:name>
-      <spirit:enumeration>0000</spirit:enumeration>
-      <spirit:enumeration>0001</spirit:enumeration>
-      <spirit:enumeration>0010</spirit:enumeration>
-      <spirit:enumeration>0011</spirit:enumeration>
     </spirit:choice>
     <spirit:choice>
       <spirit:name>choice_list_f94ec5c4</spirit:name>
@@ -54547,7 +54559,7 @@
     <spirit:parameter>
       <spirit:name>pf0_device_id</spirit:name>
       <spirit:displayName>PF0 Device Id</spirit:displayName>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.pf0_device_id" spirit:order="27">9038</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.pf0_device_id" spirit:order="27">9024</spirit:value>
       <spirit:vendorExtensions>
         <xilinx:parameterInfo>
           <xilinx:enablement>
@@ -54939,7 +54951,7 @@
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>xdma_rnum_chnl</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.xdma_rnum_chnl" spirit:choiceRef="choice_list_aa031417" spirit:order="66">2</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.xdma_rnum_chnl" spirit:choiceRef="choice_list_aa031417" spirit:order="66">4</spirit:value>
       <spirit:vendorExtensions>
         <xilinx:parameterInfo>
           <xilinx:enablement>
@@ -54950,7 +54962,7 @@
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>xdma_wnum_chnl</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.xdma_wnum_chnl" spirit:choiceRef="choice_list_aa031417" spirit:order="67">2</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.xdma_wnum_chnl" spirit:choiceRef="choice_list_aa031417" spirit:order="67">4</spirit:value>
       <spirit:vendorExtensions>
         <xilinx:parameterInfo>
           <xilinx:enablement>
@@ -54991,7 +55003,7 @@
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>SYS_RST_N_BOARD_INTERFACE</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.SYS_RST_N_BOARD_INTERFACE" spirit:choiceRef="choice_list_a30da595" spirit:order="72">pcie_perstn</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.SYS_RST_N_BOARD_INTERFACE" spirit:choiceRef="choice_list_a30da595" spirit:order="72">Custom</spirit:value>
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>PCIE_BOARD_INTERFACE</spirit:name>
@@ -55126,11 +55138,11 @@
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>dsc_bypass_rd</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_rd" spirit:choiceRef="choice_list_f62b0abd" spirit:order="93">0000</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_rd" spirit:choiceRef="choice_list_8dba019c" spirit:order="93">0000</spirit:value>
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>dsc_bypass_wr</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_wr" spirit:choiceRef="choice_list_f62b0abd" spirit:order="94">0000</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_wr" spirit:choiceRef="choice_list_8dba019c" spirit:order="94">0000</spirit:value>
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>xdma_sts_ports</spirit:name>
@@ -55233,7 +55245,7 @@
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>cfg_mgmt_if</spirit:name>
-      <spirit:value spirit:format="bool" spirit:resolve="user" spirit:id="PARAM_VALUE.cfg_mgmt_if" spirit:order="108">true</spirit:value>
+      <spirit:value spirit:format="bool" spirit:resolve="user" spirit:id="PARAM_VALUE.cfg_mgmt_if" spirit:order="108">false</spirit:value>
       <spirit:vendorExtensions>
         <xilinx:parameterInfo>
           <xilinx:enablement>
@@ -61718,11 +61730,11 @@
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>dsc_bypass_rd_out</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_rd_out" spirit:choiceRef="choice_list_f62b0abd" spirit:order="816">0000</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_rd_out" spirit:choiceRef="choice_list_8dba019c" spirit:order="816">0000</spirit:value>
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>dsc_bypass_wr_out</spirit:name>
-      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_wr_out" spirit:choiceRef="choice_list_f62b0abd" spirit:order="817">0000</spirit:value>
+      <spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.dsc_bypass_wr_out" spirit:choiceRef="choice_list_8dba019c" spirit:order="817">0000</spirit:value>
     </spirit:parameter>
     <spirit:parameter>
       <spirit:name>num_queues</spirit:name>
@@ -62509,17 +62521,16 @@
         <xilinx:configElementInfo xilinx:referenceId="BUSIFPARAM_VALUE.RST.SYS_RST_N.POLARITY" xilinx:valueSource="user" xilinx:valuePermission="bd"/>
         <xilinx:configElementInfo xilinx:referenceId="BUSIFPARAM_VALUE.RST.SYS_RST_N.TYPE" xilinx:valuePermission="bd"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.PCIE_BOARD_INTERFACE" xilinx:valueSource="user"/>
-        <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.SYS_RST_N_BOARD_INTERFACE" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.axi_data_width" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.axilite_master_en" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.axilite_master_size" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.axisten_freq" xilinx:valueSource="user"/>
+        <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.cfg_mgmt_if" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.mode_selection" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.pf0_device_id" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.pf0_interrupt_pin" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.pf0_msix_enabled" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.pl_link_cap_max_link_speed" xilinx:valueSource="user"/>
-        <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.plltype" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.s_axi_id_width" xilinx:valuePermission="bd"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.xdma_axi_intf_mm" xilinx:valueSource="user"/>
         <xilinx:configElementInfo xilinx:referenceId="PARAM_VALUE.xdma_pcie_64bit_en" xilinx:valueSource="user"/>

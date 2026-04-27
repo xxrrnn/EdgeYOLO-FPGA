@@ -4,8 +4,8 @@
 -- Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
 -- Date        : Tue Apr 28 00:44:47 2026
 -- Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
--- Command     : write_vhdl -force -mode funcsim
---               /home/triton/task/YOLO_on_FPGA/fpga/local/bd/xdma_bram/ip/xdma_bram_axi_bram_ctrl_0_0/xdma_bram_axi_bram_ctrl_0_0_sim_netlist.vhdl
+-- Command     : write_vhdl -force -mode funcsim -rename_top xdma_bram_axi_bram_ctrl_0_0 -prefix
+--               xdma_bram_axi_bram_ctrl_0_0_ xdma_bram_axi_bram_ctrl_0_0_sim_netlist.vhdl
 -- Design      : xdma_bram_axi_bram_ctrl_0_0
 -- Purpose     : This VHDL netlist is a functional simulation representation of the design and should not be modified or
 --               synthesized. This netlist cannot be used for SDF annotated simulation.
@@ -38,8 +38,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_SRL_FIFO is
     axi_wr_burst : in STD_LOGIC;
     bid_gets_fifo_load_d1_reg_0 : in STD_LOGIC_VECTOR ( 2 downto 0 )
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_SRL_FIFO : entity is "SRL_FIFO";
 end xdma_bram_axi_bram_ctrl_0_0_SRL_FIFO;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_SRL_FIFO is
@@ -498,8 +496,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_sng_port_arb is
     \bram_we_a[31]\ : in STD_LOGIC_VECTOR ( 31 downto 0 );
     last_arb_won_reg_2 : in STD_LOGIC
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_sng_port_arb : entity is "sng_port_arb";
 end xdma_bram_axi_bram_ctrl_0_0_sng_port_arb;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_sng_port_arb is
@@ -1108,8 +1104,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_wrap_brst is
     \save_init_bram_addr_ld_reg[6]_0\ : in STD_LOGIC;
     s_axi_aclk : in STD_LOGIC
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_wrap_brst : entity is "wrap_brst";
 end xdma_bram_axi_bram_ctrl_0_0_wrap_brst;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_wrap_brst is
@@ -2151,8 +2145,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_rd_chnl is
     s_axi_arid : in STD_LOGIC_VECTOR ( 3 downto 0 );
     bram_rddata_a : in STD_LOGIC_VECTOR ( 255 downto 0 )
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_rd_chnl : entity is "rd_chnl";
 end xdma_bram_axi_bram_ctrl_0_0_rd_chnl;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_rd_chnl is
@@ -12733,8 +12725,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_wr_chnl is
     BRAM_En_B_i : in STD_LOGIC;
     s_axi_wstrb : in STD_LOGIC_VECTOR ( 31 downto 0 )
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_wr_chnl : entity is "wr_chnl";
 end xdma_bram_axi_bram_ctrl_0_0_wr_chnl;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_wr_chnl is
@@ -16545,8 +16535,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_full_axi is
     s_axi_arvalid : in STD_LOGIC;
     s_axi_awlen : in STD_LOGIC_VECTOR ( 3 downto 0 )
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_full_axi : entity is "full_axi";
 end xdma_bram_axi_bram_ctrl_0_0_full_axi;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_full_axi is
@@ -16897,8 +16885,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl_top is
     s_axi_arvalid : in STD_LOGIC;
     s_axi_awlen : in STD_LOGIC_VECTOR ( 3 downto 0 )
   );
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl_top : entity is "axi_bram_ctrl_top";
 end xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl_top;
 
 architecture STRUCTURE of xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl_top is
@@ -17052,8 +17038,6 @@ entity xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl is
   attribute C_S_AXI_PROTOCOL of xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl : entity is "AXI4";
   attribute C_S_AXI_SUPPORTS_NARROW_BURST : integer;
   attribute C_S_AXI_SUPPORTS_NARROW_BURST of xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl : entity is 0;
-  attribute ORIG_REF_NAME : string;
-  attribute ORIG_REF_NAME of xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl : entity is "axi_bram_ctrl";
   attribute downgradeipidentifiedwarnings : string;
   attribute downgradeipidentifiedwarnings of xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl : entity is "yes";
 end xdma_bram_axi_bram_ctrl_0_0_axi_bram_ctrl;

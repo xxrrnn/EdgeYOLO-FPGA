@@ -66,11 +66,7 @@ set xdma [create_ip -name xdma -vendor xilinx.com -library ip -version 4.1 -modu
 # User Parameters
 set_property -dict [list \
   CONFIG.PCIE_BOARD_INTERFACE {pci_express_x8} \
-  CONFIG.PF0_DEVICE_ID_mqdma {9038} \
-  CONFIG.PF0_SRIOV_VF_DEVICE_ID {A038} \
-  CONFIG.PF2_DEVICE_ID_mqdma {9238} \
-  CONFIG.PF3_DEVICE_ID_mqdma {9338} \
-  CONFIG.SYS_RST_N_BOARD_INTERFACE {pcie_perstn} \
+  CONFIG.SYS_RST_N_BOARD_INTERFACE {cpu_reset} \
   CONFIG.axi_data_width {256_bit} \
   CONFIG.axil_master_64bit_en {false} \
   CONFIG.axilite_master_en {true} \
@@ -84,7 +80,7 @@ set_property -dict [list \
   CONFIG.mode_selection {Advanced} \
   CONFIG.pcie_extended_tag {true} \
   CONFIG.pciebar2axibar_axil_master {0x0000_0000} \
-  CONFIG.pf0_device_id {9038} \
+  CONFIG.pf0_device_id {9024} \
   CONFIG.pf0_interrupt_pin {NONE} \
   CONFIG.pf0_msix_cap_pba_bir {BAR_3:2} \
   CONFIG.pf0_msix_cap_pba_offset {00008FE0} \
@@ -97,8 +93,8 @@ set_property -dict [list \
   CONFIG.plltype {QPLL1} \
   CONFIG.xdma_axi_intf_mm {AXI_Memory_Mapped} \
   CONFIG.xdma_pcie_64bit_en {true} \
-  CONFIG.xdma_rnum_chnl {1} \
-  CONFIG.xdma_wnum_chnl {1} \
+  CONFIG.xdma_rnum_chnl {4} \
+  CONFIG.xdma_wnum_chnl {4} \
 ] [get_ips xdma]
 
 # Runtime Parameters

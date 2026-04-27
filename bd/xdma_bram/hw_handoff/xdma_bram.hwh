@@ -1,9 +1,14 @@
 ﻿<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
-<EDKSYSTEM EDWVERSION="1.2" TIMESTAMP="Tue Apr 28 00:44:13 2026" VIVADOVERSION="2024.2.2">
+<EDKSYSTEM EDWVERSION="1.2" TIMESTAMP="Tue Apr 28 04:34:30 2026" VIVADOVERSION="2024.2.2">
 
   <SYSTEMINFO ARCH="virtexuplusHBM" BOARD="xilinx.com:vcu128:part0:1.0" DEVICE="xcvu37p" NAME="xdma_bram" PACKAGE="fsvh2892" SPEEDGRADE="-2L"/>
 
   <EXTERNALPORTS>
+    <PORT DIR="I" NAME="cpu_reset" POLARITY="ACTIVE_HIGH" SIGIS="rst" SIGNAME="External_Ports_cpu_reset">
+      <CONNECTIONS>
+        <CONNECTION INSTANCE="xdma_inv" PORT="Op1"/>
+      </CONNECTIONS>
+    </PORT>
     <PORT DIR="I" LEFT="7" NAME="pci_express_x8_rxn" RIGHT="0" SIGIS="undef" SIGNAME="xdma_0_pci_exp_rxn">
       <CONNECTIONS>
         <CONNECTION INSTANCE="xdma_0" PORT="pci_exp_rxn"/>
@@ -22,11 +27,6 @@
     <PORT DIR="O" LEFT="7" NAME="pci_express_x8_txp" RIGHT="0" SIGIS="undef" SIGNAME="xdma_0_pci_exp_txp">
       <CONNECTIONS>
         <CONNECTION INSTANCE="xdma_0" PORT="pci_exp_txp"/>
-      </CONNECTIONS>
-    </PORT>
-    <PORT DIR="I" NAME="pcie_perstn" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="External_Ports_pcie_perstn">
-      <CONNECTIONS>
-        <CONNECTION INSTANCE="xdma_0" PORT="sys_rst_n"/>
       </CONNECTIONS>
     </PORT>
     <PORT CLKFREQUENCY="100000000" DIR="I" NAME="pcie_refclk_clk_n" SIGIS="clk" SIGNAME="util_ds_buf_IBUF_DS_N">
@@ -658,9 +658,9 @@
           <PARAMETER NAME="INSERT_VIP" VALUE="0"/>
           <PARAMETER NAME="MAX_BURST_LENGTH" VALUE="256"/>
           <PARAMETER NAME="NUM_READ_OUTSTANDING" VALUE="32"/>
-          <PARAMETER NAME="NUM_READ_THREADS" VALUE="2"/>
+          <PARAMETER NAME="NUM_READ_THREADS" VALUE="4"/>
           <PARAMETER NAME="NUM_WRITE_OUTSTANDING" VALUE="16"/>
-          <PARAMETER NAME="NUM_WRITE_THREADS" VALUE="2"/>
+          <PARAMETER NAME="NUM_WRITE_THREADS" VALUE="4"/>
           <PARAMETER NAME="PHASE" VALUE="0.0"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
           <PARAMETER NAME="READ_WRITE_MODE" VALUE="READ_WRITE"/>
@@ -1021,7 +1021,7 @@
         <PARAMETER NAME="CCIX_DVSEC" VALUE="FALSE"/>
         <PARAMETER NAME="CCIX_ENABLE" VALUE="FALSE"/>
         <PARAMETER NAME="CFG_EXT_IF" VALUE="FALSE"/>
-        <PARAMETER NAME="CFG_MGMT_IF" VALUE="TRUE"/>
+        <PARAMETER NAME="CFG_MGMT_IF" VALUE="FALSE"/>
         <PARAMETER NAME="CFG_SPACE_ENABLE" VALUE="FALSE"/>
         <PARAMETER NAME="COMPONENT_NAME" VALUE="xdma_0"/>
         <PARAMETER NAME="CORE_CLK_FREQ" VALUE="2"/>
@@ -1047,12 +1047,12 @@
         <PARAMETER NAME="C_AXIBAR_HIGHADDR_4" VALUE="0x0000000000000000"/>
         <PARAMETER NAME="C_AXIBAR_HIGHADDR_5" VALUE="0x0000000000000000"/>
         <PARAMETER NAME="C_AXIBAR_NUM" VALUE="1"/>
-        <PARAMETER NAME="C_C2H_NUM_CHNL" VALUE="2"/>
+        <PARAMETER NAME="C_C2H_NUM_CHNL" VALUE="4"/>
         <PARAMETER NAME="C_COMP_TIMEOUT" VALUE="1"/>
         <PARAMETER NAME="C_ECC_ENABLE" VALUE="0"/>
         <PARAMETER NAME="C_ENABLE_RESOURCE_REDUCTION" VALUE="FALSE"/>
         <PARAMETER NAME="C_FAMILY" VALUE="virtexuplusHBM"/>
-        <PARAMETER NAME="C_H2C_NUM_CHNL" VALUE="2"/>
+        <PARAMETER NAME="C_H2C_NUM_CHNL" VALUE="4"/>
         <PARAMETER NAME="C_INCLUDE_BAROFFSET_REG" VALUE="1"/>
         <PARAMETER NAME="C_INTX_RX_PIN_EN" VALUE="1"/>
         <PARAMETER NAME="C_LAST_CORE_CAP_ADDR" VALUE="0x100"/>
@@ -1119,8 +1119,8 @@
         <PARAMETER NAME="EN_PCIE_DEBUG_PORTS" VALUE="FALSE"/>
         <PARAMETER NAME="EN_RCHNL_0" VALUE="TRUE"/>
         <PARAMETER NAME="EN_RCHNL_1" VALUE="TRUE"/>
-        <PARAMETER NAME="EN_RCHNL_2" VALUE="FALSE"/>
-        <PARAMETER NAME="EN_RCHNL_3" VALUE="FALSE"/>
+        <PARAMETER NAME="EN_RCHNL_2" VALUE="TRUE"/>
+        <PARAMETER NAME="EN_RCHNL_3" VALUE="TRUE"/>
         <PARAMETER NAME="EN_RCHNL_4" VALUE="FALSE"/>
         <PARAMETER NAME="EN_RCHNL_5" VALUE="FALSE"/>
         <PARAMETER NAME="EN_RCHNL_6" VALUE="FALSE"/>
@@ -1128,8 +1128,8 @@
         <PARAMETER NAME="EN_TRANSCEIVER_STATUS_PORTS" VALUE="FALSE"/>
         <PARAMETER NAME="EN_WCHNL_0" VALUE="TRUE"/>
         <PARAMETER NAME="EN_WCHNL_1" VALUE="TRUE"/>
-        <PARAMETER NAME="EN_WCHNL_2" VALUE="FALSE"/>
-        <PARAMETER NAME="EN_WCHNL_3" VALUE="FALSE"/>
+        <PARAMETER NAME="EN_WCHNL_2" VALUE="TRUE"/>
+        <PARAMETER NAME="EN_WCHNL_3" VALUE="TRUE"/>
         <PARAMETER NAME="EN_WCHNL_4" VALUE="FALSE"/>
         <PARAMETER NAME="EN_WCHNL_5" VALUE="FALSE"/>
         <PARAMETER NAME="EN_WCHNL_6" VALUE="FALSE"/>
@@ -1185,7 +1185,7 @@
         <PARAMETER NAME="PF0_BAR5_APERTURE_SIZE" VALUE="0x05"/>
         <PARAMETER NAME="PF0_BAR5_CONTROL" VALUE="0x0"/>
         <PARAMETER NAME="PF0_CLASS_CODE" VALUE="0x070001"/>
-        <PARAMETER NAME="PF0_DEVICE_ID" VALUE="0x9038"/>
+        <PARAMETER NAME="PF0_DEVICE_ID" VALUE="0x9024"/>
         <PARAMETER NAME="PF0_EXPANSION_ROM_APERTURE_SIZE" VALUE="0x000"/>
         <PARAMETER NAME="PF0_EXPANSION_ROM_ENABLE" VALUE="FALSE"/>
         <PARAMETER NAME="PF0_INTERRUPT_PIN" VALUE="0x0"/>
@@ -1301,11 +1301,11 @@
         <PARAMETER NAME="XDMA_NUM_PCIE_TAG" VALUE="256"/>
         <PARAMETER NAME="XDMA_NUM_USR_IRQ" VALUE="1"/>
         <PARAMETER NAME="XDMA_PCIE_64BIT_EN" VALUE="xdma_pcie_64bit_en"/>
-        <PARAMETER NAME="XDMA_RNUM_CHNL" VALUE="2"/>
+        <PARAMETER NAME="XDMA_RNUM_CHNL" VALUE="4"/>
         <PARAMETER NAME="XDMA_RNUM_RIDS" VALUE="32"/>
         <PARAMETER NAME="XDMA_STS_PORTS" VALUE="FALSE"/>
         <PARAMETER NAME="XDMA_ST_INFINITE_DESC_EXDES" VALUE="FALSE"/>
-        <PARAMETER NAME="XDMA_WNUM_CHNL" VALUE="2"/>
+        <PARAMETER NAME="XDMA_WNUM_CHNL" VALUE="4"/>
         <PARAMETER NAME="XDMA_WNUM_RIDS" VALUE="16"/>
         <PARAMETER NAME="xlnx_ref_board" VALUE="VCU128"/>
         <PARAMETER NAME="BASEADDR" VALUE="0x00001000"/>
@@ -1389,7 +1389,7 @@
         <PARAMETER NAME="RX_SSC_PPM" VALUE="0"/>
         <PARAMETER NAME="SRIOV_CAP_ENABLE" VALUE="false"/>
         <PARAMETER NAME="SRIOV_FIRST_VF_OFFSET" VALUE="1"/>
-        <PARAMETER NAME="SYS_RST_N_BOARD_INTERFACE" VALUE="pcie_perstn"/>
+        <PARAMETER NAME="SYS_RST_N_BOARD_INTERFACE" VALUE="Custom"/>
         <PARAMETER NAME="Shared_Logic" VALUE="1"/>
         <PARAMETER NAME="Shared_Logic_Both" VALUE="false"/>
         <PARAMETER NAME="Shared_Logic_Both_7xG2" VALUE="false"/>
@@ -1459,7 +1459,7 @@
         <PARAMETER NAME="c_s_axi_supports_narrow_burst" VALUE="false"/>
         <PARAMETER NAME="c_smmu_en" VALUE="0"/>
         <PARAMETER NAME="cfg_ext_if" VALUE="false"/>
-        <PARAMETER NAME="cfg_mgmt_if" VALUE="true"/>
+        <PARAMETER NAME="cfg_mgmt_if" VALUE="false"/>
         <PARAMETER NAME="cfg_space_enable" VALUE="false"/>
         <PARAMETER NAME="comp_timeout" VALUE="50ms"/>
         <PARAMETER NAME="copy_pf0" VALUE="false"/>
@@ -1667,7 +1667,7 @@
         <PARAMETER NAME="pf0_class_code_mqdma" VALUE="058000"/>
         <PARAMETER NAME="pf0_class_code_sub" VALUE="00"/>
         <PARAMETER NAME="pf0_class_code_sub_mqdma" VALUE="80"/>
-        <PARAMETER NAME="pf0_device_id" VALUE="9038"/>
+        <PARAMETER NAME="pf0_device_id" VALUE="9024"/>
         <PARAMETER NAME="pf0_expansion_rom_enabled" VALUE="false"/>
         <PARAMETER NAME="pf0_expansion_rom_scale" VALUE="Kilobytes"/>
         <PARAMETER NAME="pf0_expansion_rom_size" VALUE="4"/>
@@ -2244,13 +2244,13 @@
         <PARAMETER NAME="xdma_num_usr_irq" VALUE="1"/>
         <PARAMETER NAME="xdma_pcie_64bit_en" VALUE="true"/>
         <PARAMETER NAME="xdma_pcie_prefetchable" VALUE="false"/>
-        <PARAMETER NAME="xdma_rnum_chnl" VALUE="2"/>
+        <PARAMETER NAME="xdma_rnum_chnl" VALUE="4"/>
         <PARAMETER NAME="xdma_rnum_rids" VALUE="32"/>
         <PARAMETER NAME="xdma_scale" VALUE="Kilobytes"/>
         <PARAMETER NAME="xdma_size" VALUE="64"/>
         <PARAMETER NAME="xdma_st_infinite_desc_exdes" VALUE="false"/>
         <PARAMETER NAME="xdma_sts_ports" VALUE="false"/>
-        <PARAMETER NAME="xdma_wnum_chnl" VALUE="2"/>
+        <PARAMETER NAME="xdma_wnum_chnl" VALUE="4"/>
         <PARAMETER NAME="xdma_wnum_rids" VALUE="16"/>
         <PARAMETER NAME="EDK_IPTYPE" VALUE="PERIPHERAL"/>
       </PARAMETERS>
@@ -2265,13 +2265,6 @@
             <CONNECTION INSTANCE="axi_bram_ctrl_0" PORT="s_axi_aresetn"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" LEFT="18" NAME="cfg_mgmt_addr" RIGHT="0" SIGIS="undef"/>
-        <PORT DIR="I" LEFT="3" NAME="cfg_mgmt_byte_enable" RIGHT="0" SIGIS="undef"/>
-        <PORT DIR="I" NAME="cfg_mgmt_read" SIGIS="undef"/>
-        <PORT DIR="O" LEFT="31" NAME="cfg_mgmt_read_data" RIGHT="0" SIGIS="undef"/>
-        <PORT DIR="O" NAME="cfg_mgmt_read_write_done" SIGIS="undef"/>
-        <PORT DIR="I" NAME="cfg_mgmt_write" SIGIS="undef"/>
-        <PORT DIR="I" LEFT="31" NAME="cfg_mgmt_write_data" RIGHT="0" SIGIS="undef"/>
         <PORT DIR="O" LEFT="63" NAME="m_axi_araddr" RIGHT="0" SIGIS="undef" SIGNAME="axi_bram_ctrl_0_s_axi_araddr">
           <CONNECTIONS>
             <CONNECTION INSTANCE="axi_bram_ctrl_0" PORT="s_axi_araddr"/>
@@ -2499,9 +2492,9 @@
             <CONNECTION INSTANCE="util_ds_buf" PORT="IBUF_OUT"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="sys_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="External_Ports_pcie_perstn">
+        <PORT DIR="I" NAME="sys_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="xdma_inv_Res">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="External_Ports" PORT="pcie_perstn"/>
+            <CONNECTION INSTANCE="xdma_inv" PORT="Res"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="O" NAME="user_lnk_up" SIGIS="undef" SIGNAME="xdma_0_user_lnk_up">
@@ -2510,7 +2503,11 @@
           </CONNECTIONS>
         </PORT>
         <PORT DIR="O" LEFT="0" NAME="usr_irq_ack" RIGHT="0" SIGIS="undef"/>
-        <PORT DIR="I" LEFT="0" NAME="usr_irq_req" RIGHT="0" SIGIS="undef"/>
+        <PORT DIR="I" LEFT="0" NAME="usr_irq_req" RIGHT="0" SIGIS="undef" SIGNAME="xdma_constant_dout">
+          <CONNECTIONS>
+            <CONNECTION INSTANCE="xdma_constant" PORT="dout"/>
+          </CONNECTIONS>
+        </PORT>
       </PORTS>
       <BUSINTERFACES>
         <BUSINTERFACE BUSNAME="xdma_0_M_AXI" DATAWIDTH="256" NAME="M_AXI" TYPE="MASTER" VLNV="xilinx.com:interface:aximm:1.0">
@@ -2534,9 +2531,9 @@
           <PARAMETER NAME="INSERT_VIP" VALUE="0"/>
           <PARAMETER NAME="MAX_BURST_LENGTH" VALUE="256"/>
           <PARAMETER NAME="NUM_READ_OUTSTANDING" VALUE="32"/>
-          <PARAMETER NAME="NUM_READ_THREADS" VALUE="2"/>
+          <PARAMETER NAME="NUM_READ_THREADS" VALUE="4"/>
           <PARAMETER NAME="NUM_WRITE_OUTSTANDING" VALUE="16"/>
-          <PARAMETER NAME="NUM_WRITE_THREADS" VALUE="2"/>
+          <PARAMETER NAME="NUM_WRITE_THREADS" VALUE="4"/>
           <PARAMETER NAME="PHASE" VALUE="0.0"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
           <PARAMETER NAME="READ_WRITE_MODE" VALUE="READ_WRITE"/>
@@ -2637,17 +2634,6 @@
             <PORTMAP LOGICAL="WVALID" PHYSICAL="m_axil_wvalid"/>
           </PORTMAPS>
         </BUSINTERFACE>
-        <BUSINTERFACE BUSNAME="__NOC__" NAME="pcie_cfg_mgmt" TYPE="TARGET" VLNV="xilinx.com:interface:pcie_cfg_mgmt:1.0">
-          <PORTMAPS>
-            <PORTMAP LOGICAL="ADDR" PHYSICAL="cfg_mgmt_addr"/>
-            <PORTMAP LOGICAL="BYTE_EN" PHYSICAL="cfg_mgmt_byte_enable"/>
-            <PORTMAP LOGICAL="READ_DATA" PHYSICAL="cfg_mgmt_read_data"/>
-            <PORTMAP LOGICAL="READ_EN" PHYSICAL="cfg_mgmt_read"/>
-            <PORTMAP LOGICAL="READ_WRITE_DONE" PHYSICAL="cfg_mgmt_read_write_done"/>
-            <PORTMAP LOGICAL="WRITE_DATA" PHYSICAL="cfg_mgmt_write_data"/>
-            <PORTMAP LOGICAL="WRITE_EN" PHYSICAL="cfg_mgmt_write"/>
-          </PORTMAPS>
-        </BUSINTERFACE>
         <BUSINTERFACE BUSNAME="xdma_0_pcie_mgt" NAME="pcie_mgt" TYPE="INITIATOR" VLNV="xilinx.com:interface:pcie_7x_mgt:1.0">
           <PORTMAPS>
             <PORTMAP LOGICAL="rxn" PHYSICAL="pci_exp_rxn"/>
@@ -2663,6 +2649,46 @@
       <PERIPHERALS>
         <PERIPHERAL INSTANCE="axi_bram_ctrl_0"/>
       </PERIPHERALS>
+    </MODULE>
+    <MODULE COREREVISION="9" FULLNAME="/xdma_constant" HWVERSION="1.1" INSTANCE="xdma_constant" IPTYPE="PERIPHERAL" IS_ENABLE="1" MODCLASS="PERIPHERAL" MODTYPE="xlconstant" VLNV="xilinx.com:ip:xlconstant:1.1">
+      <DOCUMENTS/>
+      <PARAMETERS>
+        <PARAMETER NAME="CONST_VAL" VALUE="0x0"/>
+        <PARAMETER NAME="CONST_WIDTH" VALUE="1"/>
+        <PARAMETER NAME="Component_Name" VALUE="xdma_bram_xdma_constant_0"/>
+        <PARAMETER NAME="EDK_IPTYPE" VALUE="PERIPHERAL"/>
+      </PARAMETERS>
+      <PORTS>
+        <PORT DIR="O" LEFT="0" NAME="dout" RIGHT="0" SIGIS="undef" SIGNAME="xdma_constant_dout">
+          <CONNECTIONS>
+            <CONNECTION INSTANCE="xdma_0" PORT="usr_irq_req"/>
+          </CONNECTIONS>
+        </PORT>
+      </PORTS>
+      <BUSINTERFACES/>
+    </MODULE>
+    <MODULE COREREVISION="4" FULLNAME="/xdma_inv" HWVERSION="2.0" INSTANCE="xdma_inv" IPTYPE="PERIPHERAL" IS_ENABLE="1" MODCLASS="PERIPHERAL" MODTYPE="util_vector_logic" VLNV="xilinx.com:ip:util_vector_logic:2.0">
+      <DOCUMENTS/>
+      <PARAMETERS>
+        <PARAMETER NAME="C_OPERATION" VALUE="not"/>
+        <PARAMETER NAME="C_SIZE" VALUE="1"/>
+        <PARAMETER NAME="Component_Name" VALUE="xdma_bram_xdma_inv_0"/>
+        <PARAMETER NAME="LOGO_FILE" VALUE="data/sym_notgate.png"/>
+        <PARAMETER NAME="EDK_IPTYPE" VALUE="PERIPHERAL"/>
+      </PARAMETERS>
+      <PORTS>
+        <PORT DIR="I" LEFT="0" NAME="Op1" POLARITY="ACTIVE_HIGH" RIGHT="0" SIGIS="undef" SIGNAME="External_Ports_cpu_reset">
+          <CONNECTIONS>
+            <CONNECTION INSTANCE="External_Ports" PORT="cpu_reset"/>
+          </CONNECTIONS>
+        </PORT>
+        <PORT DIR="O" LEFT="0" NAME="Res" POLARITY="ACTIVE_LOW" RIGHT="0" SIGIS="undef" SIGNAME="xdma_inv_Res">
+          <CONNECTIONS>
+            <CONNECTION INSTANCE="xdma_0" PORT="sys_rst_n"/>
+          </CONNECTIONS>
+        </PORT>
+      </PORTS>
+      <BUSINTERFACES/>
     </MODULE>
   </MODULES>
 

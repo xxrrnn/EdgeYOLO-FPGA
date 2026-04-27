@@ -8,9 +8,10 @@ set_property -dict [list \
 create_bd_intf_port -mode Master -vlnv xilinx.com:interface:pcie_7x_mgt_rtl:1.0 pci_express_x8
 connect_bd_intf_net [get_bd_intf_ports pci_express_x8] [get_bd_intf_pins xdma_0/pcie_mgt]
 
-create_bd_port -dir I -type rst pcie_perstn
-set_property CONFIG.POLARITY ACTIVE_LOW [get_bd_ports pcie_perstn]
-connect_bd_net [get_bd_ports pcie_perstn] [get_bd_pins xdma_0/sys_rst_n]
+create_bd_port -dir I -type rst cpu_reset
+set_property CONFIG.POLARITY ACTIVE_HIGH [get_bd_ports cpu_reset]
+connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins xdma_inv/Op1]
+connect_bd_net [get_bd_pins xdma_inv/Res] [get_bd_pins xdma_0/sys_rst_n]
 
 create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 pcie_refclk
 set_property CONFIG.FREQ_HZ 100000000 [get_bd_intf_ports pcie_refclk]
@@ -25,3 +26,5 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_bram_ctrl_0/s_axi_
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn]
 
 assign_bd_address
+
+connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]

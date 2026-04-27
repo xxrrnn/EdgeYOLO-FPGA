@@ -1,10 +1,55 @@
-if {![info exists topName] || ![info exists SynOutputDir] || ![info exists ImplOutputDir]} {
-    error "Please source 1_bd.tcl before 2_synth.tcl."
+set thisScriptDir [file dirname [file normalize [info script]]]
+
+if {![info exists xdmaBramScriptDir]} {
+    source [file normalize "$thisScriptDir/3_config.tcl"]
 }
 
+if {[llength [get_projects -quiet]] == 0} {
+    error "Please open the Vivado project before sourcing 2_synth.tcl."
+}
 
 file mkdir $SynOutputDir
 file mkdir $ImplOutputDir
+
+set bdFile [file normalize "$bdDir/$bdName/$bdName.bd"]
+
+# Generate BD output products and IP user files. The top-level synthesis later
+# depends on the generated BD/IP files and the OOC IP checkpoints.
+generate_target all [get_files $bdFile]
+export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force -quiet
+
+# Create out-of-context synthesis runs for all IP instances inside this BD.
+# Without these DCPs, top-level synth_design can fail with "DCP does not exist".
+catch {create_ip_run [get_files -of_objects [get_fileset sources_1] $bdFile]}
+set ipSynthRuns [get_runs -quiet ${bdName}_*_synth_1]
+if {[llength $ipSynthRuns] > 0} {
+    reset_run $ipSynthRuns
+    launch_runs $ipSynthRuns -jobs [get_param general.maxThreads]
+    foreach ipRun $ipSynthRuns {
+        wait_on_run $ipRun
+        set runStatus [get_property STATUS [get_runs $ipRun]]
+        if {![string match "*Complete*" $runStatus] && ![string match "*Using cached IP results*" $runStatus]} {
+            error "IP synthesis run $ipRun failed: $runStatus"
+        }
+    }
+}
+
+# Export simulation scripts for the BD/IPs. This is not required for bitstream
+# generation, but keeps the project-generated IP user files complete.
+export_simulation \
+  -of_objects [get_files $bdFile] \
+  -directory [file normalize "$projPath/${projName}.ip_user_files/sim_scripts"] \
+  -ip_user_files_dir [file normalize "$projPath/${projName}.ip_user_files"] \
+  -ipstatic_source_dir [file normalize "$projPath/${projName}.ip_user_files/ipstatic"] \
+  -use_ip_compiled_libs \
+  -force \
+  -quiet
+
+foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/$bdName/*.xdc"]] {
+    if {[llength [get_files -quiet $xdcFile]] == 0} {
+        add_files -fileset constrs_1 $xdcFile
+    }
+}
 
 update_compile_order -fileset sources_1
 
