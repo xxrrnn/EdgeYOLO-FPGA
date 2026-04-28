@@ -2,7 +2,7 @@
 set thisScriptDir [file dirname [file normalize [info script]]]
 
 if {![info exists xdmaBramScriptDir]} {
-    source [file normalize "$thisScriptDir/3_config.tcl"]
+    source [file normalize "$thisScriptDir/config.tcl"]
 }
 
 if {[llength [get_projects -quiet]] == 0} {
@@ -19,12 +19,16 @@ if {[file exists [file dirname $bdFile]]} {
 
 create_bd_design -dir $bdDir $bdName
 
+set rtlFiles [glob -nocomplain [file normalize "$srcDir/xdma_bram/*.v"]]
+if {[llength $rtlFiles] == 0} {
+    error "No RTL files found in $srcDir/xdma_bram"
+}
+add_files -norecurse $rtlFiles
+create_bd_cell -type module -reference xdma_bram_axil_ctrl_top xdma_bram_axil_ctrl_0
 source [file normalize "$ipBdDir/xdma.tcl"]
 source [file normalize "$ipBdDir/bram.tcl"]
 source [file normalize "$ipBdDir/connect.tcl"]
-
-# address edit
-set_property offset 0x10000000 [get_bd_addr_segs {xdma_0/M_AXI/SEG_axi_bram_ctrl_0_Mem0}]
+source [file normalize "$ipBdDir/address.tcl"]
 
 validate_bd_design
 regenerate_bd_layout
@@ -33,4 +37,8 @@ save_bd_design
 # Generate and add the BD top wrapper used by 2_synth.tcl.
 make_wrapper -files [get_files $bdFile] -top
 add_files -norecurse [file normalize "$bdDir/$bdName/hdl/${bdName}_wrapper.v"]
+set_property top $topName [current_fileset]
 update_compile_order -fileset sources_1
+
+report_ip_status -name ip_status 
+update_module_reference [get_ips  xdma_bram_xdma_bram_axil_ctrl_0_0]

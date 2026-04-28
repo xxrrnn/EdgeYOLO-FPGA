@@ -2,10 +2,10 @@
 -- Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -- --------------------------------------------------------------------------------
 -- Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
--- Date        : Tue Apr 28 04:57:14 2026
+-- Date        : Tue Apr 28 22:04:57 2026
 -- Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
--- Command     : write_vhdl -force -mode synth_stub
---               /home/triton/task/YOLO_on_FPGA/fpga/local/bd/xdma_bram/ip/xdma_bram_xdma_0_0/xdma_bram_xdma_0_0_stub.vhdl
+-- Command     : write_vhdl -force -mode synth_stub -rename_top xdma_bram_xdma_0_0 -prefix
+--               xdma_bram_xdma_0_0_ xdma_bram_xdma_0_0_stub.vhdl
 -- Design      : xdma_bram_xdma_0_0
 -- Purpose     : Stub declaration of top-level module interface
 -- Device      : xcvu37p-fsvh2892-2L-e

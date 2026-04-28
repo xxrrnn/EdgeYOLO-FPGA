@@ -2,7 +2,7 @@
 -- Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -- --------------------------------------------------------------------------------
 -- Tool Version: Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
--- Date        : Tue Apr 28 00:44:40 2026
+-- Date        : Tue Apr 28 22:02:26 2026
 -- Host        : DESKTOP-5NNBJ0V running 64-bit Ubuntu 22.04.1 LTS
 -- Command     : write_vhdl -force -mode synth_stub -rename_top xdma_bram_util_ds_buf_0 -prefix
 --               xdma_bram_util_ds_buf_0_ xdma_bram_util_ds_buf_0_stub.vhdl

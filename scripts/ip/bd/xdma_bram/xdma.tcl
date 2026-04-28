@@ -9,14 +9,27 @@ if {$xdma_0 eq ""} {
 set_property -dict [list \
   CONFIG.PCIE_BOARD_INTERFACE {pci_express_x8} \
   CONFIG.axi_data_width {256_bit} \
+  CONFIG.axil_master_64bit_en {false} \
   CONFIG.axilite_master_en {false} \
   CONFIG.axisten_freq {250} \
   CONFIG.cfg_mgmt_if {false} \
+  CONFIG.en_ext_ch_gt_drp {false} \
+  CONFIG.en_pcie_drp {false} \
+  CONFIG.en_transceiver_status_ports {false} \
+  CONFIG.enable_jtag_dbg {false} \
   CONFIG.mode_selection {Advanced} \
+  CONFIG.pcie_extended_tag {true} \
   CONFIG.pf0_device_id {9024} \
   CONFIG.pf0_interrupt_pin {NONE} \
+  CONFIG.pf0_msix_cap_pba_bir {BAR_1:0} \
+  CONFIG.pf0_msix_cap_pba_offset {00008FE0} \
+  CONFIG.pf0_msix_cap_table_bir {BAR_1:0} \
+  CONFIG.pf0_msix_cap_table_offset {00008000} \
+  CONFIG.pf0_msix_cap_table_size {01F} \
   CONFIG.pf0_msix_enabled {true} \
+  CONFIG.pipe_sim {false} \
   CONFIG.pl_link_cap_max_link_speed {8.0_GT/s} \
+  CONFIG.plltype {QPLL1} \
   CONFIG.xdma_axi_intf_mm {AXI_Memory_Mapped} \
   CONFIG.xdma_pcie_64bit_en {true} \
   CONFIG.xdma_rnum_chnl {4} \
@@ -24,8 +37,6 @@ set_property -dict [list \
 ] $xdma_0
 
 make_bd_pins_external  [get_bd_pins xdma_0/user_lnk_up]
-
-
 set xdma_constant [get_bd_cells -quiet xdma_constant]
 if {$xdma_constant eq ""} {
   set xdma_constant [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xdma_constant]

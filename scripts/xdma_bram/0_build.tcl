@@ -1,6 +1,6 @@
 # XDMA BRAM project creation script.
 set thisScriptDir [file dirname [file normalize [info script]]]
-source [file normalize "$thisScriptDir/3_config.tcl"]
+source [file normalize "$thisScriptDir/config.tcl"]
 
 if {[llength [info commands create_project]] == 0} {
     error "This script must be sourced in Vivado Tcl, not plain tclsh."

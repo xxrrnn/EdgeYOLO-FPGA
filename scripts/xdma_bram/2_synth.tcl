@@ -1,7 +1,7 @@
 set thisScriptDir [file dirname [file normalize [info script]]]
 
 if {![info exists xdmaBramScriptDir]} {
-    source [file normalize "$thisScriptDir/3_config.tcl"]
+    source [file normalize "$thisScriptDir/config.tcl"]
 }
 
 if {[llength [get_projects -quiet]] == 0} {
@@ -12,6 +12,30 @@ file mkdir $SynOutputDir
 file mkdir $ImplOutputDir
 
 set bdFile [file normalize "$bdDir/$bdName/$bdName.bd"]
+set wrapperFile [file normalize "$bdDir/$bdName/hdl/${bdName}_wrapper.v"]
+
+if {![file exists $bdFile]} {
+    error "BD file does not exist: $bdFile. Please source 1_bd.tcl before 2_synth.tcl."
+}
+
+if {[llength [get_files -quiet $bdFile]] == 0} {
+    add_files -norecurse $bdFile
+}
+
+if {![file exists $wrapperFile]} {
+    make_wrapper -files [get_files $bdFile] -top
+}
+
+if {![file exists $wrapperFile]} {
+    error "BD wrapper was not generated: $wrapperFile"
+}
+
+if {[llength [get_files -quiet $wrapperFile]] == 0} {
+    add_files -norecurse $wrapperFile
+}
+
+set_property top $topName [current_fileset]
+update_compile_order -fileset sources_1
 
 # Generate BD output products and IP user files. The top-level synthesis later
 # depends on the generated BD/IP files and the OOC IP checkpoints.
