@@ -34,6 +34,7 @@ tests/**/data/
 tests/**/readbacks/
 tests/**/reg_io/
 
+
 # Vivado-generated BD/IP artifacts under xdma_hbm
 bd/xdma_hbm/ip/
 bd/xdma_hbm/sim/
