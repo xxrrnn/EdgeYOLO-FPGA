@@ -35,5 +35,5 @@ set physOptDirectiveAr Default
 # sequential and cap Vivado's internal worker threads so the build does not get
 # killed by memory pressure on 32 GB machines.
 set vivadoMaxThreads 32
-# set ipSynthJobs 1
+set ipSynthJobs 32
 set_param general.maxThreads $vivadoMaxThreads
