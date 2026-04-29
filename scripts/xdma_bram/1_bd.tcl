@@ -25,7 +25,7 @@ if {[llength $rtlFiles] == 0} {
 }
 add_files -norecurse $rtlFiles
 create_bd_cell -type module -reference xdma_bram_axil_ctrl_top xdma_bram_axil_ctrl_0
-source [file normalize "$ipBdDir/xdma.tcl"]
+source [file normalize "$ipBdDir/../xdma.tcl"]
 source [file normalize "$ipBdDir/bram.tcl"]
 source [file normalize "$ipBdDir/connect.tcl"]
 source [file normalize "$ipBdDir/address.tcl"]

@@ -9,4 +9,3 @@ set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
 
 set_property PACKAGE_PIN AR14 [get_ports pcie_refclk_1_clk_n]
 set_property PACKAGE_PIN AR15 [get_ports pcie_refclk_1_clk_p]
-

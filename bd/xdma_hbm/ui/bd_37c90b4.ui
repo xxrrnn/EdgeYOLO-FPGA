@@ -1,0 +1,145 @@
+{
+   "ActiveEmotionalView":"Default View",
+   "Default View_ScaleFactor":"0.159771",
+   "Default View_TopLeft":"-2522,0",
+   "ExpandedHierarchyInLayout":"",
+   "guistr":"# # String gsaved with Nlview 7.8.0 2024-04-26 e1825d835c VDI=44 GEI=38 GUI=JA:21.0 TLS
+#  -string -flagsOSRD
+preplace port pci_express_x8 -pg 1 -lvl 7 -x 2590 -y 5940 -defaultsOSRD
+preplace port pcie_refclk -pg 1 -lvl 0 -x 0 -y 5900 -defaultsOSRD
+preplace port port-id_user_lnk_up_0 -pg 1 -lvl 7 -x 2590 -y 6080 -defaultsOSRD
+preplace port port-id_cpu_reset -pg 1 -lvl 0 -x 0 -y 6010 -defaultsOSRD
+preplace inst xdma_0 -pg 1 -lvl 2 -x 500 -y 6000 -defaultsOSRD
+preplace inst xdma_constant -pg 1 -lvl 1 -x 170 -y 6110 -defaultsOSRD
+preplace inst xdma_inv -pg 1 -lvl 1 -x 170 -y 6010 -defaultsOSRD
+preplace inst hbm_0 -pg 1 -lvl 6 -x 2340 -y 3990 -defaultsOSRD
+preplace inst hbm_ref_clk_0_wiz -pg 1 -lvl 4 -x 1210 -y 6220 -defaultsOSRD
+preplace inst hbm_ref_clk_1_wiz -pg 1 -lvl 5 -x 1750 -y 5870 -defaultsOSRD
+preplace inst user_clk_wiz -pg 1 -lvl 3 -x 850 -y 6070 -defaultsOSRD
+preplace inst hbm_rst -pg 1 -lvl 4 -x 1210 -y 6040 -defaultsOSRD
+preplace inst hbm_apb_rst -pg 1 -lvl 5 -x 1750 -y 6190 -defaultsOSRD
+preplace inst hbm_axi_cc_00 -pg 1 -lvl 5 -x 1750 -y 100 -defaultsOSRD
+preplace inst hbm_axi_cc_01 -pg 1 -lvl 5 -x 1750 -y 280 -defaultsOSRD
+preplace inst hbm_axi_cc_02 -pg 1 -lvl 5 -x 1750 -y 460 -defaultsOSRD
+preplace inst hbm_axi_cc_03 -pg 1 -lvl 5 -x 1750 -y 640 -defaultsOSRD
+preplace inst hbm_axi_cc_04 -pg 1 -lvl 5 -x 1750 -y 820 -defaultsOSRD
+preplace inst hbm_axi_cc_05 -pg 1 -lvl 5 -x 1750 -y 1000 -defaultsOSRD
+preplace inst hbm_axi_cc_06 -pg 1 -lvl 5 -x 1750 -y 1180 -defaultsOSRD
+preplace inst hbm_axi_cc_07 -pg 1 -lvl 5 -x 1750 -y 1360 -defaultsOSRD
+preplace inst hbm_axi_cc_08 -pg 1 -lvl 5 -x 1750 -y 1540 -defaultsOSRD
+preplace inst hbm_axi_cc_09 -pg 1 -lvl 5 -x 1750 -y 1720 -defaultsOSRD
+preplace inst hbm_axi_cc_10 -pg 1 -lvl 5 -x 1750 -y 1900 -defaultsOSRD
+preplace inst hbm_axi_cc_11 -pg 1 -lvl 5 -x 1750 -y 2080 -defaultsOSRD
+preplace inst hbm_axi_cc_12 -pg 1 -lvl 5 -x 1750 -y 2260 -defaultsOSRD
+preplace inst hbm_axi_cc_13 -pg 1 -lvl 5 -x 1750 -y 2440 -defaultsOSRD
+preplace inst hbm_axi_cc_14 -pg 1 -lvl 5 -x 1750 -y 2620 -defaultsOSRD
+preplace inst hbm_axi_cc_15 -pg 1 -lvl 5 -x 1750 -y 2800 -defaultsOSRD
+preplace inst hbm_axi_cc_16 -pg 1 -lvl 5 -x 1750 -y 2980 -defaultsOSRD
+preplace inst hbm_axi_cc_17 -pg 1 -lvl 5 -x 1750 -y 3160 -defaultsOSRD
+preplace inst hbm_axi_cc_18 -pg 1 -lvl 5 -x 1750 -y 3340 -defaultsOSRD
+preplace inst hbm_axi_cc_19 -pg 1 -lvl 5 -x 1750 -y 3520 -defaultsOSRD
+preplace inst hbm_axi_cc_20 -pg 1 -lvl 5 -x 1750 -y 3700 -defaultsOSRD
+preplace inst hbm_axi_cc_21 -pg 1 -lvl 5 -x 1750 -y 3880 -defaultsOSRD
+preplace inst hbm_axi_cc_22 -pg 1 -lvl 5 -x 1750 -y 4060 -defaultsOSRD
+preplace inst hbm_axi_cc_23 -pg 1 -lvl 5 -x 1750 -y 4240 -defaultsOSRD
+preplace inst hbm_axi_cc_24 -pg 1 -lvl 5 -x 1750 -y 4420 -defaultsOSRD
+preplace inst hbm_axi_cc_25 -pg 1 -lvl 5 -x 1750 -y 4600 -defaultsOSRD
+preplace inst hbm_axi_cc_26 -pg 1 -lvl 5 -x 1750 -y 4780 -defaultsOSRD
+preplace inst hbm_axi_cc_27 -pg 1 -lvl 5 -x 1750 -y 4980 -defaultsOSRD
+preplace inst hbm_axi_cc_28 -pg 1 -lvl 5 -x 1750 -y 5160 -defaultsOSRD
+preplace inst hbm_axi_cc_29 -pg 1 -lvl 5 -x 1750 -y 5340 -defaultsOSRD
+preplace inst hbm_axi_cc_30 -pg 1 -lvl 5 -x 1750 -y 5520 -defaultsOSRD
+preplace inst hbm_axi_cc_31 -pg 1 -lvl 5 -x 1750 -y 5700 -defaultsOSRD
+preplace inst xdma_hbm_smc_root -pg 1 -lvl 3 -x 850 -y 4340 -defaultsOSRD
+preplace inst xdma_hbm_smc_0 -pg 1 -lvl 4 -x 1210 -y 1490 -defaultsOSRD
+preplace inst xdma_hbm_smc_1 -pg 1 -lvl 4 -x 1210 -y 4370 -defaultsOSRD
+preplace inst util_ds_buf -pg 1 -lvl 1 -x 170 -y 5900 -defaultsOSRD
+preplace netloc xdma_0_user_lnk_up 1 2 5 690J 5930 NJ 5930 1550J 6080 NJ 6080 NJ
+preplace netloc cpu_reset_1 1 0 5 20 6170 NJ 6170 710 6000 1020 5920 1570
+preplace netloc xdma_inv_Res 1 1 1 NJ 6010
+preplace netloc util_ds_buf_IBUF_OUT 1 1 1 330 5890n
+preplace netloc util_ds_buf_IBUF_DS_ODIV2 1 1 1 320 5910n
+preplace netloc xdma_constant_dout 1 1 1 320J 6030n
+preplace netloc xdma_0_axi_aclk 1 2 3 700 4430 1010 1280 1500
+preplace netloc user_clk_wiz_clk_out1 1 3 3 1030 5720 1490 4880 2110
+preplace netloc user_clk_wiz_locked 1 3 1 N 6080
+preplace netloc hbm_ref_clk_0_wiz_clk_out1 1 4 2 1390 6090 2080
+preplace netloc hbm_ref_clk_0_wiz_locked 1 4 1 N 6230
+preplace netloc hbm_ref_clk_1_wiz_clk_out1 1 5 1 2090 3320n
+preplace netloc hbm_apb_rst_peripheral_aresetn 1 5 1 2110 5280n
+preplace netloc xdma_0_axi_aresetn 1 2 3 680 4420 990 1270 1530
+preplace netloc hbm_rst_peripheral_aresetn 1 4 2 1470 5800 2100
+preplace netloc xdma_0_pcie_mgt 1 2 5 NJ 5940 NJ 5940 NJ 5940 NJ 5940 NJ
+preplace netloc pcie_refclk_1 1 0 1 NJ 5900
+preplace netloc xdma_0_M_AXI 1 2 1 670 4320n
+preplace netloc xdma_hbm_smc_root_M00_AXI 1 3 1 1000 1470n
+preplace netloc xdma_hbm_smc_root_M01_AXI 1 3 1 N 4350
+preplace netloc xdma_hbm_smc_0_M00_AXI 1 4 1 1390 60n
+preplace netloc hbm_axi_cc_00_M_AXI 1 5 1 2110 100n
+preplace netloc xdma_hbm_smc_0_M01_AXI 1 4 1 1400 240n
+preplace netloc hbm_axi_cc_01_M_AXI 1 5 1 2100 280n
+preplace netloc xdma_hbm_smc_0_M02_AXI 1 4 1 1410 420n
+preplace netloc hbm_axi_cc_02_M_AXI 1 5 1 2090 460n
+preplace netloc xdma_hbm_smc_0_M03_AXI 1 4 1 1420 600n
+preplace netloc hbm_axi_cc_03_M_AXI 1 5 1 2080 640n
+preplace netloc xdma_hbm_smc_0_M04_AXI 1 4 1 1430 780n
+preplace netloc hbm_axi_cc_04_M_AXI 1 5 1 2070 820n
+preplace netloc xdma_hbm_smc_0_M05_AXI 1 4 1 1440 960n
+preplace netloc hbm_axi_cc_05_M_AXI 1 5 1 2060 1000n
+preplace netloc xdma_hbm_smc_0_M06_AXI 1 4 1 1450 1140n
+preplace netloc hbm_axi_cc_06_M_AXI 1 5 1 2050 1180n
+preplace netloc xdma_hbm_smc_0_M07_AXI 1 4 1 1460 1320n
+preplace netloc hbm_axi_cc_07_M_AXI 1 5 1 2010 1360n
+preplace netloc xdma_hbm_smc_0_M08_AXI 1 4 1 N 1500
+preplace netloc hbm_axi_cc_08_M_AXI 1 5 1 2000 1540n
+preplace netloc xdma_hbm_smc_0_M09_AXI 1 4 1 1430 1520n
+preplace netloc hbm_axi_cc_09_M_AXI 1 5 1 1990 1720n
+preplace netloc xdma_hbm_smc_0_M10_AXI 1 4 1 1510 1540n
+preplace netloc hbm_axi_cc_10_M_AXI 1 5 1 1980 1900n
+preplace netloc xdma_hbm_smc_0_M11_AXI 1 4 1 1440 1560n
+preplace netloc hbm_axi_cc_11_M_AXI 1 5 1 1970 2080n
+preplace netloc xdma_hbm_smc_0_M12_AXI 1 4 1 1390 1580n
+preplace netloc hbm_axi_cc_12_M_AXI 1 5 1 1960 2260n
+preplace netloc xdma_hbm_smc_0_M13_AXI 1 4 1 1570 1600n
+preplace netloc hbm_axi_cc_13_M_AXI 1 5 1 1950 2440n
+preplace netloc xdma_hbm_smc_0_M14_AXI 1 4 1 1560 1620n
+preplace netloc hbm_axi_cc_14_M_AXI 1 5 1 1940 2620n
+preplace netloc xdma_hbm_smc_0_M15_AXI 1 4 1 1520 1640n
+preplace netloc hbm_axi_cc_15_M_AXI 1 5 1 1930 2800n
+preplace netloc xdma_hbm_smc_1_M00_AXI 1 4 1 1480 2940n
+preplace netloc hbm_axi_cc_16_M_AXI 1 5 1 N 2980
+preplace netloc xdma_hbm_smc_1_M01_AXI 1 4 1 1520 3120n
+preplace netloc hbm_axi_cc_17_M_AXI 1 5 1 1930 3000n
+preplace netloc xdma_hbm_smc_1_M02_AXI 1 4 1 1390 3300n
+preplace netloc hbm_axi_cc_18_M_AXI 1 5 1 1940 3020n
+preplace netloc xdma_hbm_smc_1_M03_AXI 1 4 1 1410 3480n
+preplace netloc hbm_axi_cc_19_M_AXI 1 5 1 1950 3040n
+preplace netloc xdma_hbm_smc_1_M04_AXI 1 4 1 1540 3660n
+preplace netloc hbm_axi_cc_20_M_AXI 1 5 1 1960 3060n
+preplace netloc xdma_hbm_smc_1_M05_AXI 1 4 1 1550 3840n
+preplace netloc hbm_axi_cc_21_M_AXI 1 5 1 1970 3080n
+preplace netloc xdma_hbm_smc_1_M06_AXI 1 4 1 1560 4020n
+preplace netloc hbm_axi_cc_22_M_AXI 1 5 1 1980 3100n
+preplace netloc xdma_hbm_smc_1_M07_AXI 1 4 1 1570 4200n
+preplace netloc hbm_axi_cc_23_M_AXI 1 5 1 1990 3120n
+preplace netloc xdma_hbm_smc_1_M08_AXI 1 4 1 N 4380
+preplace netloc hbm_axi_cc_24_M_AXI 1 5 1 2000 3140n
+preplace netloc xdma_hbm_smc_1_M09_AXI 1 4 1 1480 4400n
+preplace netloc hbm_axi_cc_25_M_AXI 1 5 1 2010 3160n
+preplace netloc xdma_hbm_smc_1_M10_AXI 1 4 1 1440 4420n
+preplace netloc hbm_axi_cc_26_M_AXI 1 5 1 2020 3180n
+preplace netloc xdma_hbm_smc_1_M11_AXI 1 4 1 1430 4440n
+preplace netloc hbm_axi_cc_27_M_AXI 1 5 1 2030 3200n
+preplace netloc xdma_hbm_smc_1_M12_AXI 1 4 1 1420 4460n
+preplace netloc hbm_axi_cc_28_M_AXI 1 5 1 2040 3220n
+preplace netloc xdma_hbm_smc_1_M13_AXI 1 4 1 1410 4480n
+preplace netloc hbm_axi_cc_29_M_AXI 1 5 1 2050 3240n
+preplace netloc xdma_hbm_smc_1_M14_AXI 1 4 1 1400 4500n
+preplace netloc hbm_axi_cc_30_M_AXI 1 5 1 2060 3260n
+preplace netloc xdma_hbm_smc_1_M15_AXI 1 4 1 1390 4520n
+preplace netloc hbm_axi_cc_31_M_AXI 1 5 1 2070 3280n
+levelinfo -pg 1 0 170 500 850 1210 1750 2340 2590
+pagesize -pg 1 -db -bbox -sgen -130 0 2750 6290
+"
+}
+

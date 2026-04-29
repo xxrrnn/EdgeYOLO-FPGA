@@ -23,6 +23,9 @@ connect_bd_intf_net [get_bd_intf_ports pcie_refclk] [get_bd_intf_pins util_ds_bu
 connect_bd_net [get_bd_pins util_ds_buf/IBUF_OUT] [get_bd_pins xdma_0/sys_clk_gt]
 connect_bd_net [get_bd_pins util_ds_buf/IBUF_DS_ODIV2] [get_bd_pins xdma_0/sys_clk]
 
+# xdma_constant <-> xdma
+connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
+
 # xdma <-> axi_smc
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list \
