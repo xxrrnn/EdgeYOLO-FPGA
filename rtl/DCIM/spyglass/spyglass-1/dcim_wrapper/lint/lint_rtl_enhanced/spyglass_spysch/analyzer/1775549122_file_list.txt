@@ -1,0 +1,36 @@
+0 /data/home/za_xiao31/workplace/DCIM/src/dcim_wrapper.sv
+1 /data/home/za_xiao31/workplace/DCIM/src/inc/counter.v
+2 /data/home/za_xiao31/workplace/DCIM/src/inc/dff.v
+3 /data/home/za_xiao31/workplace/DCIM/src/inc/para.v
+4 /data/home/za_xiao31/workplace/DCIM/src/inc/pipe_stage.v
+5 /data/home/za_xiao31/workplace/DCIM/src/bridge/axi_bridge_pkg.sv
+6 /data/home/za_xiao31/workplace/DCIM/src/bridge/act_sequencer.sv
+7 /data/home/za_xiao31/workplace/DCIM/src/bridge/axi_bridge.sv
+8 /data/home/za_xiao31/workplace/DCIM/src/bridge/axi_slave.sv
+9 /data/home/za_xiao31/workplace/DCIM/src/bridge/buffer_act.sv
+10 /data/home/za_xiao31/workplace/DCIM/src/bridge/buffer_res.sv
+11 /data/home/za_xiao31/workplace/DCIM/src/bridge/res_fifo.sv
+12 /data/home/za_xiao31/workplace/DCIM/src/bridge/wei_packer.sv
+13 /data/home/za_xiao31/workplace/DCIM/src/dcim/accumulateArray.v
+    14 ../src/inc//para.v
+    15 ../src/inc//counter.v
+    16 ../src/inc//pipe_stage.v
+17 /data/home/za_xiao31/workplace/DCIM/src/dcim/adderTree.v
+18 /data/home/za_xiao31/workplace/DCIM/src/dcim/calculate_core.v
+19 /data/home/za_xiao31/workplace/DCIM/src/dcim/dcim.v
+    20 ../src/inc//para.v
+    21 ../src/inc//counter.v
+    22 ../src/inc//dff.v
+    23 ../src/inc//pipe_stage.v
+24 /data/home/za_xiao31/workplace/DCIM/src/dcim/maArray.v
+    25 ../src/inc//para.v
+    26 ../src/inc//counter.v
+27 /data/home/za_xiao31/workplace/DCIM/src/dcim/memory.v
+28 /data/home/za_xiao31/workplace/DCIM/src/dcim/mergeArray.v
+    29 ../src/inc//para.v
+    30 ../src/inc//counter.v
+31 /data/home/za_xiao31/workplace/DCIM/src/dcim/multiplier.v
+32 /data/home/za_xiao31/workplace/DCIM/src/dcim/postProcess.v
+33 /data/home/za_xiao31/workplace/DCIM/src/dcim/ppCache.v
+    34 ../src/inc//counter.v
+35 /data/home/za_xiao31/workplace/DCIM/src/dcim/sramWrap.v

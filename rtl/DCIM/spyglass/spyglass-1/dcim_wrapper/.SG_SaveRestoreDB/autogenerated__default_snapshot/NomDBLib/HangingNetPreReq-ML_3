@@ -1,0 +1,4 @@
+#delibOpen maArray_u_counter_cfg_cnt_done
+#delibOpen res_fifo_u_res_counter_cnt_done
+#delibOpen res_fifo_u_buffer_res_int_rdata_o
+#delibOpen dcim_wrapper_u_dcim_up_ready_wei

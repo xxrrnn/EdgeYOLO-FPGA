@@ -1,5 +1,6 @@
 # Vivado generated
 build/
+*.xml
 .Xil/
 *.jou
 *.log
@@ -23,3 +24,19 @@ build/
 __pycache__/
 *.pyc
 .venv/
+*.bin
+
+# Jupyter runtime
+**/.ipynb_checkpoints/
+
+# Test runtime artifacts
+tests/**/data/
+tests/**/readbacks/
+tests/**/reg_io/
+
+
+# Vivado-generated BD/IP artifacts under xdma_hbm
+bd/xdma_hbm/ip/
+bd/xdma_hbm/sim/
+bd/xdma_hbm/synth/
+bd/xdma_hbm/ui/

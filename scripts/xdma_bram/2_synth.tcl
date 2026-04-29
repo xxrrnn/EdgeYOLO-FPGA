@@ -1,6 +1,6 @@
 set thisScriptDir [file dirname [file normalize [info script]]]
 
-if {![info exists xdmaBramScriptDir]} {
+if {![info exists ScriptDir]} {
     source [file normalize "$thisScriptDir/config.tcl"]
 }
 
