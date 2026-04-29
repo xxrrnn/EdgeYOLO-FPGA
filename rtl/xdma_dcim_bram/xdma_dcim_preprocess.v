@@ -1,12 +1,13 @@
 `timescale 1ns / 1ps
+`include "dcim_defs.vh"
 
 module xdma_dcim_preprocess #(
-    parameter integer CH_IN = 16,
-    parameter integer INT8_OUT_COLS = 8,
-    parameter integer RAW_ACT_WORD_WIDTH = 256,
-    parameter integer RAW_WEIGHT_WIDTH = 1024,
-    parameter integer DCIM_ACT_WIDTH = 64,
-    parameter integer DCIM_WEIGHT_WIDTH = 1024
+    parameter integer CH_IN = `DCIM_CH_IN,
+    parameter integer INT8_OUT_COLS = (`DCIM_CH_OUT / 2),
+    parameter integer RAW_ACT_WORD_WIDTH = `DCIM_BRAM_DATA_WIDTH,
+    parameter integer RAW_WEIGHT_WIDTH = `DCIM_TILE_WIDTH,
+    parameter integer DCIM_ACT_WIDTH = `DCIM_ACT_WIDTH,
+    parameter integer DCIM_WEIGHT_WIDTH = `DCIM_TILE_WIDTH
 ) (
     input  wire [RAW_WEIGHT_WIDTH-1:0]   raw_weight_i,
     output wire [DCIM_WEIGHT_WIDTH-1:0]  dcim_weight_o,

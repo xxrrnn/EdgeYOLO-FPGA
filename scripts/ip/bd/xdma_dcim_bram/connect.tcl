@@ -30,41 +30,75 @@ connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 #   S00 = XDMA M_AXI
 #   S01 = CDMA M_AXI
 #   M00 = global_bram
-#   M01 = local_bram
-#   M02 = controller AXI-Lite registers
+#   M01 = PE ibuf
+#   M02 = PE obuf
+#   M03 = CDMA AXI-Lite registers
+#   M04..M09 = PE GPIO config/control/status registers
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_mem_smc
 set_property -dict [list \
   CONFIG.NUM_SI {2} \
-  CONFIG.NUM_MI {3} \
+  CONFIG.NUM_MI {10} \
 ] [get_bd_cells axi_mem_smc]
+
 connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S01_AXI]
+
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M00_AXI] [get_bd_intf_pins global_bram_ctrl/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins local_bram_ctrl/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins xdma_dcim_bram_ctrl_0/s_axil]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins pe_ibuf_ctrl/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins pe_obuf_ctrl/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins axi_cdma_0/S_AXI_LITE]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M04_AXI] [get_bd_intf_pins pe_cfg0_gpio/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M05_AXI] [get_bd_intf_pins pe_cfg1_gpio/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M06_AXI] [get_bd_intf_pins pe_cfg2_gpio/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M07_AXI] [get_bd_intf_pins pe_cfg3_gpio/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M08_AXI] [get_bd_intf_pins pe_ctrl_gpio/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M09_AXI] [get_bd_intf_pins pe_status_gpio/S_AXI]
 
-# Controller configures CDMA through a private AXI-Lite master.
-connect_bd_intf_net [get_bd_intf_pins xdma_dcim_bram_ctrl_0/m_axil_cdma] [get_bd_intf_pins axi_cdma_0/S_AXI_LITE]
-
-# AXI BRAM controllers <-> BRAM IPs.
+# AXI BRAM controllers <-> global BRAM and PE buffer A ports.
 connect_bd_intf_net [get_bd_intf_pins global_bram/BRAM_PORTA] [get_bd_intf_pins global_bram_ctrl/BRAM_PORTA]
-connect_bd_intf_net [get_bd_intf_pins local_bram/BRAM_PORTA] [get_bd_intf_pins local_bram_ctrl/BRAM_PORTA]
 
-# Controller native port <-> local BRAM port B.
-connect_bd_net [get_bd_pins xdma_dcim_bram_ctrl_0/local_bram_en] [get_bd_pins local_bram/enb]
-connect_bd_net [get_bd_pins xdma_dcim_bram_ctrl_0/local_bram_we] [get_bd_pins local_bram/web]
-connect_bd_net [get_bd_pins xdma_dcim_bram_ctrl_0/local_bram_addr] [get_bd_pins local_bram/addrb]
-connect_bd_net [get_bd_pins xdma_dcim_bram_ctrl_0/local_bram_din] [get_bd_pins local_bram/dinb]
-connect_bd_net [get_bd_pins xdma_dcim_bram_ctrl_0/local_bram_dout] [get_bd_pins local_bram/doutb]
+connect_bd_net [get_bd_pins pe_ibuf_ctrl/bram_en_a]     [get_bd_pins pe_0/ibuf_ena]
+connect_bd_net [get_bd_pins pe_ibuf_ctrl/bram_we_a]     [get_bd_pins pe_0/ibuf_wea]
+connect_bd_net [get_bd_pins pe_ibuf_ctrl/bram_addr_a]   [get_bd_pins pe_0/ibuf_addra]
+connect_bd_net [get_bd_pins pe_ibuf_ctrl/bram_wrdata_a] [get_bd_pins pe_0/ibuf_dina]
+connect_bd_net [get_bd_pins pe_ibuf_ctrl/bram_rddata_a] [get_bd_pins pe_0/ibuf_douta]
+
+connect_bd_net [get_bd_pins pe_obuf_ctrl/bram_en_a]     [get_bd_pins pe_0/obuf_ena]
+connect_bd_net [get_bd_pins pe_obuf_ctrl/bram_we_a]     [get_bd_pins pe_0/obuf_wea]
+connect_bd_net [get_bd_pins pe_obuf_ctrl/bram_addr_a]   [get_bd_pins pe_0/obuf_addra]
+connect_bd_net [get_bd_pins pe_obuf_ctrl/bram_wrdata_a] [get_bd_pins pe_0/obuf_dina]
+connect_bd_net [get_bd_pins pe_obuf_ctrl/bram_rddata_a] [get_bd_pins pe_0/obuf_douta]
+
+# PE GPIO config/control wiring.
+connect_bd_net [get_bd_pins pe_cfg0_gpio/gpio_io_o] [get_bd_pins pe_0/dcim_wsrc_base_addr]
+connect_bd_net [get_bd_pins pe_cfg1_gpio/gpio_io_o] [get_bd_pins pe_0/dcim_asrc_base_addr]
+connect_bd_net [get_bd_pins pe_cfg2_gpio/gpio_io_o] [get_bd_pins pe_0/dcim_dst_addr]
+connect_bd_net [get_bd_pins pe_cfg3_gpio/gpio_io_o] [get_bd_pins pe_0/dcim_raw_rows]
+
+connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_start_slice/Din]
+connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_config_valid_slice/Din]
+connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_mode_slice/Din]
+connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_acc_slice/Din]
+connect_bd_net [get_bd_pins pe_start_slice/Dout] [get_bd_pins pe_0/dcim_start]
+connect_bd_net [get_bd_pins pe_config_valid_slice/Dout] [get_bd_pins pe_0/dcim_config_valid]
+connect_bd_net [get_bd_pins pe_mode_slice/Dout] [get_bd_pins pe_0/dcim_mode]
+connect_bd_net [get_bd_pins pe_acc_slice/Dout] [get_bd_pins pe_0/dcim_acc]
+
+connect_bd_net [get_bd_pins pe_0/dcim_busy] [get_bd_pins pe_status_concat/In0]
+connect_bd_net [get_bd_pins pe_0/dcim_done] [get_bd_pins pe_status_concat/In1]
+connect_bd_net [get_bd_pins pe_0/dcim_error] [get_bd_pins pe_status_concat/In2]
+connect_bd_net [get_bd_pins pe_0/dcim_config_ready] [get_bd_pins pe_status_concat/In3]
+connect_bd_net [get_bd_pins pe_status_concat/dout] [get_bd_pins pe_status_gpio/gpio_io_i]
+connect_bd_net [get_bd_pins pe_0/dcim_error_code] [get_bd_pins pe_status_gpio/gpio2_io_i]
 
 # Common clock/reset from XDMA.
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_mem_smc/aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_mem_smc/aresetn]
 
-connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins global_bram_ctrl/s_axi_aclk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins global_bram_ctrl/s_axi_aresetn]
-connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins local_bram_ctrl/s_axi_aclk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins local_bram_ctrl/s_axi_aresetn]
+foreach axi_slave {global_bram_ctrl pe_ibuf_ctrl pe_obuf_ctrl} {
+  connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins ${axi_slave}/s_axi_aclk]
+  connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins ${axi_slave}/s_axi_aresetn]
+}
 
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_cdma_0/m_axi_aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_cdma_0/s_axi_lite_aclk]
@@ -73,11 +107,10 @@ if {[llength [get_bd_pins -quiet axi_cdma_0/m_axi_aresetn]] != 0} {
   connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_cdma_0/m_axi_aresetn]
 }
 
-connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins xdma_dcim_bram_ctrl_0/aclk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins xdma_dcim_bram_ctrl_0/aresetn]
+foreach gpio_cell {pe_cfg0_gpio pe_cfg1_gpio pe_cfg2_gpio pe_cfg3_gpio pe_ctrl_gpio pe_status_gpio} {
+  connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins ${gpio_cell}/s_axi_aclk]
+  connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins ${gpio_cell}/s_axi_aresetn]
+}
 
-connect_bd_net [get_bd_pins local_bram/clkb] [get_bd_pins xdma_0/axi_aclk]
-
-# Reset BRAMs with active-high reset derived from XDMA aresetn.
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins bram_inv/Op1]
-connect_bd_net [get_bd_pins bram_inv/Res] [get_bd_pins local_bram/rstb]
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins pe_0/clk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins pe_0/rst_n]

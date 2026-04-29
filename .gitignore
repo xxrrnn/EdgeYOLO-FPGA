@@ -49,6 +49,9 @@ bd/xdma_hbm/sim/
 bd/xdma_hbm/synth/
 bd/xdma_hbm/ui/
 
+bd/xdma_dcim_bram/ip/
+bd/xdma_dcim_bram/ipshared/
+
 # BD wrapper and handoff files (auto-generated)
 bd/**/hdl/*_wrapper.v
 bd/**/hw_handoff/*.hwh
@@ -57,3 +60,21 @@ bd/**/synth/*.v
 bd/**/synth/*.hwdef
 bd/**/*.bxml
 bd/**/ui/*.ui
+
+# Reference RTL extras not used by xdma_dcim_bram build
+rtl/ref/core/
+rtl/ref/DCIM/sim/
+rtl/ref/DCIM/spyglass/
+rtl/ref/DCIM/tb/
+rtl/ref/DCIM/src/bridge/
+rtl/ref/DCIM/src/macro/
+rtl/ref/DCIM/src/model/
+rtl/ref/DCIM/src/sram/
+rtl/ref/DCIM/src/dcim/.dcim.v.swp
+rtl/ref/DCIM/src/dcim/dcim.v
+rtl/ref/DCIM/src/dcim/memory.v
+rtl/ref/DCIM/src/dcim/ppCache.v
+rtl/ref/DCIM/src/dcim/sramWrap.v
+rtl/ref/DCIM/src/dcim_wrapper.sv
+rtl/ref/DCIM/src/inc/Buffer.sv
+rtl/ref/DCIM/src/inc/simTools.v
