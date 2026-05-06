@@ -120,29 +120,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-*.bin
 
 # ============================================
 # 忽略: Jupyter 检查点
 # ============================================
 .ipynb_checkpoints/
-**/.ipynb_checkpoints/
-
-# ============================================
-# 忽略: Test runtime artifacts
-# ============================================
-tests/**/data/
-tests/**/readbacks/
-tests/**/reg_io/
-
-# ============================================
-# 忽略: Vivado-generated BD/IP artifacts
-# ============================================
-bd/xdma_hbm/ip/
-bd/xdma_hbm/sim/
-bd/xdma_hbm/synth/
-bd/xdma_hbm/ui/
-bd/xdma_dcim_hbm/
 
 # ============================================
 # 忽略: Cursor IDE 文件
