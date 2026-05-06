@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-| Date         : Wed Apr 29 20:50:36 2026
+| Date         : Thu Apr 30 00:14:11 2026
 | Host         : EDA02.R760 running 64-bit CentOS Linux release 7.9.2009 (Core)
 | Command      : report_utilization -file /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA/build/xdma_dcim_bram/SynOutputDir/post_synth_util.rpt
 | Design       : xdma_dcim_bram_wrapper
@@ -35,17 +35,17 @@ Table of Contents
 +----------------------------+-------+-------+------------+-----------+-------+
 |          Site Type         |  Used | Fixed | Prohibited | Available | Util% |
 +----------------------------+-------+-------+------------+-----------+-------+
-| CLB LUTs*                  | 68200 |     0 |          0 |   1303680 |  5.23 |
-|   LUT as Logic             | 61634 |     0 |          0 |   1303680 |  4.73 |
-|   LUT as Memory            |  6566 |     0 |          0 |    600960 |  1.09 |
-|     LUT as Distributed RAM |  6207 |     0 |            |           |       |
-|     LUT as Shift Register  |   359 |     0 |            |           |       |
-| CLB Registers              | 67476 |     0 |          0 |   2607360 |  2.59 |
-|   Register as Flip Flop    | 67476 |     0 |          0 |   2607360 |  2.59 |
+| CLB LUTs*                  | 80133 |     0 |          0 |   1303680 |  6.15 |
+|   LUT as Logic             | 70270 |     0 |          0 |   1303680 |  5.39 |
+|   LUT as Memory            |  9863 |     0 |          0 |    600960 |  1.64 |
+|     LUT as Distributed RAM |  9423 |     0 |            |           |       |
+|     LUT as Shift Register  |   440 |     0 |            |           |       |
+| CLB Registers              | 84411 |     0 |          0 |   2607360 |  3.24 |
+|   Register as Flip Flop    | 84411 |     0 |          0 |   2607360 |  3.24 |
 |   Register as Latch        |     0 |     0 |          0 |   2607360 |  0.00 |
-| CARRY8                     |  1794 |     0 |          0 |    162960 |  1.10 |
-| F7 Muxes                   |   923 |     0 |          0 |    651840 |  0.14 |
-| F8 Muxes                   |    85 |     0 |          0 |    325920 |  0.03 |
+| CARRY8                     |  1801 |     0 |          0 |    162960 |  1.11 |
+| F7 Muxes                   |  1265 |     0 |          0 |    651840 |  0.19 |
+| F8 Muxes                   |   181 |     0 |          0 |    325920 |  0.06 |
 | F9 Muxes                   |     0 |     0 |          0 |    162960 |  0.00 |
 +----------------------------+-------+-------+------------+-----------+-------+
 * Warning! The Final LUT count, after physical optimizations and full implementation, is typically lower. Run opt_design after synthesis, if not already completed, for a more realistic count.
@@ -65,10 +65,10 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 | 0     |            _ |         Set |            - |
 | 0     |            _ |       Reset |            - |
 | 0     |          Yes |           - |            - |
-| 226   |          Yes |           - |          Set |
-| 1398  |          Yes |           - |        Reset |
-| 879   |          Yes |         Set |            - |
-| 64973 |          Yes |       Reset |            - |
+| 256   |          Yes |           - |          Set |
+| 4581  |          Yes |           - |        Reset |
+| 1354  |          Yes |         Set |            - |
+| 78220 |          Yes |       Reset |            - |
 +-------+--------------+-------------+--------------+
 
 
@@ -78,9 +78,9 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +-------------------+------+-------+------------+-----------+-------+
 |     Site Type     | Used | Fixed | Prohibited | Available | Util% |
 +-------------------+------+-------+------------+-----------+-------+
-| Block RAM Tile    |  106 |     0 |          0 |      2016 |  5.26 |
-|   RAMB36/FIFO*    |  106 |     0 |          0 |      2016 |  5.26 |
-|     RAMB36E2 only |  106 |       |            |           |       |
+| Block RAM Tile    |  122 |     0 |          0 |      2016 |  6.05 |
+|   RAMB36/FIFO*    |  122 |     0 |          0 |      2016 |  6.05 |
+|     RAMB36E2 only |  122 |       |            |           |       |
 |   RAMB18          |    0 |     0 |          0 |      4032 |  0.00 |
 | URAM              |    0 |     0 |          0 |       960 |  0.00 |
 +-------------------+------+-------+------------+-----------+-------+
@@ -170,25 +170,25 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +---------------+-------+---------------------+
 |    Ref Name   |  Used | Functional Category |
 +---------------+-------+---------------------+
-| FDRE          | 64973 |            Register |
-| LUT6          | 24787 |                 CLB |
-| LUT3          | 19126 |                 CLB |
-| LUT5          | 12065 |                 CLB |
-| RAMD32        | 10364 |                 CLB |
-| LUT4          |  9620 |                 CLB |
-| LUT2          |  8057 |                 CLB |
-| LUT1          |  2458 |                 CLB |
-| CARRY8        |  1794 |                 CLB |
-| RAMS32        |  1483 |                 CLB |
-| FDCE          |  1398 |            Register |
-| MUXF7         |   923 |                 CLB |
-| FDSE          |   879 |            Register |
-| SRL16E        |   309 |                 CLB |
-| FDPE          |   226 |            Register |
+| FDRE          | 78220 |            Register |
+| LUT6          | 27689 |                 CLB |
+| LUT3          | 21394 |                 CLB |
+| RAMD32        | 15958 |                 CLB |
+| LUT5          | 14030 |                 CLB |
+| LUT4          | 11832 |                 CLB |
+| LUT2          |  9178 |                 CLB |
+| FDCE          |  4581 |            Register |
+| LUT1          |  3408 |                 CLB |
+| RAMS32        |  2297 |                 CLB |
+| CARRY8        |  1801 |                 CLB |
+| FDSE          |  1354 |            Register |
+| MUXF7         |  1265 |                 CLB |
+| SRL16E        |   360 |                 CLB |
+| FDPE          |   256 |            Register |
+| MUXF8         |   181 |                 CLB |
 | RAMD64E       |   128 |                 CLB |
-| RAMB36E2      |   106 |            BLOCKRAM |
-| MUXF8         |    85 |                 CLB |
-| SRLC32E       |    50 |                 CLB |
+| RAMB36E2      |   122 |            BLOCKRAM |
+| SRLC32E       |    80 |                 CLB |
 | RAMS64E       |    36 |                 CLB |
 | BUFG_GT       |    14 |               Clock |
 | BUFG_GT_SYNC  |     9 |               Clock |
@@ -213,21 +213,26 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 10. Instantiated Netlists
 -------------------------
 
-+----------------------------------------+------+
-|                Ref Name                | Used |
-+----------------------------------------+------+
-| xdma_dcim_bram_xdma_inv_0              |    1 |
-| xdma_dcim_bram_xdma_dcim_bram_ctrl_0_0 |    1 |
-| xdma_dcim_bram_xdma_0_0                |    1 |
-| xdma_dcim_bram_util_ds_buf_0           |    1 |
-| xdma_dcim_bram_local_bram_ctrl_0       |    1 |
-| xdma_dcim_bram_local_bram_0            |    1 |
-| xdma_dcim_bram_global_bram_ctrl_0      |    1 |
-| xdma_dcim_bram_global_bram_0           |    1 |
-| xdma_dcim_bram_bram_inv_0              |    1 |
-| xdma_dcim_bram_axi_mem_smc_0           |    1 |
-| xdma_dcim_bram_axi_cdma_0_0            |    1 |
-+----------------------------------------+------+
++-----------------------------------+------+
+|              Ref Name             | Used |
++-----------------------------------+------+
+| xdma_dcim_bram_xdma_inv_0         |    1 |
+| xdma_dcim_bram_xdma_0_0           |    1 |
+| xdma_dcim_bram_util_ds_buf_0      |    1 |
+| xdma_dcim_bram_pe_status_gpio_0   |    1 |
+| xdma_dcim_bram_pe_obuf_ctrl_0     |    1 |
+| xdma_dcim_bram_pe_ibuf_ctrl_0     |    1 |
+| xdma_dcim_bram_pe_ctrl_gpio_0     |    1 |
+| xdma_dcim_bram_pe_cfg3_gpio_0     |    1 |
+| xdma_dcim_bram_pe_cfg2_gpio_0     |    1 |
+| xdma_dcim_bram_pe_cfg1_gpio_0     |    1 |
+| xdma_dcim_bram_pe_cfg0_gpio_0     |    1 |
+| xdma_dcim_bram_pe_0_0             |    1 |
+| xdma_dcim_bram_global_bram_ctrl_0 |    1 |
+| xdma_dcim_bram_global_bram_0      |    1 |
+| xdma_dcim_bram_axi_mem_smc_0      |    1 |
+| xdma_dcim_bram_axi_cdma_0_0       |    1 |
++-----------------------------------+------+
 
 
 11. SLR Connectivity

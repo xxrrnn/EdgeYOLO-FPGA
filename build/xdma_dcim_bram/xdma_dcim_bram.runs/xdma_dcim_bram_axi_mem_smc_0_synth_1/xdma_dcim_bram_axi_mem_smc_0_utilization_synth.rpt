@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-| Date         : Wed Apr 29 20:48:08 2026
+| Date         : Thu Apr 30 00:12:17 2026
 | Host         : EDA02.R760 running 64-bit CentOS Linux release 7.9.2009 (Core)
 | Command      : report_utilization -file xdma_dcim_bram_axi_mem_smc_0_utilization_synth.rpt -pb xdma_dcim_bram_axi_mem_smc_0_utilization_synth.pb
 | Design       : xdma_dcim_bram_axi_mem_smc_0
@@ -35,17 +35,17 @@ Table of Contents
 +----------------------------+-------+-------+------------+-----------+-------+
 |          Site Type         |  Used | Fixed | Prohibited | Available | Util% |
 +----------------------------+-------+-------+------------+-----------+-------+
-| CLB LUTs*                  |  9671 |     0 |          0 |   1303680 |  0.74 |
-|   LUT as Logic             |  7203 |     0 |          0 |   1303680 |  0.55 |
-|   LUT as Memory            |  2468 |     0 |          0 |    600960 |  0.41 |
-|     LUT as Distributed RAM |  2354 |     0 |            |           |       |
-|     LUT as Shift Register  |   114 |     0 |            |           |       |
-| CLB Registers              | 16099 |     0 |          0 |   2607360 |  0.62 |
-|   Register as Flip Flop    | 16099 |     0 |          0 |   2607360 |  0.62 |
+| CLB LUTs*                  | 20650 |     0 |          0 |   1303680 |  1.58 |
+|   LUT as Logic             | 14885 |     0 |          0 |   1303680 |  1.14 |
+|   LUT as Memory            |  5765 |     0 |          0 |    600960 |  0.96 |
+|     LUT as Distributed RAM |  5570 |     0 |            |           |       |
+|     LUT as Shift Register  |   195 |     0 |            |           |       |
+| CLB Registers              | 31483 |     0 |          0 |   2607360 |  1.21 |
+|   Register as Flip Flop    | 31483 |     0 |          0 |   2607360 |  1.21 |
 |   Register as Latch        |     0 |     0 |          0 |   2607360 |  0.00 |
 | CARRY8                     |    14 |     0 |          0 |    162960 | <0.01 |
-| F7 Muxes                   |    36 |     0 |          0 |    651840 | <0.01 |
-| F8 Muxes                   |     0 |     0 |          0 |    325920 |  0.00 |
+| F7 Muxes                   |   447 |     0 |          0 |    651840 |  0.07 |
+| F8 Muxes                   |    96 |     0 |          0 |    325920 |  0.03 |
 | F9 Muxes                   |     0 |     0 |          0 |    162960 |  0.00 |
 +----------------------------+-------+-------+------------+-----------+-------+
 * Warning! The Final LUT count, after physical optimizations and full implementation, is typically lower. Run opt_design after synthesis, if not already completed, for a more realistic count.
@@ -66,9 +66,9 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 | 0     |            _ |       Reset |            - |
 | 0     |          Yes |           - |            - |
 | 0     |          Yes |           - |          Set |
-| 177   |          Yes |           - |        Reset |
-| 373   |          Yes |         Set |            - |
-| 15549 |          Yes |       Reset |            - |
+| 408   |          Yes |           - |        Reset |
+| 834   |          Yes |         Set |            - |
+| 30241 |          Yes |       Reset |            - |
 +-------+--------------+-------------+--------------+
 
 
@@ -165,20 +165,21 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +----------+-------+---------------------+
 | Ref Name |  Used | Functional Category |
 +----------+-------+---------------------+
-| FDRE     | 15549 |            Register |
-| LUT3     |  4927 |                 CLB |
-| RAMD32   |  4112 |                 CLB |
-| LUT6     |  1649 |                 CLB |
-| LUT4     |  1454 |                 CLB |
-| LUT5     |  1383 |                 CLB |
-| LUT2     |  1008 |                 CLB |
-| RAMS32   |   586 |                 CLB |
-| LUT1     |   427 |                 CLB |
-| FDSE     |   373 |            Register |
-| FDCE     |   177 |            Register |
-| SRL16E   |    72 |                 CLB |
-| SRLC32E  |    42 |                 CLB |
-| MUXF7    |    36 |                 CLB |
+| FDRE     | 30241 |            Register |
+| RAMD32   |  9706 |                 CLB |
+| LUT3     |  7242 |                 CLB |
+| LUT6     |  4530 |                 CLB |
+| LUT5     |  2999 |                 CLB |
+| LUT4     |  2830 |                 CLB |
+| LUT2     |  1791 |                 CLB |
+| RAMS32   |  1400 |                 CLB |
+| LUT1     |  1379 |                 CLB |
+| FDSE     |   834 |            Register |
+| MUXF7    |   447 |                 CLB |
+| FDCE     |   408 |            Register |
+| SRL16E   |   123 |                 CLB |
+| MUXF8    |    96 |                 CLB |
+| SRLC32E  |    72 |                 CLB |
 | CARRY8   |    14 |                 CLB |
 +----------+-------+---------------------+
 
