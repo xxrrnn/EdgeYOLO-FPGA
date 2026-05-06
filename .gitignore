@@ -40,3 +40,6 @@ bd/xdma_hbm/ip/
 bd/xdma_hbm/sim/
 bd/xdma_hbm/synth/
 bd/xdma_hbm/ui/
+
+# Vivado-generated BD/IP artifacts under xdma_dcim_hbm
+bd/xdma_dcim_hbm/
