@@ -18,7 +18,6 @@
 # ============================================
 !rtl/
 !rtl/**/
-rtl/**/*
 !rtl/**/*.v
 !rtl/**/*.sv
 !rtl/**/*.vhd
@@ -45,7 +44,6 @@ rtl/**/*
 # ============================================
 !xdc/
 !xdc/**/
-xdc/**/*
 !xdc/**/*.xdc
 
 # ============================================
@@ -53,7 +51,6 @@ xdc/**/*
 # ============================================
 !build/
 !build/**/
-build/**/*
 !build/**/ImplOutputDir/
 !build/**/ImplOutputDir/*.rpt
 !build/**/SynOutputDir/
@@ -88,7 +85,6 @@ rtl/**/.CurrentSessionRunSummaryFiles
 # ============================================
 !tests/
 !tests/**/
-tests/**/*
 !tests/**/*.py
 !tests/**/*.ipynb
 !tests/**/*.sh
