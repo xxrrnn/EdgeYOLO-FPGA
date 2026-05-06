@@ -1,0 +1,66 @@
+##This file is genrated to have command line decompiled Info even in Console
+##(To generate SIGN_OFF report having command line decompiled)
+Run Setup Info
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+===============================================================================
+Option          Value             Origin  File                           LineNo
+===============================================================================
++incdir         ../src/inc/       CmdLine -                              -
+--goal_info     Design_Read@      CmdLine -                              -
+--strict_sgdc_check <ON>              Config  $SPYGLASS_HOME/.spyglass.setup 40
+-batch          <ON>              CmdLine -                              -
+-enableSV09     <ON>              CmdLine -                              -
+-inferblackbox  <ON>              Config  $SPYGLASS_HOME/.spyglass.setup 30
+-lib            WORK=>./spyglass-1/dcim_wrapper/WORK CmdLine -                              -
+                SYNOPSYS=>$SPYGLASS_HOME/vhdl_libs/Linux4/SYNOPSYS Config  $SPYGLASS_HOME/.spyglass.setup 25
+-mixed          <ON>              CmdLine -                              -
+-nl             <ON>              CmdLine -                              -
+-policy         none              CmdFile $SPYGLASS_HOME/auxi/policy_data/spyglass/design_read/Design_Read-mixed.spq 1
+-projectwdir    ./spyglass-1      CmdLine -                              -
+-report         moresimple        Config  $SPYGLASS_HOME/.spyglass.setup 17
+-sortmethod     du                Config  $SPYGLASS_HOME/.spyglass.setup 27
+-template       Design_Read       CmdLine -                              -
+-templatedir    /home/EDAtools/synopsys/spyglass/U-2023.03-SP2-2/SPYGLASS_HOME/auxi/policy_data/spyglass/design_read CmdLine -                              -
+-top            dcim_wrapper      CmdLine -                              -
+-wdir           ./spyglass-1/dcim_wrapper/Design_Read CmdLine -                              -
+<design_files>  /data/home/za_xiao31/workplace/DCIM/src/bridge/act_sequencer.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/axi_bridge.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/axi_bridge_pkg.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/axi_slave.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/buffer_act.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/buffer_res.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/res_fifo.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/bridge/wei_packer.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/accumulateArray.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/adderTree.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/calculate_core.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/dcim.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/maArray.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/memory.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/mergeArray.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/multiplier.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/postProcess.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/ppCache.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim/sramWrap.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/dcim_wrapper.sv APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/inc/counter.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/inc/dff.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/inc/para.v APICall -                              -
+                /data/home/za_xiao31/workplace/DCIM/src/inc/pipe_stage.v APICall -                              -
+
+
+Rules Parameter
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+===============================================================================
+Parameter       Origin  File                           LineNo
+===============================================================================
+
+
+Policy Info
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+===============================================================================
+NameOfPolicy    VersionNumber   Path (from where policy loaded)
+===============================================================================
+spyglass        SpyGlass_vU-2023.03-SP2-02 $SPYGLASS_HOME/policies/spyglass
+
+

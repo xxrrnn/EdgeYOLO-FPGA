@@ -1,0 +1,162 @@
+5 "ReportPortInfo-ML" 1
+"VCLINT_WDF_TAG"
+"108"
+9 "W240" 1
+"VCLINT_RCA_TAG"
+"DEBUG_LINT_CLOCK_RESET_SIGNAL"
+14 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_memory@memory:u_load_fsm@load_fsm"
+15 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_calculate_core@calculate_core:u_maArray@maArray:\MaColumn[0].u_maColumn @maColumn:\MaSubcolumn[0].u_maSubcolumn @maSubcolumn:u_adderTree@adderTree:\B.u_adderTree0 @adderTree:\B.u_adderTree0 @adderTree:\B.u_adderTree0 @adderTree"
+16 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_calculate_core@calculate_core:u_maArray@maArray:\MaColumn[0].u_maColumn @maColumn:\MaSubcolumn[0].u_maSubcolumn @maSubcolumn:\MultiplierChannels[0].u_multiplier @multiplier"
+17 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_calculate_core@calculate_core:u_maArray@maArray:\MaColumn[0].u_maColumn @maColumn:\MaSubcolumn[0].u_maSubcolumn @maSubcolumn:\MultiplierChannels[0].u_multiplier @multiplier"
+18 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_calculate_core@calculate_core:u_maArray@maArray:\MaColumn[0].u_maColumn @maColumn:\MaSubcolumn[0].u_maSubcolumn @maSubcolumn:\MultiplierChannels[0].u_multiplier @multiplier:\AdderArray[0] "
+19 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+20 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+21 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+22 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+23 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+24 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+25 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge"
+26 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_mergeArray@mergeArray:\MergeColumn[0].u_merge @merge:\genblk2[0] "
+27 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+28 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+29 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+30 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+31 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+32 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+33 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+34 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+35 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+36 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+37 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+38 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+39 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+40 "W164a" 1
+"SPG_MSGTAG_HIERARCHY"
+":dcim_wrapper:u_dcim@dcim:u_postProcess@postProcess:u_accumulate@accumulateArray:\AccumulateColumn[0].u_accumulate @accumulate"
+41 "ErrorAnalyzeBBox" 2
+"BBoxEng"
+["rf128x128","BB_NO_MOD_DEF"]
+"BBoxEngAuxiInfo"
+["WORK","rf128x128","1"]
+42 "ErrorAnalyzeBBox" 2
+"BBoxEng"
+["rf64x128","BB_NO_MOD_DEF"]
+"BBoxEngAuxiInfo"
+["WORK","rf64x128","1"]
+43 "ErrorAnalyzeBBox" 2
+"BBoxEng"
+["rf64x64","BB_NO_MOD_DEF"]
+"BBoxEngAuxiInfo"
+["WORK","rf64x64","1"]
+-1 "CMD_overloadrule01" 2
+"RULEGROUP"
+["Command-line read"]
+"BUILTIN"
+"1"
+-1 "DetectTopDesignUnits" 2
+"RULEGROUP"
+["Design Read"]
+"BUILTIN"
+"1"
+-1 "ElabSummary" 2
+"RULEGROUP"
+["Design Read"]
+"BUILTIN"
+"1"
+-1 "ErrorAnalyzeBBox" 2
+"RULEGROUP"
+["Blackbox Resolution"]
+"BUILTIN"
+"1"
+-1 "ReportPortInfo-ML" 3
+"TEMPLATE"
+["lint/lint_rtl_enhanced"]
+"RULE_ORDER"
+[28]
+"RULEGROUP"
+["morelint"]
+-1 "STARC05-1.1.1.1" 3
+"TEMPLATE"
+["lint/lint_rtl_enhanced"]
+"RULE_ORDER"
+[37]
+"RULEGROUP"
+["starc2005/s05_Lexical_Rules","starc2005/s05_Naming/s05_Naming2","starc2005/Basic_Design_Constraint_05"]
+-1 "STARC05-2.11.3.1" 3
+"TEMPLATE"
+["lint/lint_rtl_enhanced"]
+"RULE_ORDER"
+[51]
+"RULEGROUP"
+["starc2005/s05_Construct/s05_Construct2","starc2005/RTL_Description_Technique_05"]
+-1 "W164a" 3
+"TEMPLATE"
+["lint/lint_rtl_enhanced"]
+"RULE_ORDER"
+[82]
+"RULEGROUP"
+["lint/width_rules_lint","lint/Lint_Elab_Rules","lint/Assign/W164"]
+-1 "W240" 3
+"TEMPLATE"
+["lint/lint_rtl_enhanced"]
+"RULE_ORDER"
+[94]
+"RULEGROUP"
+["lint/Lint_Elab_Rules","lint/Usage"]
+-1 "WRN_69" 2
+"RULEGROUP"
+["Design Read"]
+"BUILTIN"
+"1"

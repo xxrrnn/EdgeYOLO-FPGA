@@ -1,0 +1,30 @@
+[*]
+[*] GTKWave Analyzer v3.4.0 (w)1999-2022 BSI
+[*] Sun Feb  1 12:30:16 2026
+[*]
+[dumpfile] "/Users/vivalavida/Code/DCIM_RTL/rtl/sim/calculate/waveform.vcd"
+[dumpfile_mtime] "Sun Feb  1 12:27:48 2026"
+[dumpfile_size] 1596380
+[savefile] "/Users/vivalavida/Code/DCIM_RTL/rtl/sim/calculate/signals.gtkw"
+[timestart] 0
+[size] 1333 600
+[pos] 79 89
+*-15.631769 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+[treeopen] calculate_tb.
+[treeopen] calculate_tb.u_calculate.
+[sst_width] 255
+[signals_width] 152
+[sst_expanded] 1
+[sst_vpaned_height] 159
+@28
+calculate_tb.u_calculate.mode[2:0]
+calculate_tb.u_calculate.clk
+calculate_tb.u_calculate.rstn
+calculate_tb.u_calculate.clr
+calculate_tb.u_calculate.ena
+calculate_tb.u_calculate.i_valid
+calculate_tb.u_calculate.w_handshake_in
+calculate_tb.u_calculate.w_handshake_out
+calculate_tb.u_calculate.i_ready
+[pattern_trace] 1
+[pattern_trace] 0

@@ -7,8 +7,8 @@ set projName "xdma_bram"
 set bdName "xdma_bram"
 set topName "${bdName}_wrapper"
 
-set xdmaBramScriptDir [file dirname [file normalize [info script]]]
-set scriptsDir [file normalize "$xdmaBramScriptDir/.."]
+set ScriptDir [file dirname [file normalize [info script]]]
+set scriptsDir [file normalize "$ScriptDir/.."]
 set localDir [file normalize "$scriptsDir/.."]
 set buildDir [file normalize "$localDir/build"]
 set projPath [file normalize "$buildDir/$projName"]
