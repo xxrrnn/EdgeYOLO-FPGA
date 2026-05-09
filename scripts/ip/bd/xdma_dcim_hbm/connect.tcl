@@ -137,10 +137,12 @@ connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_start_slice/
 connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_config_valid_slice/Din]
 connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_mode_slice/Din]
 connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_acc_slice/Din]
+connect_bd_net [get_bd_pins pe_ctrl_gpio/gpio_io_o] [get_bd_pins pe_accumulate_type_slice/Din]
 connect_bd_net [get_bd_pins pe_start_slice/Dout] [get_bd_pins pe_0/dcim_start]
 connect_bd_net [get_bd_pins pe_config_valid_slice/Dout] [get_bd_pins pe_0/dcim_config_valid]
 connect_bd_net [get_bd_pins pe_mode_slice/Dout] [get_bd_pins pe_0/dcim_mode]
 connect_bd_net [get_bd_pins pe_acc_slice/Dout] [get_bd_pins pe_0/dcim_acc]
+connect_bd_net [get_bd_pins pe_accumulate_type_slice/Dout] [get_bd_pins pe_0/dcim_accumulate_type]
 
 connect_bd_net [get_bd_pins pe_0/dcim_busy] [get_bd_pins pe_status_concat/In0]
 connect_bd_net [get_bd_pins pe_0/dcim_done] [get_bd_pins pe_status_concat/In1]

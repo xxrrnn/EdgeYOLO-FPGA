@@ -7,8 +7,9 @@
 #   pe_cfg3_gpio  GPIO[31:0] = activation row count
 #   pe_ctrl_gpio  GPIO[0]    = start pulse
 #                 GPIO[1]    = config_valid
-#                 GPIO[4:2]  = mode, use 3'b110 for int8
+#                 GPIO[4:2]  = mode, use 3'b110 for int8, 3'b111 for int16
 #                 GPIO[9:5]  = acc, 0/1/2/4/8/16 supported
+#                 GPIO[11:10]= accumulate_type: 0=overwrite, 1=add to existing
 #   pe_status_gpio GPIO[3:0] = {config_ready, error, done, busy}
 #                  GPIO2     = error_code
 
@@ -61,6 +62,14 @@ set_property -dict [list \
   CONFIG.DIN_TO {5} \
   CONFIG.DOUT_WIDTH {5} \
 ] [get_bd_cells pe_acc_slice]
+
+create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 pe_accumulate_type_slice
+set_property -dict [list \
+  CONFIG.DIN_WIDTH {32} \
+  CONFIG.DIN_FROM {11} \
+  CONFIG.DIN_TO {10} \
+  CONFIG.DOUT_WIDTH {2} \
+] [get_bd_cells pe_accumulate_type_slice]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 pe_status_concat
 set_property -dict [list \
