@@ -3,8 +3,7 @@
 # Outputs are intentionally not connected here. Connect the clk_wiz inputs to
 # xdma_0/axi_aclk, then drive:
 #   hbm_ref_clk_0_wiz/clk_out1 -> hbm_0/HBM_REF_CLK_0
-#   hbm_ref_clk_1_wiz/clk_out1 -> hbm_0/HBM_REF_CLK_1
-#   user_clk_wiz/clk_out1      -> 450 MHz HBM AXI clock
+#   user_clk_wiz/clk_out1      -> 250 MHz HBM AXI clock
 #   hbm_ref_clk_0_wiz/clk_out1 -> 100 MHz HBM APB clock
 
 proc create_bd_ip_if_missing {name vlnv} {
@@ -23,18 +22,10 @@ set_property -dict [list \
   CONFIG.RESET_TYPE {ACTIVE_HIGH} \
 ] $hbm_ref_clk_0_wiz
 
-set hbm_ref_clk_1_wiz [create_bd_ip_if_missing hbm_ref_clk_1_wiz xilinx.com:ip:clk_wiz:6.0]
-set_property -dict [list \
-  CONFIG.PRIM_IN_FREQ {250.000} \
-  CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {100.000} \
-  CONFIG.OPTIMIZE_CLOCKING_STRUCTURE_EN {true} \
-  CONFIG.RESET_TYPE {ACTIVE_HIGH} \
-] $hbm_ref_clk_1_wiz
-
 set user_clk_wiz [create_bd_ip_if_missing user_clk_wiz xilinx.com:ip:clk_wiz:6.0]
 set_property -dict [list \
   CONFIG.PRIM_IN_FREQ {250.000} \
-  CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {450.000} \
+  CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {250.000} \
   CONFIG.OPTIMIZE_CLOCKING_STRUCTURE_EN {true} \
   CONFIG.RESET_TYPE {ACTIVE_HIGH} \
 ] $user_clk_wiz

@@ -35,15 +35,13 @@ connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 # ------------------------------------------------------------------------------
 # Clock generators and reset generators.
 #
-# HBM follows the earlier xdma_hbm bring-up: 450 MHz AXI clock, 100 MHz APB/ref
+# HBM uses a demo-friendly 250 MHz AXI clock, 100 MHz APB/ref
 # clocks.  The PE/DCIM side stays on xdma_0/axi_aclk (250 MHz) because the PE
 # buffers are single-clock inferred RAMs shared with AXI BRAM controllers.
 # ------------------------------------------------------------------------------
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins hbm_ref_clk_0_wiz/clk_in1]
-connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins hbm_ref_clk_1_wiz/clk_in1]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins user_clk_wiz/clk_in1]
 connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_ref_clk_0_wiz/reset]
-connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_ref_clk_1_wiz/reset]
 connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins user_clk_wiz/reset]
 
 connect_bd_net [get_bd_pins user_clk_wiz/clk_out1] [get_bd_pins hbm_rst/slowest_sync_clk]
@@ -58,7 +56,6 @@ connect_bd_net [get_bd_pins hbm_ref_clk_0_wiz/locked] [get_bd_pins hbm_apb_rst/d
 # HBM refclock and APB pins.
 # ------------------------------------------------------------------------------
 connect_bd_net [get_bd_pins hbm_ref_clk_0_wiz/clk_out1] [get_bd_pins hbm_0/HBM_REF_CLK_0]
-connect_bd_net [get_bd_pins hbm_ref_clk_1_wiz/clk_out1] [get_bd_pins hbm_0/HBM_REF_CLK_1]
 
 foreach apb_idx {0 1} {
   connect_bd_net_if_present [get_bd_pins hbm_ref_clk_0_wiz/clk_out1] hbm_0/APB_${apb_idx}_PCLK
@@ -72,8 +69,7 @@ connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins xdma_dcim_
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins xdma_dcim_hbm_smc_root/S01_AXI]
 
 connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_smc_root/M00_AXI] [get_bd_intf_pins xdma_dcim_hbm_smc_0/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_smc_root/M01_AXI] [get_bd_intf_pins xdma_dcim_hbm_smc_1/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_smc_root/M02_AXI] [get_bd_intf_pins xdma_dcim_hbm_local_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_smc_root/M01_AXI] [get_bd_intf_pins xdma_dcim_hbm_local_smc/S00_AXI]
 
 connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_local_smc/M00_AXI] [get_bd_intf_pins pe_ibuf_ctrl/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_local_smc/M01_AXI] [get_bd_intf_pins pe_obuf_ctrl/S_AXI]
@@ -85,7 +81,7 @@ connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_local_smc/M06_AXI] [get_bd_i
 connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_local_smc/M07_AXI] [get_bd_intf_pins pe_ctrl_gpio/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins xdma_dcim_hbm_local_smc/M08_AXI] [get_bd_intf_pins pe_status_gpio/S_AXI]
 
-foreach smc {xdma_dcim_hbm_smc_root xdma_dcim_hbm_smc_0 xdma_dcim_hbm_smc_1 xdma_dcim_hbm_local_smc} {
+foreach smc {xdma_dcim_hbm_smc_root xdma_dcim_hbm_smc_0 xdma_dcim_hbm_local_smc} {
   connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins ${smc}/aclk]
   connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins ${smc}/aresetn]
 }
@@ -93,14 +89,10 @@ foreach smc {xdma_dcim_hbm_smc_root xdma_dcim_hbm_smc_0 xdma_dcim_hbm_smc_1 xdma
 # ------------------------------------------------------------------------------
 # HBM AXI ports and AXI clock converters.
 # ------------------------------------------------------------------------------
-for {set idx 0} {$idx < 32} {incr idx} {
+for {set idx 0} {$idx < 16} {incr idx} {
   set axi_num [format "%02d" $idx]
   set smc_name xdma_dcim_hbm_smc_0
   set smc_mi $idx
-  if {$idx >= 16} {
-    set smc_name xdma_dcim_hbm_smc_1
-    set smc_mi [expr {$idx - 16}]
-  }
   set smc_mi_num [format "%02d" $smc_mi]
 
   connect_bd_intf_net \

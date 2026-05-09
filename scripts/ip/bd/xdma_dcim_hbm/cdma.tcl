@@ -2,8 +2,8 @@
 #   HBM -> pe_ibuf_ctrl before a DCIM run
 #   pe_obuf_ctrl -> HBM after a DCIM run
 #
-# Use a 64-bit address width because the full 8 GB HBM map occupies
-# 0x000000000-0x1FFFFFFFF and local PE/CDMA/GPIO registers are placed above it.
+# Use a 64-bit address width because the full 4 GB HBM map occupies
+# 0x000000000-0x0FFFFFFFF and local PE/CDMA/GPIO registers are placed above it.
 # Tests can still use HBM bank 0 with upper address bits left at zero.
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_cdma:4.1 axi_cdma_0
 set_property -dict [list \
