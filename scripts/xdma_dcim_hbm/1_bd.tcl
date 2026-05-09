@@ -29,7 +29,7 @@ set dcimRtlFiles [list \
     [file normalize "$srcDir/ref/DCIM/src/inc/counter.v"] \
     [file normalize "$srcDir/ref/DCIM/src/inc/dff.v"] \
     [file normalize "$srcDir/ref/DCIM/src/inc/pipe_stage.v"] \
-    [file normalize "$srcDir/ref/DCIM/src/dcim/multiplier.v"] \
+    [file normalize "$srcDir/DCIM/src/dcim/multiplier_dsp.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/adderTree.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/maArray.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/calculate_core.v"] \
