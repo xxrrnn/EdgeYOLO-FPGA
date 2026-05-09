@@ -51,7 +51,7 @@
 # ============================================
 !build/
 !build/**/
-!build/**/ImplOutputDir/
+!build/**/ImplOutputDir/*.bit
 !build/**/ImplOutputDir/*.rpt
 !build/**/SynOutputDir/
 !build/**/SynOutputDir/*.rpt

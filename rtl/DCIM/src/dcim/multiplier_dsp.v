@@ -4,7 +4,7 @@
 // Supports mixed signed/unsigned via sa/sb flags (same as original multiplier.v)
 
 (* use_dsp = "yes" *)
-module multiplier_dsp #(
+module multiplier #(
     parameter WD_IN = 4,
     parameter WD_OUT = 2*WD_IN
 )(

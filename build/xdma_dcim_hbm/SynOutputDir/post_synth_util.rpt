@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ------------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-| Date         : Wed May  6 14:40:42 2026
+| Date         : Sat May  9 17:54:49 2026
 | Host         : EDA02.R760 running 64-bit CentOS Linux release 7.9.2009 (Core)
 | Command      : report_utilization -file /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA/build/xdma_dcim_hbm/SynOutputDir/post_synth_util.rpt
 | Design       : xdma_dcim_hbm_wrapper
@@ -35,17 +35,17 @@ Table of Contents
 +----------------------------+--------+-------+------------+-----------+-------+
 |          Site Type         |  Used  | Fixed | Prohibited | Available | Util% |
 +----------------------------+--------+-------+------------+-----------+-------+
-| CLB LUTs*                  | 171703 |     0 |          0 |   1303680 | 13.17 |
-|   LUT as Logic             | 127278 |     0 |          0 |   1303680 |  9.76 |
-|   LUT as Memory            |  44425 |     0 |          0 |    600960 |  7.39 |
-|     LUT as Distributed RAM |  42993 |     0 |            |           |       |
-|     LUT as Shift Register  |   1432 |     0 |            |           |       |
-| CLB Registers              | 258803 |     0 |          0 |   2607360 |  9.93 |
-|   Register as Flip Flop    | 258803 |     0 |          0 |   2607360 |  9.93 |
+| CLB LUTs*                  | 121681 |     0 |          0 |   1303680 |  9.33 |
+|   LUT as Logic             |  93889 |     0 |          0 |   1303680 |  7.20 |
+|   LUT as Memory            |  27792 |     0 |          0 |    600960 |  4.62 |
+|     LUT as Distributed RAM |  26845 |     0 |            |           |       |
+|     LUT as Shift Register  |    947 |     0 |            |           |       |
+| CLB Registers              | 173419 |     0 |          0 |   2607360 |  6.65 |
+|   Register as Flip Flop    | 173419 |     0 |          0 |   2607360 |  6.65 |
 |   Register as Latch        |      0 |     0 |          0 |   2607360 |  0.00 |
-| CARRY8                     |   2285 |     0 |          0 |    162960 |  1.40 |
-| F7 Muxes                   |   2672 |     0 |          0 |    651840 |  0.41 |
-| F8 Muxes                   |    879 |     0 |          0 |    325920 |  0.27 |
+| CARRY8                     |   2084 |     0 |          0 |    162960 |  1.28 |
+| F7 Muxes                   |   1865 |     0 |          0 |    651840 |  0.29 |
+| F8 Muxes                   |    482 |     0 |          0 |    325920 |  0.15 |
 | F9 Muxes                   |      0 |     0 |          0 |    162960 |  0.00 |
 +----------------------------+--------+-------+------------+-----------+-------+
 * Warning! The Final LUT count, after physical optimizations and full implementation, is typically lower. Run opt_design after synthesis, if not already completed, for a more realistic count.
@@ -65,10 +65,10 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 | 0      |            _ |         Set |            - |
 | 0      |            _ |       Reset |            - |
 | 0      |          Yes |           - |            - |
-| 3942   |          Yes |           - |          Set |
-| 10824  |          Yes |           - |        Reset |
-| 3876   |          Yes |         Set |            - |
-| 240161 |          Yes |       Reset |            - |
+| 2096   |          Yes |           - |          Set |
+| 7951   |          Yes |           - |        Reset |
+| 2611   |          Yes |         Set |            - |
+| 160761 |          Yes |       Reset |            - |
 +--------+--------------+-------------+--------------+
 
 
@@ -78,9 +78,9 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +-------------------+------+-------+------------+-----------+-------+
 |     Site Type     | Used | Fixed | Prohibited | Available | Util% |
 +-------------------+------+-------+------------+-----------+-------+
-| Block RAM Tile    |  110 |     0 |          0 |      2016 |  5.46 |
-|   RAMB36/FIFO*    |  110 |     0 |          0 |      2016 |  5.46 |
-|     RAMB36E2 only |  110 |       |            |           |       |
+| Block RAM Tile    |  108 |     0 |          0 |      2016 |  5.36 |
+|   RAMB36/FIFO*    |  108 |     0 |          0 |      2016 |  5.36 |
+|     RAMB36E2 only |  108 |       |            |           |       |
 |   RAMB18          |    0 |     0 |          0 |      4032 |  0.00 |
 | URAM              |    0 |     0 |          0 |       960 |  0.00 |
 +-------------------+------+-------+------------+-----------+-------+
@@ -90,11 +90,12 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 3. ARITHMETIC
 -------------
 
-+-----------+------+-------+------------+-----------+-------+
-| Site Type | Used | Fixed | Prohibited | Available | Util% |
-+-----------+------+-------+------------+-----------+-------+
-| DSPs      |    0 |     0 |          0 |      9024 |  0.00 |
-+-----------+------+-------+------------+-----------+-------+
++----------------+------+-------+------------+-----------+-------+
+|    Site Type   | Used | Fixed | Prohibited | Available | Util% |
++----------------+------+-------+------------+-----------+-------+
+| DSPs           |  256 |     0 |          0 |      9024 |  2.84 |
+|   DSP48E2 only |  256 |       |            |           |       |
++----------------+------+-------+------------+-----------+-------+
 
 
 4. I/O
@@ -117,12 +118,12 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +------------+------+-------+------------+-----------+-------+
 |  Site Type | Used | Fixed | Prohibited | Available | Util% |
 +------------+------+-------+------------+-----------+-------+
-| BUFGCE     |    5 |     0 |          0 |       288 |  1.74 |
+| BUFGCE     |    3 |     0 |          0 |       288 |  1.04 |
 | BUFGCE_DIV |    0 |     0 |          0 |        48 |  0.00 |
 | BUFG_GT    |   14 |     0 |          0 |       576 |  2.43 |
 | BUFGCTRL*  |    0 |     0 |          0 |        96 |  0.00 |
 | PLL        |    0 |     0 |          0 |        24 |  0.00 |
-| MMCM       |    3 |     0 |          0 |        12 | 25.00 |
+| MMCM       |    2 |     0 |          0 |        12 | 16.67 |
 +------------+------+-------+------------+-----------+-------+
 * Note: Each used BUFGCTRL counts as two GLOBAL CLOCK BUFFERs. This table does not include global clocking resources, only buffer cell usage. See the Clock Utilization Report (report_clock_utilization) for detailed accounting of global clocking resource availability.
 
@@ -130,22 +131,22 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 6. ADVANCED
 -----------
 
-+----------------------+------+-------+------------+-----------+--------+
-|       Site Type      | Used | Fixed | Prohibited | Available |  Util% |
-+----------------------+------+-------+------------+-----------+--------+
-| CMACE4               |    0 |     0 |          0 |         8 |   0.00 |
-| GTYE4_CHANNEL        |    8 |     8 |          0 |        96 |   8.33 |
-| GTYE4_COMMON         |    2 |     0 |          0 |        24 |   8.33 |
-| HBM_REF_CLK          |    2 |     0 |          0 |         2 | 100.00 |
-| HBM_SNGLBLI_INTF_APB |    2 |     0 |          0 |        32 |   6.25 |
-| HBM_SNGLBLI_INTF_AXI |   32 |     0 |          0 |        32 | 100.00 |
-| ILKNE4               |    0 |     0 |          0 |         4 |   0.00 |
-| OBUFDS_GTE4          |    0 |     0 |          0 |        48 |   0.00 |
-| OBUFDS_GTE4_ADV      |    0 |     0 |          0 |        48 |   0.00 |
-| PCIE40E4             |    0 |     0 |          0 |         2 |   0.00 |
-| PCIE4CE4             |    1 |     1 |          0 |         4 |  25.00 |
-| SYSMONE4             |    0 |     0 |          0 |         3 |   0.00 |
-+----------------------+------+-------+------------+-----------+--------+
++----------------------+------+-------+------------+-----------+-------+
+|       Site Type      | Used | Fixed | Prohibited | Available | Util% |
++----------------------+------+-------+------------+-----------+-------+
+| CMACE4               |    0 |     0 |          0 |         8 |  0.00 |
+| GTYE4_CHANNEL        |    8 |     8 |          0 |        96 |  8.33 |
+| GTYE4_COMMON         |    2 |     0 |          0 |        24 |  8.33 |
+| HBM_REF_CLK          |    1 |     0 |          0 |         2 | 50.00 |
+| HBM_SNGLBLI_INTF_APB |    1 |     0 |          0 |        32 |  3.13 |
+| HBM_SNGLBLI_INTF_AXI |   16 |     0 |          0 |        32 | 50.00 |
+| ILKNE4               |    0 |     0 |          0 |         4 |  0.00 |
+| OBUFDS_GTE4          |    0 |     0 |          0 |        48 |  0.00 |
+| OBUFDS_GTE4_ADV      |    0 |     0 |          0 |        48 |  0.00 |
+| PCIE40E4             |    0 |     0 |          0 |         2 |  0.00 |
+| PCIE4CE4             |    1 |     1 |          0 |         4 | 25.00 |
+| SYSMONE4             |    0 |     0 |          0 |         3 |  0.00 |
++----------------------+------+-------+------------+-----------+-------+
 
 
 7. CONFIGURATION
@@ -170,40 +171,41 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +----------------------+--------+---------------------+
 |       Ref Name       |  Used  | Functional Category |
 +----------------------+--------+---------------------+
-| FDRE                 | 240161 |            Register |
-| RAMD32               |  74584 |                 CLB |
-| LUT3                 |  57899 |                 CLB |
-| LUT6                 |  41551 |                 CLB |
-| LUT5                 |  24449 |                 CLB |
-| LUT4                 |  21580 |                 CLB |
-| LUT2                 |  14441 |                 CLB |
-| FDCE                 |  10824 |            Register |
-| RAMS32               |  10633 |                 CLB |
-| LUT1                 |   8590 |                 CLB |
-| FDPE                 |   3942 |            Register |
-| FDSE                 |   3876 |            Register |
-| MUXF7                |   2672 |                 CLB |
-| CARRY8               |   2285 |                 CLB |
-| MUXF8                |    879 |                 CLB |
-| SRL16E               |    776 |                 CLB |
-| SRLC32E              |    656 |                 CLB |
+| FDRE                 | 160761 |            Register |
+| RAMD32               |  46402 |                 CLB |
+| LUT3                 |  40386 |                 CLB |
+| LUT6                 |  31073 |                 CLB |
+| LUT5                 |  17910 |                 CLB |
+| LUT4                 |  15755 |                 CLB |
+| LUT2                 |  11436 |                 CLB |
+| FDCE                 |   7951 |            Register |
+| RAMS32               |   6619 |                 CLB |
+| LUT1                 |   5867 |                 CLB |
+| FDSE                 |   2611 |            Register |
+| FDPE                 |   2096 |            Register |
+| CARRY8               |   2084 |                 CLB |
+| MUXF7                |   1865 |                 CLB |
+| SRL16E               |    595 |                 CLB |
+| MUXF8                |    482 |                 CLB |
+| SRLC32E              |    352 |                 CLB |
+| DSP48E2              |    256 |          Arithmetic |
 | RAMD64E              |    128 |                 CLB |
-| RAMB36E2             |    110 |            BLOCKRAM |
+| RAMB36E2             |    108 |            BLOCKRAM |
 | RAMS64E              |     36 |                 CLB |
-| HBM_SNGLBLI_INTF_AXI |     32 |            Advanced |
+| HBM_SNGLBLI_INTF_AXI |     16 |            Advanced |
 | BUFG_GT              |     14 |               Clock |
 | BUFG_GT_SYNC         |      9 |               Clock |
 | GTYE4_CHANNEL        |      8 |            Advanced |
-| BUFGCE               |      5 |               Clock |
-| MMCME4_ADV           |      3 |               Clock |
-| HBM_SNGLBLI_INTF_APB |      2 |            Advanced |
-| HBM_REF_CLK          |      2 |            Advanced |
+| BUFGCE               |      3 |               Clock |
+| MMCME4_ADV           |      2 |               Clock |
 | GTYE4_COMMON         |      2 |            Advanced |
 | PCIE4CE4             |      1 |            Advanced |
 | OBUF                 |      1 |                 I/O |
 | INBUF                |      1 |                 I/O |
 | IBUFDS_GTE4          |      1 |                 I/O |
 | IBUFCTRL             |      1 |              Others |
+| HBM_SNGLBLI_INTF_APB |      1 |            Advanced |
+| HBM_REF_CLK          |      1 |            Advanced |
 +----------------------+--------+---------------------+
 
 
@@ -223,7 +225,6 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +-----------------------------------------+------+
 | xdma_dcim_hbm_xdma_inv_0                |    1 |
 | xdma_dcim_hbm_xdma_dcim_hbm_smc_root_0  |    1 |
-| xdma_dcim_hbm_xdma_dcim_hbm_smc_1_0     |    1 |
 | xdma_dcim_hbm_xdma_dcim_hbm_smc_0_0     |    1 |
 | xdma_dcim_hbm_xdma_dcim_hbm_local_smc_0 |    1 |
 | xdma_dcim_hbm_xdma_0_0                  |    1 |
@@ -239,24 +240,7 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 | xdma_dcim_hbm_pe_cfg0_gpio_0            |    1 |
 | xdma_dcim_hbm_pe_0_0                    |    1 |
 | xdma_dcim_hbm_hbm_rst_0                 |    1 |
-| xdma_dcim_hbm_hbm_ref_clk_1_wiz_0       |    1 |
 | xdma_dcim_hbm_hbm_ref_clk_0_wiz_0       |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_31_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_30_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_29_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_28_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_27_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_26_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_25_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_24_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_23_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_22_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_21_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_20_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_19_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_18_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_17_0           |    1 |
-| xdma_dcim_hbm_hbm_axi_cc_16_0           |    1 |
 | xdma_dcim_hbm_hbm_axi_cc_15_0           |    1 |
 | xdma_dcim_hbm_hbm_axi_cc_14_0           |    1 |
 | xdma_dcim_hbm_hbm_axi_cc_13_0           |    1 |
