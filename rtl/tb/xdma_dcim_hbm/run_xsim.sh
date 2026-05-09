@@ -1,6 +1,6 @@
 #!/bin/bash
-# Run INT8 or INT16 testbench with Vivado xsim
-# Usage: ./run_xsim.sh [int8|int16]
+# Run INT8, INT16, or PCIe testbench with Vivado xsim
+# Usage: ./run_xsim.sh [int8|int16|pcie]
 
 set -e
 
@@ -17,6 +17,10 @@ if [ "$MODE" = "int16" ]; then
     TB_FILE="$SCRIPT_DIR/tb_pe_large_gemm_int16.sv"
     TOP_MODULE="tb_pe_large_gemm_int16"
     SIM_NAME="tb_int16_sim"
+elif [ "$MODE" = "pcie" ]; then
+    TB_FILE="$SCRIPT_DIR/tb_pcie_large_gemm.sv"
+    TOP_MODULE="tb_pcie_large_gemm"
+    SIM_NAME="tb_pcie_sim"
 else
     TB_FILE="$SCRIPT_DIR/tb_pe_large_gemm.sv"
     TOP_MODULE="tb_pe_large_gemm"

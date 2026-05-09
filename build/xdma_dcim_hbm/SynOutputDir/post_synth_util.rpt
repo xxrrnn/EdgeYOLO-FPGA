@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ------------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2024.2.2 (lin64) Build 6060944 Thu Mar 06 19:10:09 MST 2025
-| Date         : Sat May  9 17:54:49 2026
+| Date         : Sat May  9 21:05:27 2026
 | Host         : EDA02.R760 running 64-bit CentOS Linux release 7.9.2009 (Core)
 | Command      : report_utilization -file /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA/build/xdma_dcim_hbm/SynOutputDir/post_synth_util.rpt
 | Design       : xdma_dcim_hbm_wrapper
@@ -35,13 +35,13 @@ Table of Contents
 +----------------------------+--------+-------+------------+-----------+-------+
 |          Site Type         |  Used  | Fixed | Prohibited | Available | Util% |
 +----------------------------+--------+-------+------------+-----------+-------+
-| CLB LUTs*                  | 121681 |     0 |          0 |   1303680 |  9.33 |
-|   LUT as Logic             |  93889 |     0 |          0 |   1303680 |  7.20 |
+| CLB LUTs*                  | 121735 |     0 |          0 |   1303680 |  9.34 |
+|   LUT as Logic             |  93943 |     0 |          0 |   1303680 |  7.21 |
 |   LUT as Memory            |  27792 |     0 |          0 |    600960 |  4.62 |
 |     LUT as Distributed RAM |  26845 |     0 |            |           |       |
 |     LUT as Shift Register  |    947 |     0 |            |           |       |
-| CLB Registers              | 173419 |     0 |          0 |   2607360 |  6.65 |
-|   Register as Flip Flop    | 173419 |     0 |          0 |   2607360 |  6.65 |
+| CLB Registers              | 173417 |     0 |          0 |   2607360 |  6.65 |
+|   Register as Flip Flop    | 173417 |     0 |          0 |   2607360 |  6.65 |
 |   Register as Latch        |      0 |     0 |          0 |   2607360 |  0.00 |
 | CARRY8                     |   2084 |     0 |          0 |    162960 |  1.28 |
 | F7 Muxes                   |   1865 |     0 |          0 |    651840 |  0.29 |
@@ -68,7 +68,7 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 | 2096   |          Yes |           - |          Set |
 | 7951   |          Yes |           - |        Reset |
 | 2611   |          Yes |         Set |            - |
-| 160761 |          Yes |       Reset |            - |
+| 160759 |          Yes |       Reset |            - |
 +--------+--------------+-------------+--------------+
 
 
@@ -171,16 +171,16 @@ Warning! For any ECO changes, please run place_design if there are unplaced inst
 +----------------------+--------+---------------------+
 |       Ref Name       |  Used  | Functional Category |
 +----------------------+--------+---------------------+
-| FDRE                 | 160761 |            Register |
+| FDRE                 | 160759 |            Register |
 | RAMD32               |  46402 |                 CLB |
-| LUT3                 |  40386 |                 CLB |
-| LUT6                 |  31073 |                 CLB |
-| LUT5                 |  17910 |                 CLB |
-| LUT4                 |  15755 |                 CLB |
-| LUT2                 |  11436 |                 CLB |
+| LUT3                 |  40368 |                 CLB |
+| LUT6                 |  31140 |                 CLB |
+| LUT5                 |  17906 |                 CLB |
+| LUT4                 |  15769 |                 CLB |
+| LUT2                 |  11437 |                 CLB |
 | FDCE                 |   7951 |            Register |
 | RAMS32               |   6619 |                 CLB |
-| LUT1                 |   5867 |                 CLB |
+| LUT1                 |   5862 |                 CLB |
 | FDSE                 |   2611 |            Register |
 | FDPE                 |   2096 |            Register |
 | CARRY8               |   2084 |                 CLB |
