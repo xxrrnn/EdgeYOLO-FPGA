@@ -38,11 +38,11 @@ module xdma_dcim_preprocess #(
     reg [7:0] weight_byte;
     reg [15:0] weight_halfword;
     always @(*) begin
-        act_nib3_r = '0;
-        act_nib2_r = '0;
-        act_nib1_r = '0;
-        act_nib0_r = '0;
-        weight_r   = '0;
+        act_nib3_r = {DCIM_ACT_WIDTH{1'b0}};
+        act_nib2_r = {DCIM_ACT_WIDTH{1'b0}};
+        act_nib1_r = {DCIM_ACT_WIDTH{1'b0}};
+        act_nib0_r = {DCIM_ACT_WIDTH{1'b0}};
+        weight_r   = {DCIM_WEIGHT_WIDTH{1'b0}};
 
         if (mode_int16) begin
             for (ch = 0; ch < CH_IN; ch = ch + 1) begin
