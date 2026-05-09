@@ -22,6 +22,7 @@ module PE_bd (
     input  wire [31:0]                       dcim_raw_rows,
     input  wire [2:0]                        dcim_mode,
     input  wire [4:0]                        dcim_acc,
+    input  wire [1:0]                        dcim_accumulate_type,
 
     input  wire                              ibuf_ena,
     input  wire [`DCIM_BRAM_BYTES-1:0]          ibuf_wea,
@@ -56,6 +57,7 @@ module PE_bd (
         .dcim_raw_rows(dcim_raw_rows),
         .dcim_mode(dcim_mode),
         .dcim_acc(dcim_acc),
+        .dcim_accumulate_type(dcim_accumulate_type),
         .ibuf_ena(ibuf_ena),
         .ibuf_wea(ibuf_wea),
         .ibuf_addra(ibuf_addra_ext),

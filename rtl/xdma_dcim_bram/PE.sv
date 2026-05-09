@@ -24,6 +24,7 @@ module PE (
     input  logic [31:0]                  dcim_raw_rows,
     input  logic [2:0]                   dcim_mode,
     input  logic [4:0]                   dcim_acc,
+    input  logic [1:0]                   dcim_accumulate_type,
 
     // System-side IBUF port.  Address is a byte address from AXI BRAM
     // controller; PE converts it to an internal 256-bit word address.
@@ -52,7 +53,7 @@ module PE (
     logic [BRAM_BYTES-1:0]        obuf_web;
     logic [`DCIM_OBUF_ADDR_WIDTH-1:0]   obuf_addrb;
     logic [`DCIM_BRAM_DATA_WIDTH-1:0]   obuf_dinb;
-    logic [`DCIM_BRAM_DATA_WIDTH-1:0]   obuf_doutb_unused;
+    logic [`DCIM_BRAM_DATA_WIDTH-1:0]   obuf_doutb;
     logic [`DCIM_IBUF_ADDR_WIDTH-1:0]   ibuf_word_addra;
     logic [`DCIM_OBUF_ADDR_WIDTH-1:0]   obuf_word_addra;
 
@@ -75,13 +76,15 @@ module PE (
         .raw_rows(dcim_raw_rows),
         .mode(dcim_mode),
         .acc(dcim_acc),
+        .accumulate_type(dcim_accumulate_type),
         .ibuf_enb(ibuf_enb),
         .ibuf_addrb(ibuf_addrb),
         .ibuf_doutb(ibuf_doutb),
         .obuf_enb(obuf_enb),
         .obuf_web(obuf_web),
         .obuf_addrb(obuf_addrb),
-        .obuf_dinb(obuf_dinb)
+        .obuf_dinb(obuf_dinb),
+        .obuf_doutb(obuf_doutb)
     );
 
     dcim_tdp_byte_ram #(
@@ -115,7 +118,7 @@ module PE (
         .web(obuf_web),
         .addrb(obuf_addrb),
         .dinb(obuf_dinb),
-        .doutb(obuf_doutb_unused)
+        .doutb(obuf_doutb)
     );
 endmodule
 
