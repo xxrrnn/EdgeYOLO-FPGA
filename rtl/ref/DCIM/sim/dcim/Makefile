@@ -1,9 +1,25 @@
-# DCIM top simulation: two flows — default iverilog; optional Synopsys VCS (+ Verdi).
-# Run all commands from this directory: cd rtl/ref/DCIM/sim/dcim
+# DCIM top simulation: Synopsys VCS only; default waveform is FSDB (Verdi).
+# Run from this directory: cd rtl/ref/DCIM/sim/dcim
 
 include sim_vars.mk
 
-.PHONY: all all_vcs compile compile_iverilog compile_vcs run run_vcs wave verdi clean check help
+# FSDB=1 (default): compile with Verdi PLI + DUMP_FSDB; requires VERDI_HOME.
+# FSDB=0: VCD via $dumpvars, no Verdi PLI (no VERDI_HOME needed).
+FSDB ?= 1
+
+ifeq ($(FSDB),1)
+ifeq ($(strip $(VERDI_HOME)),)
+$(error FSDB=1 requires VERDI_HOME (export VERDI_HOME=/path/to/verdi). Or use: make compile FSDB=0)
+endif
+VERDI_PLI := -P $(VERDI_HOME)/share/PLI/VCS/LINUX64/novas.tab $(VERDI_HOME)/share/PLI/VCS/LINUX64/pli.a
+FSDB_DEF := +define+DUMP_FSDB
+else
+VERDI_PLI :=
+FSDB_DEF :=
+endif
+
+.PHONY: all compile compile_vcs run run_vcs wave verdi clean check help \
+	test_int8xint8 test_int16xint16 simv all_vcs
 
 export TYPE := $(TYPE)
 export ACC := $(ACC)
@@ -14,7 +30,6 @@ export R := $(R)
 
 WAVE ?= n
 
-IVERILOG ?= iverilog
 VCS ?= vcs
 
 ALL_TASKS := compile run
@@ -25,91 +40,69 @@ ALL_TASKS += check
 
 all: $(ALL_TASKS)
 
-# --- iverilog (default): executable simv ------------------------------------
-compile: compile_iverilog
-
-compile_iverilog:
-	$(IVERILOG) -g2005-sv $(INC_IVERILOG) $(IVERILOG_DEFS) -o simv -c filelist.f
-
-run: run_iverilog
-
-run_iverilog:
-	./simv
-
-# --- Synopsys VCS: executable simv_vcs -----------------------------------
-# If simv_vcs was deleted but simv_vcs.daidir remains, VCS skips relinking and
-# leaves no binary — remove the incremental timestamp so the executable is rebuilt.
-compile_vcs:
-	@if [ ! -x ./simv_vcs ] && [ -f simv_vcs.daidir/.vcs.timestamp ]; then \
-		rm -f simv_vcs.daidir/.vcs.timestamp; \
+# Executable: ./simv (Synopsys convention)
+compile compile_vcs simv:
+	@if [ ! -x ./simv ] && [ -f simv.daidir/.vcs.timestamp ]; then \
+		rm -f simv.daidir/.vcs.timestamp; \
 	fi
-	$(VCS) -full64 -sverilog +v2k $(INC_VCS) $(VCS_DEFS) \
+	$(VCS) -full64 -sverilog +v2k $(INC_VCS) $(VCS_DEFS) $(FSDB_DEF) $(VERDI_PLI) \
 		-debug_access+all -kdb \
 		-ignore initializer_driver_checks \
 		-f filelist.f \
-		-o simv_vcs \
-		-l compile_vcs.log
-	@test -x ./simv_vcs || (echo "compile_vcs failed: ./simv_vcs missing (see compile_vcs.log)" >&2; exit 1)
+		-o simv \
+		-l compile.log
+	@test -x ./simv || (echo "compile failed: ./simv missing (see compile.log)" >&2; exit 1)
 
-run_vcs:
-	@test -x ./simv_vcs || (echo "run_vcs: ./simv_vcs not found — run: make compile_vcs" >&2; exit 1)
-	./simv_vcs
+run run_vcs:
+	@test -x ./simv || (echo "run: ./simv not found — run: make compile" >&2; exit 1)
+	./simv
 
-# Compile + run + check with VCS (same stimulus/output files as iverilog)
-all_vcs: compile_vcs run_vcs check
+all_vcs: all
 
-wave:
-	gtkwave waveform.vcd signals.gtkw &
+# --- INT8×INT8 / INT16×INT16 ---
+test_int8xint8:
+	$(MAKE) compile TYPE=INT8
+	TYPE=INT8 $(MAKE) run check
 
-# Verdi: opens VCD from either flow (waveform.vcd). Set VERDI_HOME if verdi is not in PATH.
+test_int16xint16:
+	$(MAKE) compile TYPE=INT16
+	TYPE=INT16 $(MAKE) run check
+
+wave verdi:
+	@if [ -f waveform.fsdb ]; then \
+		$(VERDI_BIN) -ssf waveform.fsdb & \
+	elif [ -f waveform.vcd ]; then \
+		$(VERDI_BIN) -ssf waveform.vcd & \
+	else \
+		echo "No waveform.fsdb or waveform.vcd — run simulation first." >&2; exit 1; \
+	fi
+
 VERDI_BIN ?= $(if $(VERDI_HOME),$(VERDI_HOME)/bin/verdi,verdi)
-verdi:
-	@$(VERDI_BIN) -ssf waveform.vcd &
 
 clean:
-	rm -f *.fsdb *.vdb *.log simv simv_vcs novas.* ucli.key *.vcd *.txt *.mem compile_vcs.log
-	rm -rf *.daidir csrc verdiLog
+	rm -f *.fsdb *.vdb *.log simv novas.* ucli.key *.vcd *.txt *.mem compile.log compile_vcs.log
+	rm -rf simv.daidir *.daidir csrc verdiLog
 
-ifeq ($(VIRTUAL_ENV),)
-    VENV_PYTHON := $(shell \
-        curr=$$(pwd); \
-        while [ "$$curr" != "/" ]; do \
-            if [ -f "$$curr/venv/bin/python" ]; then \
-                echo "$$curr/venv/bin/python"; break; \
-            elif [ -f "$$curr/.venv/bin/python" ]; then \
-                echo "$$curr/.venv/bin/python"; break; \
-            fi; \
-            curr=$$(dirname "$$curr"); \
-        done)
-endif
-
-PYTHON := $(if $(VENV_PYTHON),$(VENV_PYTHON),python3)
+PYTHON ?= python3
 
 check:
 	$(PYTHON) transfer.py
 
 help:
 	@echo "========================================================================"
-	@echo "  DCIM 仿真：iverilog（默认）与 VCS / Verdi 分开使用"
+	@echo "  DCIM 仿真：仅 VCS；默认 FSDB（需 VERDI_HOME）；可执行文件 ./simv"
 	@echo "========================================================================"
 	@echo ""
-	@echo "【iverilog — 默认】产物: ./simv ，波形: waveform.vcd（GTKWave）"
-	@echo "  make compile          # 同 compile_iverilog"
-	@echo "  make compile_iverilog"
-	@echo "  make run              # 同 run_iverilog"
-	@echo "  make run_iverilog"
+	@echo "  make compile          # 生成 ./simv（默认 FSDB PLI + DUMP_FSDB）"
+	@echo "  make run              # ./simv"
 	@echo "  make all              # compile + run [+ wave] + check"
-	@echo "  make wave             # gtkwave waveform.vcd signals.gtkw"
+	@echo "  make wave / verdi     # Verdi 打开 waveform.fsdb（若有）否则 waveform.vcd"
+	@echo "  make clean"
 	@echo ""
-	@echo "【Synopsys VCS】产物: ./simv_vcs ，同样写 waveform.vcd；可用 Verdi 查看"
-	@echo "  make compile_vcs"
-	@echo "  make run_vcs"
-	@echo "  make all_vcs          # compile_vcs + run_vcs + check"
-	@echo "  make verdi            # Verdi 打开 waveform.vcd（需 PATH 或 VERDI_HOME）"
-	@echo "  # 或用 KDB: verdi -dbdir simv_vcs.daidir（先 make run_vcs）"
+	@echo "  FSDB=0 make compile   # 仅 VCD，不需 VERDI_HOME"
+	@echo "  export VERDI_HOME=... # FSDB=1 时必须（默认 FSDB=1）"
 	@echo ""
-	@echo "宏说明: iverilog 使用 -D IVERILOG；VCS 使用 +define+VCS（两套独立可执行文件）"
-	@echo "VCS 对 model_rf.sv 使用 -ignore initializer_driver_checks（与 iverilog 行为一致）"
+	@echo "  make test_int8xint8 / test_int16xint16"
 	@echo ""
 	@echo "参数示例: TYPE=INT8 ACC=0 CH_IN=16 CH_OUT=16 WD1=4 R=16 WAVE=y"
 	@echo "========================================================================"

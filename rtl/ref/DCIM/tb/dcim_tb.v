@@ -139,8 +139,13 @@ module dcim_tb#(
 	end
 
 	initial begin
+`ifdef DUMP_FSDB
+		$fsdbDumpfile("waveform.fsdb");
+		$fsdbDumpvars(0, dcim_tb);
+`else
 		$dumpfile("waveform.vcd");
 		$dumpvars(0, dcim_tb);
+`endif
 	end
 
 	task printMemory;
