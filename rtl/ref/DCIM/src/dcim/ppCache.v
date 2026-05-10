@@ -50,7 +50,6 @@ module ppCache#(
 		.CYCLE(CYCLE)
 	) u_cacheMem0 (
 		.clk(clk),
-		.rstn(rstn),
 		.wr(ena && (~w_ptr_in) && w_handshake_in),
 		.address(w_address),
 		.up_data(up_data),
@@ -64,7 +63,6 @@ module ppCache#(
 		.CYCLE(CYCLE)
 	) u_cacheMem1 (
 		.clk(clk),
-		.rstn(rstn),
 		.wr(ena && w_ptr_in && w_handshake_in),
 		.address(w_address),
 		.up_data(up_data),
@@ -83,7 +81,6 @@ module cacheMem#(
 	localparam TILE_WD = CH_IN*CH_OUT*WD1/CYCLE
 )(
 	input clk,
-	input rstn,
 	input wr,
 	input [CYCLE_CNT_WD-1: 0] address,
 	input [TILE_WD-1: 0] up_data,
@@ -92,13 +89,8 @@ module cacheMem#(
 
 	reg [TILE_WD-1: 0] r_mem[CYCLE-1: 0];
 
-	integer a;
-	always@(posedge clk or negedge rstn) begin
-		if(~rstn) begin
-			for(a=0; a<CYCLE; a=a+1) begin
-				r_mem[a] <= 0;
-			end
-		end else if(wr) begin
+	always@(posedge clk) begin
+	    if(wr) begin
 			r_mem[address] <= up_data;
 		end
 	end

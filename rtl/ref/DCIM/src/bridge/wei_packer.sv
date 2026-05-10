@@ -7,6 +7,8 @@ module wei_packer#(
 	localparam	RATIO			=	WEI_DATA_WIDTH/AXI_DATA_WIDTH,
 	localparam	OFFSET_WIDTH	=	$clog2(RATIO)
 )(
+	input	logic							clk,
+	input	logic							rstn,
 	input	logic							axi_req_i,
 	input	logic							axi_we_i,
 	input	logic	[AXI_ADDR_WIDTH-1: 0]	axi_addr_i,
@@ -30,7 +32,7 @@ module wei_packer#(
 	end
 
 	generate
-		if(RATIO>1) begin:GenPacker
+		if(RATIO>1) begin
 			logic [OFFSET_WIDTH-1: 0]	sub_word_idx;
 			always_comb begin
 				wei_be       = '0;
@@ -39,7 +41,7 @@ module wei_packer#(
 				wei_wdata    = {RATIO{axi_wdata_i}};
 				wei_be[sub_word_idx*AXI_DATA_WIDTH +: AXI_DATA_WIDTH] = axi_bit_be;
 			end
-		end else begin:WriteThrough
+		end else begin
 			always_comb begin
 				wei_addr  = axi_addr_i[$clog2(AXI_BYTE_WIDTH) +: WEI_ADDR_WIDTH];
 				wei_wdata = axi_wdata_i;

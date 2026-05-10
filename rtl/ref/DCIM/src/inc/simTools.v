@@ -58,14 +58,14 @@ module simToolUp#(
 	input ena,
 
 	input r,
-	output [WD-1: 0] data,
+	output [WD-1: 0] dn_data,
 
-	input i_ready,
-	output o_valid
+	input dn_ready,
+	output dn_valid
 );
 
 	wire w_handshake;
-	assign w_handshake = o_valid & i_ready;
+	assign w_handshake = dn_valid & dn_ready;
 	wire w_cnt_done;
 
 	reg r_state;
@@ -94,7 +94,7 @@ module simToolUp#(
 		end
 	end
 
-	assign o_valid = ena & ((r_state == 1'b1) || ~r);
+	assign dn_valid = ena & ((r_state == 1'b1) || ~r);
 
 	generate
 		if(MODE) begin : g_simtool_up_writer
@@ -105,7 +105,7 @@ module simToolUp#(
 			end
 			reg [WD-1: 0] randomData;
 
-			assign data = randomData;
+			assign dn_data = randomData;
 			always @(posedge clk) begin
 				if(~rstn) begin
 				randomData <= $urandom();
@@ -171,13 +171,13 @@ module simToolUp#(
 				end
 			end
 
-			assign data = mem[row];
+			assign dn_data = mem[row];
 		end
 	endgenerate
 
 endmodule
 
-// Downstream simulator: consumes valid-ready traffic and optionally gates o_ready.
+// Downstream simulator: consumes valid-ready traffic and optionally gates up_ready.
 module simToolDown#(
 	parameter INTERNAL_MAX = 4,
 	parameter FILE = "simToolDown.mem",
@@ -191,12 +191,12 @@ module simToolDown#(
 	input ena,
 
 	input r,
-	input [WD-1: 0] data,
-	input i_valid,
-	output o_ready
+	input [WD-1: 0] up_data,
+	input up_valid,
+	output up_ready
 );
 	wire w_handshake;
-	assign w_handshake = o_ready & i_valid;
+	assign w_handshake = up_ready & up_valid;
 	wire w_cnt_done;
 
 	reg r_state;
@@ -230,10 +230,10 @@ module simToolDown#(
 	always@(posedge clk) begin
 		if(w_handshake) begin
 			if(SPLIT_WD==0) begin
-				$fwrite(file, "%b\n", data);
+				$fwrite(file, "%b\n", up_data);
 			end else begin
 				for(integer bit_idx=WD-1; bit_idx>=0; bit_idx=bit_idx-SPLIT_WD) begin
-					$fwrite(file, "%b ", data[bit_idx -: SPLIT_WD]);
+					$fwrite(file, "%b ", up_data[bit_idx -: SPLIT_WD]);
 				end
 				$fwrite(file, "\n");
 			end
@@ -247,7 +247,7 @@ module simToolDown#(
 		end
 	end
 
-	assign o_ready = ena & ((r_state == 1'b1) || ~r);
+	assign up_ready = ena & ((r_state == 1'b1) || ~r);
 
 endmodule
 

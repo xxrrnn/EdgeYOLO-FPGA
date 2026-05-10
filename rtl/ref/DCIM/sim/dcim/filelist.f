@@ -1,17 +1,15 @@
-../../src/multiplier.v
-../../src/adderTree.v
-../../src/maArray.v
-../../src/calculate_core.v
+../../src/dcim/accumulateArray.v
+../../src/dcim/adderTree.v
+../../src/dcim/calculate_core.v
+../../src/dcim/dcim.v
+../../src/dcim/maArray.v
+../../src/dcim/memory.v
+../../src/dcim/mergeArray.v
+../../src/dcim/multiplier.v
+../../src/dcim/postProcess.v
+../../src/dcim/ppCache.v
+../../src/dcim/sramWrap.v
 
-../../src/mergeArray.v
-../../src/accumulateArray.v
-../../src/postProcess.v
-
-../../../macro/rf_sp_hde.v
-../../src/ppCache.v
-../../src/sramWrap.v
-../../src/memory.v
-
-../../src/dcim.v
+../../src/model/model_rf.sv
 
 ../../tb/dcim_tb.v

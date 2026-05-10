@@ -22,6 +22,7 @@ module memory#(
 	output 							dn_valid,
 	output [CH_IN*CH_OUT*WD1-1: 0]	dn_data
 );
+
 	wire mid_valid, mid_ready;
 	wire [WD-1: 0] mid_data;
 	wire fsm_req, fsm_we;
@@ -30,7 +31,7 @@ module memory#(
 	assign up_ready = ~fsm_req;
 
 	sramWrap#(.WD(WD), .DP(DP)) u_sramWrap(
-		.clk(clk), .ena(ena),
+		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
 		.req(fsm_req | req),
 		.we(fsm_req? fsm_we: we),
 		.addr(fsm_req? fsm_addr: addr),
@@ -89,10 +90,8 @@ module load_fsm#(
 	wire [$clog2(CYCLE)-1: 0] w_load_cnt;
 	reg [ADDR_WD-1: 0]		base_addr_q;
 
-	always@(posedge clk or negedge rstn) begin
-		if(~rstn) begin
-			base_addr_q <= 0;
-		end else if(clr) begin
+	always@(posedge clk) begin
+		if(clr) begin
 			base_addr_q <= 0;
 		end else if(ena && (state==IDLE) && load) begin
 			base_addr_q <= base_addr;

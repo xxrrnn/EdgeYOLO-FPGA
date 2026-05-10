@@ -6,7 +6,7 @@
 set T 2.0
 create_clock -name "clk" -period $T [get_ports clk]
 
-# 根据文档Page6/7 建议，Setup需要增加 y ps clock jitter
+# 根据文档Page6/7 建议，Setup需要增加 y ns clock jitter
 set_clock_uncertainty -setup 0.25 [get_clocks clk]
 set_clock_uncertainty -hold 0.05  [get_clocks clk]
 

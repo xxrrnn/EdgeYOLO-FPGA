@@ -1,6 +1,7 @@
 `timescale 1ns / 1ps
 `include "para.v"
 `include "counter.v"
+`include "dff.v"
 
 //ma: multiply & add
 module maArray#(

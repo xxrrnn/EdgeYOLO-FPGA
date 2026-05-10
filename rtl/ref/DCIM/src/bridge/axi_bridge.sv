@@ -60,8 +60,6 @@ module axi_bridge#(
 	logic	[AXI_DATA_WIDTH-1: 0]	axi_rdata_o_res;
 	logic							cfg_res_right;
 
-	assign dcim_clr = ctrl_clr;
-
 	axi_slave#(
 		.AXI_DATA_WIDTH	(AXI_DATA_WIDTH	),
 		.AXI_BYTE_WIDTH	(AXI_BYTE_WIDTH	),
@@ -73,6 +71,7 @@ module axi_bridge#(
 		.axi_req_i		(axi_req_i		),
 		.axi_we_i		(axi_we_i		),
 		.axi_addr_i		(axi_addr_i		),
+		.axi_be_i		(axi_be_i		),
 		.axi_wdata_i	(axi_wdata_i	),
 		.axi_rdata_o	(axi_rdata_o	),
 
@@ -130,6 +129,8 @@ module axi_bridge#(
 		.WEI_DATA_WIDTH	(WEI_DATA_WIDTH	),
 		.WEI_ADDR_WIDTH	(WEI_ADDR_WIDTH	)
 	) u_wei_packer	(
+		.clk			(clk			),
+		.rstn			(rstn			),
 		.axi_req_i		(axi_req_i_wei	),
 		.axi_we_i		(axi_we_i		),
 		.axi_addr_i		(axi_addr_i		),

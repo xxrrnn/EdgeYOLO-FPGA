@@ -6,7 +6,8 @@ module calculate_tb#(
 	parameter CH_IN = `CH_IN,
 	parameter CH_OUT = `CH_OUT,
 	parameter R = `R,
-	parameter FILE_DEPTH = 100
+	parameter FILE_DEPTH = 100,
+	parameter ACC = `ACC
 )();
 
 	localparam T = 10;
@@ -16,8 +17,8 @@ module calculate_tb#(
 
 	integer file_weight;
 
-	wire i_valid, o_ready;
-	wire o_valid, i_ready;
+	wire up_valid, up_ready;
+	wire dn_valid, dn_ready;
 	wire [CH_IN*WD1-1: 0]			data_in1;
 	wire [CH_OUT*WD3-1: 0]			data_out;
 
@@ -30,6 +31,10 @@ module calculate_tb#(
 	reg simToolDownEna;
 	reg [R_UBD_WD-1: 0] r;
 	reg [2: 0] mode;
+
+	wire mid_valid_cal, mid_ready_cal;
+	wire [CH_OUT*WD2-1: 0] mid_data_cal;
+
 
 	simToolUp#(
 		.INTERNAL_MAX(3),
@@ -44,32 +49,31 @@ module calculate_tb#(
 		.clr(clr),
 		.ena(simToolUpEna),
 		.r(simToolRandom),
-		.data(data_in1),
-		.i_ready(o_ready),
-		.o_valid(i_valid)
+		.dn_data(data_in1),
+		.dn_ready(up_ready),
+		.dn_valid(up_valid)
 	);
 
-	calculate#(
-		.WD1(WD1),
-		.CH_IN(CH_IN),
-		.CH_OUT(CH_OUT),
-		.R(R)
-	) u_calculate(
-		.clk(clk),
-		.rstn(rstn),
-		.clr(clr),
-		.ena(ena),
-		.acc_ena(acc_ena),
-		.r(r),
-		.mode(mode),
-		.data_in1(data_in1),
-		.data_in2(data_in2),
-		.data_out(data_out),
-		.i_valid(i_valid),
-		.o_ready(o_ready),
-		.i_ready(i_ready),
-		.o_valid(o_valid)
+    calculate_core #(
+        .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT)
+    ) u_calculate_core (
+        .clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .mode(mode_cal),
+        .up_valid(up_valid_cal), .up_ready(w_ready_cal),
+        .up_data1(data_in1),  .up_data2(data_in2),
+        .dn_valid(mid_valid_cal), .dn_ready(mid_ready_cal),
+		.dn_data(mid_data_cal)
+    );
+
+	postProcess #(
+		.WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .ACC(ACC)
+	) u_postProcess (
+		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .mode(mode_cal), .acc(acc),
+		.up_valid(mid_valid_cal), .up_ready(mid_ready_cal),
+		.up_data(mid_data_cal),
+		.dn_valid(dn_valid), .dn_ready(dn_ready), .dn_data(data_out)
 	);
+
+
 
 	simToolDown#(
 		.INTERNAL_MAX(2),
@@ -83,9 +87,9 @@ module calculate_tb#(
 		.clr(clr),
 		.ena(simToolDownEna),
 		.r(simToolRandom),
-		.data(data_out),
-		.i_valid(o_valid),
-		.o_ready(i_ready)
+		.up_data(data_out),
+		.up_valid(dn_valid),
+		.up_ready(dn_ready)
 	);
 
 

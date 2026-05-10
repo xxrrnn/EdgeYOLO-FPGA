@@ -108,32 +108,7 @@ module	buffer_res#(
 			.q(rdata)
 		);
 	`else
-		rf64x128 u_rf_res_H(
-			.clk(clk),
-			.cen(~req),
-			.gwen(~we),
-			.wen(~be[255: 128]),
-			.a(addr),
-			.d(wdata[255: 128]),
-			.q(rdata[255: 128]),
-			.ema(3'b111),
-			.emaw(2'b11),
-			.emas(1'b1),
-			.ret1n(1'b1)
-		);
-		rf64x128 u_rf_res_L(
-			.clk(clk),
-			.cen(~req),
-			.gwen(~we),
-			.wen(~be[127: 0]),
-			.a(addr),
-			.d(wdata[127: 0]),
-			.q(rdata[127: 0]),
-			.ema(3'b111),
-			.emaw(2'b11),
-			.emas(1'b1),
-			.ret1n(1'b1)
-		);
+		// 填真实的SRAM IP
 	`endif
 
 endmodule

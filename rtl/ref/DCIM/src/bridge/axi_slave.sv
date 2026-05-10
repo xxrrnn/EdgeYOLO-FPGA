@@ -39,6 +39,7 @@ module axi_slave#(
 	// public
 	input	logic	[AXI_ADDR_WIDTH-1: 0]	axi_addr_i,
 	input	logic	[AXI_DATA_WIDTH-1: 0]	axi_wdata_i,
+	input	logic	[AXI_BYTE_WIDTH-1: 0]	axi_be_i,
 
 	// Buffer ACT
 	output	logic							axi_req_i_act,

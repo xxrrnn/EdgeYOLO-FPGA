@@ -108,19 +108,7 @@ module	buffer_act#(
 			.q(rdata)
 		);
 	`else
-		rf64x64 u_rf_act(
-			.clk(clk),
-			.cen(~req),
-			.gwen(~we),
-			.wen(~be),
-			.a(addr),
-			.d(wdata),
-			.q(rdata),
-			.ema(3'b111),
-			.emaw(2'b11),
-			.emas(1'b1),
-			.ret1n(1'b1)
-		);
+		// 填真实的SRAM IP
 	`endif
 
 endmodule

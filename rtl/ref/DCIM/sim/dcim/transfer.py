@@ -180,7 +180,7 @@ if __name__ == "__main__":
 	else:
 		C = 0
 	
-	print(f"Type: {cfg["type"]}, Acc: {cfg["acc"]}")
+	print(f"Type: {cfg['type']}, Acc: {cfg['acc']}")
 
 	WD2 = 2*WD1 + np.log2(CH_IN).astype(int)
 	WD3 = WD2 + np.log2(R).astype(int)

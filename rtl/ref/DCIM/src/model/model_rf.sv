@@ -11,13 +11,8 @@ module model_rf #(
     output logic [WIDTH-1: 0]           q      // 输出数据
 );
 
-    logic [WIDTH-1: 0] r_mem [0:DEPTH-1];
-
-    initial begin
-        for (int i = 0; i < DEPTH; i++) begin
-            r_mem[i] = '0;
-        end
-    end
+    // Elaboration-time default (avoids initial vs always_ff procedural driver clash on VCS)
+    logic [WIDTH-1: 0] r_mem [0:DEPTH-1] = '{default: '0};
 
     always_ff @(posedge clk) begin
         if (~cen) begin

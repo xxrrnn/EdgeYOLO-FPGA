@@ -88,7 +88,7 @@ module act_sequencer#(
 		.axi_addr_i		(axi_addr_i		),
 		.axi_wdata_i	(axi_wdata_i	),
 		.axi_be_i		(axi_be_i		),
-		.axi_rdata_o	(axi_rdata_o	),
+		.axi_rdata_o	(				),
 
 		.int_req_i		( run&up_ready	),
 		.int_we_i		( 1'b0			),

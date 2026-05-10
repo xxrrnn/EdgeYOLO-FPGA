@@ -131,10 +131,16 @@ module tb_axi2dcim_bridge();
     endtask
 
 	// --------------------------------------------------------
-    // 真实的 DCIM 阵列例化
+    //  DCIM 例化
     // --------------------------------------------------------
-    // 假设你的模块名叫 dcim_array_top
-    dcim_array_top u_real_dcim_array (
+    dcim#(
+		.WD1(4),
+		.CH_IN(16),
+		.CH_OUT(16),
+		.SRAM_DP(128),
+		.CYCLE(8),
+		.ACC(16)
+	)	u_dcim(
         .clk            (clk            ),
         .rstn           (rstn           ),
         .clr       		(dcim_clr       ),
@@ -168,8 +174,8 @@ module tb_axi2dcim_bridge();
     // 测试激励主流程 (Test Sequence)
     // --------------------------------------------------------
     initial begin
-        $fsdbDumpfile("waveform.fsdb"); // 为 GTKWave 抓取波形
-        $fsdbDumpvars(0, tb_axi2dcim_bridge);
+        $dumpfile("tb_axi2dcim_bridge.vcd"); // 为 GTKWave 抓取波形
+        $dumpvars(0, tb_axi2dcim_bridge);
 
         // 初始化
         rstn      = 0;
