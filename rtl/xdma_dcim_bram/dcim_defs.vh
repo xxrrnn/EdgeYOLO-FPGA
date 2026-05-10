@@ -14,7 +14,7 @@
 
 `define DCIM_WD1              4
 `define DCIM_CH_IN            16
-`define DCIM_CH_OUT           16
+`define DCIM_CH_OUT           64
 `define DCIM_ACC_MAX          16
 
 `define DCIM_WD2              (2 * `DCIM_WD1 + $clog2(`DCIM_CH_IN))

@@ -45,12 +45,12 @@ module multiplier#(
 	assign bias = (sa & sb)? ( (one<<(2*WD_IN-1)) + (one<<(WD_IN)) ): ( (sa ^ sb)? ( (one<<(2*WD_IN-1)) + (one<<(WD_IN-1)) ): 0);
 
 	assign c = pp_sum + bias;
-
+ 
 endmodule
 
 
 /*
-	row/col	3	2	1	0
+ 	row/col	3	2	1	0	
 	0	a3b0	a2b0	a1b0	a0b0
 	1	a3b1	a2b1	a1b1	a0b1
 	2	a3b2	a2b2	a1b2	a0b2
@@ -58,3 +58,4 @@ endmodule
 	row -> b[row]
 	col -> a[col]
 */
+

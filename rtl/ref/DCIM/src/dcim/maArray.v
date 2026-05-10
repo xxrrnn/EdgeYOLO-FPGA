@@ -47,7 +47,7 @@ module maArray#(
 	genvar col;
 	generate
 		for(col=0; col<CH_OUT/4; col=col+1) begin:MaColumn
-			maColumn#(.WD1(WD1), .CH_IN(CH_IN))
+			maColumn#(.WD1(WD1), .CH_IN(CH_IN)) 
 				u_maColumn(
 					.mode(mode),
 					.cnt_zero(w_cnt_zero),
@@ -85,14 +85,14 @@ module maColumn#(
 
 );
 	wire w_mode_in_sign;
-
+	
 	wire s1;
 	wire [3: 0] s2;
 
 	assign w_mode_in_sign = (mode==`MODE_INT4) || (mode==`MODE_INT8) || (mode==`MODE_INT16);
 
 	assign s1 = w_mode_in_sign? (cnt_zero): 1'b0; // Act Sign Part
-	assign s2 = w_mode_in_sign? (
+	assign s2 = w_mode_in_sign? ( 
 		(mode==`MODE_INT4)? 4'b1111: (
 			(mode==`MODE_INT8)? 4'b1010: (
 				(mode==`MODE_INT16)? 4'b1000: 4'b0000

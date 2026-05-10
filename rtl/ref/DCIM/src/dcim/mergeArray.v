@@ -21,7 +21,7 @@ module mergeArray#(
 	output [CH_OUT*WD2-1: 0] dn_data
 );
 	wire w_merge_cnt_zero;
-
+	
 	mergeArrayController u_mergeArrayController(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .mode(mode),
 		.up_valid(up_valid), .up_ready(up_ready),
@@ -200,7 +200,7 @@ module merge#(
 			)
 		)
 	);
-
+	
 endmodule
 
 module mergeArrayController(

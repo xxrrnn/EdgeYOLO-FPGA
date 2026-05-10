@@ -78,12 +78,12 @@ module accumulate#(
 	reg [WD3-1: 0] n_temp3, n_temp2, n_temp1, n_temp0;
 	reg [2*WD3-1: 0] n_tempH, n_tempL;
 	reg [4*WD3-1: 0] n_temp;
-
+	
 	reg [WD3-1: 0] temp3, temp2, temp1, temp0;
 
 
 	genvar i;
-	generate
+	generate 
 		for(i=0; i<4; i=i+1) begin
 			assign up_data_s_ext_WD3[i] = { {(WD3-WD2){up_data[(i+1)*WD2-1]}}, up_data[i*WD2+: WD2] };
 			assign up_data_u_ext_WD3[i] = { {(WD3-WD2){1'b0}}, up_data[i*WD2+: WD2] };
@@ -293,3 +293,4 @@ module accumulate_controller#(
 	assign cnt_zero = ena & (w_cnt==0);
 
 endmodule
+

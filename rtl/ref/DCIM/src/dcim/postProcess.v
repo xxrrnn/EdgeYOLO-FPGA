@@ -14,7 +14,7 @@ module postProcess#(
 
 	input [2: 0] mode,
 	input [ACC_UBD_WD-1: 0] acc,
-
+	
 	input  up_valid,
 	output up_ready,
 	output dn_valid,
