@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "../../ref/DCIM/src/inc/para.v"
+`include "para.v"
 
 // ============================================================================
 // tb_DCIM_Macro - 完整测试平台

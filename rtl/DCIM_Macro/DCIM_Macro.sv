@@ -12,11 +12,19 @@
 //   - 权重：4-bit nibble，存储在 IBUF[0:7]（共 8×128=1024 bit = 16×16×4 bit）
 //   - INT8 激活：16×8=128-bit，每行 1 次 IBUF 读取
 //   - INT16 激活：16×16=256-bit，每行 2 次 IBUF 读取
-//   - 输出：16×16=256-bit，每行 2 次 OBUF 写入
 //
-// 物理通道映射：
-//   - INT8：8 个逻辑通道，逻辑通道 i → 物理通道 (i*2+2)
-//   - INT16：4 个逻辑通道，逻辑通道 i → 物理通道 (i*4)，结果为 32-bit
+// 输出格式（统一为连续 INT32）：
+//   - INT8：8 个逻辑通道，每个通道 WD3-bit 符号扩展到 32-bit
+//           逻辑通道 i → 物理通道 (i*2+2)
+//           输出：8 × 32-bit = 256-bit = 2 × 128-bit OBUF 写入
+//   - INT16：4 个逻辑通道，每个通道 32-bit
+//           逻辑通道 i → 物理通道 (i*4, i*4+1)，32-bit = {phys[i*4+1], phys[i*4]}
+//           输出：4 × 32-bit = 128-bit = 1 × 128-bit OBUF 写入
+//
+// 时序优化：
+//   - 输出数据路径采用 3 级流水线：锁存 → 提取/打包 → 写入 OBUF
+//   - 高扇出信号添加 max_fanout 约束
+//   - 关键寄存器添加 KEEP 属性防止优化
 //
 // ============================================================================
 
@@ -28,7 +36,7 @@ module DCIM_Macro #(
     parameter CH_OUT  = 16,         // 输出通道数
     parameter SRAM_DP = 128,        // SRAM 深度
     parameter CYCLE   = 8,          // 权重加载周期数
-    parameter ACC     = 16,         // 最大累加深度
+    parameter ACC     = 80,         // 最大累加深度（支持 K=1152 → 72 次累加）
     
     parameter BUF_ADDR_WIDTH = 12,  // IBUF/OBUF 地址位宽
     parameter BUF_DATA_WIDTH = 128, // IBUF/OBUF 数据位宽
@@ -37,8 +45,8 @@ module DCIM_Macro #(
     localparam ADDR_WD     = $clog2(SRAM_DP),
     localparam ACC_UBD_WD  = $clog2(ACC+1),
     localparam WD2         = 2*WD1 + $clog2(CH_IN),         // 12 bits
-    localparam WD3         = WD2 + $clog2(ACC),             // 16 bits
-    localparam OUT_WIDTH   = CH_OUT * WD3                   // 256 bits
+    localparam WD3         = WD2 + $clog2(ACC),             // 19 bits (ACC=80)
+    localparam OUT_WIDTH   = CH_OUT * WD3                   // 304 bits
 )(
     input  wire                          clk,
     input  wire                          rst_n,
@@ -146,7 +154,8 @@ module DCIM_Macro #(
     reg [2:0]                wait_cnt;           // BRAM 读延迟计数
     reg [BUF_DATA_WIDTH-1:0] act_buf_lo;         // INT16 低 128-bit 缓存
     
-    reg [2:0]                mode_reg;
+    // 配置寄存器 - 添加 max_fanout 约束减少扇出
+    (* max_fanout = 32 *) reg [2:0]                mode_reg;
     reg [ACC_UBD_WD-1:0]     acc_reg;
     reg [15:0]               num_rows_reg;
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr_reg;
@@ -155,7 +164,10 @@ module DCIM_Macro #(
     
     // 计算期望的输出数量
     wire [15:0] expected_outputs = (acc_reg == 0) ? num_rows_reg : (num_rows_reg / acc_reg);
-    wire is_int16 = (mode_reg == `MODE_INT16);
+    
+    // is_int16 信号复制以减少扇出
+    (* max_fanout = 16 *) reg is_int16_reg;
+    wire is_int16 = is_int16_reg;
     
     // 状态输出
     assign ready = (state == ST_IDLE);
@@ -211,6 +223,7 @@ module DCIM_Macro #(
             wei_base_addr_reg <= 0;
             act_base_addr_reg <= 0;
             out_base_addr_reg <= 0;
+            is_int16_reg <= 0;
         end else if (state == ST_IDLE && start) begin
             mode_reg <= mode;
             acc_reg <= acc_depth;
@@ -218,6 +231,7 @@ module DCIM_Macro #(
             wei_base_addr_reg <= wei_base_addr;
             act_base_addr_reg <= act_base_addr;
             out_base_addr_reg <= out_base_addr;
+            is_int16_reg <= (mode == `MODE_INT16);
         end
     end
     
@@ -357,41 +371,157 @@ module DCIM_Macro #(
     end
     
     // ========================================================================
-    // 结果保存：将 256-bit DCIM 输出分两次写入 128-bit OBUF
+    // 结果保存：提取逻辑通道数据，统一输出为连续 INT32 格式
     // ========================================================================
-    reg save_phase;                 // 0: 写低 128-bit，1: 写高 128-bit
-    reg [OUT_WIDTH-1:0] dcim_data_latch;
+    // INT8：8 个逻辑通道 × 32-bit = 256-bit → 2 次 OBUF 写入
+    // INT16：4 个逻辑通道 × 32-bit = 128-bit → 1 次 OBUF 写入
+    // ========================================================================
+    // 
+    // 流水线结构（3 级）：
+    //   Stage 0: 锁存 DCIM 输出 (dcim_data_latch)
+    //   Stage 1: 提取逻辑通道并打包 (int8_packed_reg / int16_packed_reg)
+    //   Stage 2: 写入 OBUF
+    //
+    // ========================================================================
     
+    // 写入阶段状态机
+    // 0: 等待 DCIM 输出
+    // 1: 锁存完成，准备提取
+    // 2: 提取完成，写第一块数据
+    // 3: (仅 INT8) 写第二块数据
+    reg [2:0] save_phase;
+    
+    // Stage 0: DCIM 输出锁存寄存器
+    (* keep = "true" *) reg [OUT_WIDTH-1:0] dcim_data_latch;
+    
+    // 从物理通道提取逻辑通道数据并转换为 INT32
+    // 使用寄存器版本的 phys_ch 以减少组合逻辑深度
+    (* keep = "true" *) reg signed [WD3-1:0] phys_ch_reg [0:CH_OUT-1];
+    
+    // Stage 1: 打包后的输出数据寄存器
+    (* keep = "true" *) reg [255:0] int8_packed_reg;
+    (* keep = "true" *) reg [127:0] int16_packed_reg;
+    
+    // INT8 逻辑通道提取结果（组合逻辑）
+    wire signed [31:0] int8_result [0:7];
+    wire signed [31:0] int16_result [0:3];
+    
+    // INT8 逻辑通道提取：逻辑通道 i → 物理通道 (i*2+2)
+    // 注意：逻辑通道 7 对应物理通道 16，超出范围，使用物理通道 14（与通道 6 相同）
+    // WD3-bit 符号扩展到 32-bit（若 WD3 > 32 则截断高位）
+    genvar gi;
+    generate
+        for (gi = 0; gi < 8; gi = gi + 1) begin : int8_extract
+            localparam PHYS_IDX_RAW = gi * 2 + 2;
+            localparam PHYS_IDX = (PHYS_IDX_RAW >= CH_OUT) ? (CH_OUT - 2) : PHYS_IDX_RAW;
+            if (WD3 <= 32) begin : sign_extend
+                assign int8_result[gi] = {{(32-WD3){phys_ch_reg[PHYS_IDX][WD3-1]}}, phys_ch_reg[PHYS_IDX]};
+            end else begin : truncate
+                assign int8_result[gi] = phys_ch_reg[PHYS_IDX][31:0];
+            end
+        end
+    endgenerate
+    
+    // INT16 逻辑通道提取：逻辑通道 i → 物理通道 (i*4, i*4+1, i*4+2, i*4+3)
+    // INT16 模式下，4 个物理通道组成一个 4*WD3 bit 的累加结果
+    // 取低 32-bit 作为最终结果
+    generate
+        for (gi = 0; gi < 4; gi = gi + 1) begin : int16_extract
+            localparam PHYS_BASE = gi * 4;
+            wire [4*WD3-1:0] int16_full = {phys_ch_reg[PHYS_BASE+3], phys_ch_reg[PHYS_BASE+2], 
+                                            phys_ch_reg[PHYS_BASE+1], phys_ch_reg[PHYS_BASE]};
+            assign int16_result[gi] = int16_full[31:0];
+        end
+    endgenerate
+    
+    // 组装输出数据（组合逻辑，用于下一级寄存器）
+    wire [255:0] int8_packed_comb = {int8_result[7], int8_result[6], int8_result[5], int8_result[4],
+                                      int8_result[3], int8_result[2], int8_result[1], int8_result[0]};
+    wire [127:0] int16_packed_comb = {int16_result[3], int16_result[2], int16_result[1], int16_result[0]};
+    
+    // ========================================================================
+    // 流水线状态机
+    // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             result_cnt <= 0;
             obuf_web <= 0; obuf_enb <= 0; obuf_addrb <= 0; obuf_dinb <= 0;
             save_phase <= 0;
             dcim_data_latch <= 0;
+            int8_packed_reg <= 0;
+            int16_packed_reg <= 0;
+            for (int i = 0; i < CH_OUT; i++) phys_ch_reg[i] <= 0;
         end else begin
             if (state == ST_IDLE) begin
                 result_cnt <= 0;
                 obuf_web <= 0; obuf_enb <= 0;
                 save_phase <= 0;
-            end else if (dcim_valid_out && dcim_ready_out && !save_phase) begin
-                // 第一阶段：锁存数据，写低 128-bit
-                dcim_data_latch <= dcim_data_out;
-                obuf_enb <= 1'b1;
-                obuf_web <= {(BUF_DATA_WIDTH/8){1'b1}};
-                obuf_addrb <= out_base_addr_reg + result_cnt * 2;
-                obuf_dinb <= dcim_data_out[127:0];
-                save_phase <= 1'b1;
-            end else if (save_phase) begin
-                // 第二阶段：写高 128-bit
-                obuf_enb <= 1'b1;
-                obuf_web <= {(BUF_DATA_WIDTH/8){1'b1}};
-                obuf_addrb <= out_base_addr_reg + result_cnt * 2 + 1;
-                obuf_dinb <= dcim_data_latch[255:128];
-                save_phase <= 0;
-                result_cnt <= result_cnt + 1;
             end else begin
-                obuf_enb <= 0;
-                obuf_web <= 0;
+                case (save_phase)
+                    3'd0: begin
+                        // Stage 0: 等待并锁存 DCIM 输出
+                        obuf_enb <= 0;
+                        obuf_web <= 0;
+                        if (dcim_valid_out && dcim_ready_out) begin
+                            dcim_data_latch <= dcim_data_out;
+                            save_phase <= 3'd1;
+                        end
+                    end
+                    
+                    3'd1: begin
+                        // Stage 1: 解包物理通道到寄存器
+                        for (int i = 0; i < CH_OUT; i++) begin
+                            phys_ch_reg[i] <= dcim_data_latch[i*WD3 +: WD3];
+                        end
+                        save_phase <= 3'd2;
+                        obuf_enb <= 0;
+                        obuf_web <= 0;
+                    end
+                    
+                    3'd2: begin
+                        // Stage 2: 打包并准备写入
+                        int8_packed_reg <= int8_packed_comb;
+                        int16_packed_reg <= int16_packed_comb;
+                        save_phase <= 3'd3;
+                        obuf_enb <= 0;
+                        obuf_web <= 0;
+                    end
+                    
+                    3'd3: begin
+                        // Stage 3: 写第一块数据到 OBUF
+                        obuf_enb <= 1'b1;
+                        obuf_web <= {(BUF_DATA_WIDTH/8){1'b1}};
+                        
+                        if (is_int16_reg) begin
+                            // INT16：写 128-bit（4 个 INT32），完成
+                            obuf_addrb <= out_base_addr_reg + result_cnt;
+                            obuf_dinb <= int16_packed_reg;
+                            save_phase <= 3'd0;
+                            result_cnt <= result_cnt + 1;
+                        end else begin
+                            // INT8：写低 128-bit（逻辑通道 0-3）
+                            obuf_addrb <= out_base_addr_reg + result_cnt * 2;
+                            obuf_dinb <= int8_packed_reg[127:0];
+                            save_phase <= 3'd4;  // 还需要写高 128-bit
+                        end
+                    end
+                    
+                    3'd4: begin
+                        // Stage 4（仅 INT8）：写高 128-bit（逻辑通道 4-7）
+                        obuf_enb <= 1'b1;
+                        obuf_web <= {(BUF_DATA_WIDTH/8){1'b1}};
+                        obuf_addrb <= out_base_addr_reg + result_cnt * 2 + 1;
+                        obuf_dinb <= int8_packed_reg[255:128];
+                        save_phase <= 3'd0;
+                        result_cnt <= result_cnt + 1;
+                    end
+                    
+                    default: begin
+                        obuf_enb <= 0;
+                        obuf_web <= 0;
+                        save_phase <= 3'd0;
+                    end
+                endcase
             end
         end
     end

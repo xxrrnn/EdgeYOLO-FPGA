@@ -280,7 +280,8 @@ module DCIM_Macro (
                 end
             endcase
 
-            validate_out_end_words = validate_dst_word_base + {1'b0, validate_out_rows};
+            validate_out_end_words = validate_dst_word_base +
+                         ({1'b0, validate_out_rows} * 33'(OBUF_WORDS_PER_ROW));
             if (!validate_error &&
                 ((validate_weight_end_words > IBUF_DEPTH_WORDS) ||
                  (validate_act_end_words > IBUF_DEPTH_WORDS) ||

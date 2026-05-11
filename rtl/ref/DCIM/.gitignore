@@ -1,7 +1,5 @@
+# 本目录仿真/EDA 产物（相对 rtl/ref/DCIM/）
 *.log
-*.rpt
-
-#Simulate
 *.fsdb
 *.vdb
 simv
@@ -9,25 +7,12 @@ novas.*
 ucli.key
 *.vcd
 *.mem
-*.txt
-
-#MacOS
-.DS_Store*
-
-#Synthesize
 *.svf
 alib*/
 report/
 work/
 output/
-
-#Spyglass
 spyglass/
-
-#macro
 macro/
-
-#Vim Swap Files
+.DS_Store*
 *.swp
-
-!requirements.txt
