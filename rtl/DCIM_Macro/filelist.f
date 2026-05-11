@@ -16,7 +16,7 @@
 ../../ref/DCIM/src/dcim/accumulateArray.v
 ../../ref/DCIM/src/dcim/sramWrap.v
 
-// SRAM 模型 (仿真用 SIM, FPGA 用 FPGA)
+// SRAM 模型（+define+SIM 与 +define+FPGA 均走 sramWrap → model_rf_bram；model_rf 保留供其它 bench）
 ../../ref/DCIM/src/model/model_rf.sv
 ../../ref/DCIM/src/model/model_rf_bram.sv
 

@@ -98,7 +98,7 @@ module DCIM_Macro #(
     // ========================================================================
     // DCIM 核心接口信号
     // ========================================================================
-    wire                     dcim_clr = 1'b0;
+    wire                     dcim_clr;
     wire                     dcim_ena = 1'b1;
     reg                      dcim_wr_wei;        // 写权重到 SRAM
     reg                      dcim_load_wei;      // 触发 ppCache 加载
@@ -106,6 +106,9 @@ module DCIM_Macro #(
     wire                     dcim_ready_wei;     // SRAM 写就绪
     reg  [ADDR_WD-1:0]       dcim_addr_wei;      // SRAM 地址
     reg  [SRAM_WD-1:0]       dcim_data_wei;      // SRAM 写数据
+    
+    // clr 信号：在 IDLE 状态时清除累加器，确保每次新计算从零开始
+    assign dcim_clr = (state == ST_IDLE);
     
     wire                     dcim_valid_out;     // 输出有效
     wire                     dcim_ready_out = 1'b1;  // 始终接收输出
