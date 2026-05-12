@@ -6,14 +6,15 @@
 
 | 文件 | 说明 |
 |------|------|
+| `tb/` | 仿真测试平台与 `Makefile`：`tb_DCIM_Array` / `tb_DCIM_Tile`、VCS 目标（`make` 也可在 `rtl/chip` 根目录执行，由根 `Makefile` 转发）。 |
 | `DCIM_Tile.sv` | 单颗计算 Tile：内部例化 `dcim` 等参考核，对外通过 **ready/valid** 访问 IBUF 读与 OBUF 写。 |
 | `DCIM_Array.sv` | 参数化 `NUM_TILES` 阵列：多路 Tile + `ibuf_rd_arbiter` + `obuf_wr_arbiter` + 各一颗 `ibuf`/`obuf`（双端口：Port A 给外部加载/读回，Port B 给 Tile）。 |
 | `ibuf_rd_arbiter.sv` | IBUF 读 Round-Robin 仲裁；将 Tile 侧握手转为单端口 `en/addr`，并按 `IBUF_RD_LATENCY` 在对应 Tile 上打 `rd_data_valid`。 |
 | `obuf_wr_arbiter.sv` | OBUF 写 Round-Robin 仲裁；单周期完成被选 Tile 的 `we/addr/din`。 |
-| `tb_DCIM_Array.sv` | 阵列级：`NUM_TILES=8`；Test 1–7 基础 ACC/行数；Test 8–13 对齐 YOLO `best.quant` 典型 im2col（acc=9/18/32/36/72 等）；`zero_pad_im2col_k` 处理 K 非 16 倍数（如 K=108→acc=7）。 |
-| `tb_DCIM_Tile.sv` | 单 Tile 大规模回归；经 `ibuf_rd_arbiter`/`obuf_wr_arbiter`（`NUM_TILES=1`）接 `ibuf`/`obuf`，与阵列侧握手一致。 |
+| `tb/tb_DCIM_Array.sv` | 阵列级：`NUM_TILES=8`；Test 1–7 基础 ACC/行数；Test 8–13 对齐 YOLO `best.quant` 典型 im2col（acc=9/18/32/36/72 等）；`zero_pad_im2col_k` 处理 K 非 16 倍数（如 K=108→acc=7）。 |
+| `tb/tb_DCIM_Tile.sv` | 单 Tile 大规模回归；经 `ibuf_rd_arbiter`/`obuf_wr_arbiter`（`NUM_TILES=1`）接 `ibuf`/`obuf`，与阵列侧握手一致。 |
 | `filelist.f` | VCS 文件列表：引用 `../../ref/DCIM/...`、`../../DCIM_Macro/...` 与本目录 RTL。 |
-| `Makefile` | `make test`：`tb_DCIM_Array`；`make test_tile`：`tb_DCIM_Tile`；`make test_all`：两者依次运行；可选 FSDB/Verdi。 |
+| `tb/Makefile` | `make test` / `make -C tb test`：`tb_DCIM_Array`；`make test_tile`：`tb_DCIM_Tile`；`make test_all`：两者依次运行；可选 FSDB/Verdi。根目录 `Makefile` 转发至 `tb/`。 |
 | `chip_defs.vh` | 片上系统级宏参数（本 Makefile 默认 flow 未包含进 filelist，供后续集成使用）。 |
 
 ## 硬件数据流（概念）
@@ -29,23 +30,23 @@
 - **工具**：Synopsys VCS（示例命令行含 `-full64`、`-kdb`、`-lca`）；波形使用 Verdi FSDB（测试台内调用 `$fsdbDumpvars`）。
 - **RTL 依赖**：`rtl/ref/DCIM`（`dcim.v`、`para.v` 等）、`rtl/DCIM_Macro/ibuf.v`、`obuf.v`。
 
-**务必通过本目录 `Makefile` 编译**：`make compile` 会先 `cd build` 再调用 VCS，`filelist.f` 内路径（如 `../../ref/...`、`../DCIM_Tile.sv`）是**相对于 `build/` 当前工作目录**解析的。若在 `rtl/chip` 下手动执行 VCS 且工作目录不是 `build/`，相对路径会错位。
+**务必通过 `tb/Makefile`（或 `rtl/chip` 根目录转发 Makefile）编译**：`make compile` 会先 `cd ../build`（即 `rtl/chip/build`）再调用 VCS，`filelist.f` 内路径（如 `../../ref/...`、`../DCIM_Tile.sv`）是**相对于 `rtl/chip/build/` 当前工作目录**解析的。若在其它目录手动执行 VCS，相对路径会错位。
 
 常用目标：
 
 ```bash
-cd rtl/chip
-make test       # tb_DCIM_Array
-make test_tile  # tb_DCIM_Tile（用时长）
-make test_all   # 依次跑上述两项
-make fsdb       # 阵列测试并生成 dcim_array.fsdb
-make verdi      # 在 build 目录打开 Verdi（需已有 fsdb）
+cd rtl/chip          # 或 cd rtl/chip/tb
+make test            # tb_DCIM_Array（根目录 Makefile 转发到 tb/）
+make test_tile       # tb_DCIM_Tile（用时长）
+make test_all        # 依次跑上述两项
+make fsdb            # 阵列测试并生成 dcim_array.fsdb
+make verdi           # 在 build 目录打开 Verdi（需已有 fsdb）
 make clean
 ```
 
 ## 测试说明
 
-### `tb_DCIM_Array.sv`
+### `tb/tb_DCIM_Array.sv`
 
 - 例化 `DCIM_Array`，默认 **`NUM_TILES=8`**，`IBUF_RD_LATENCY=4`（与 `ibuf` NBPIPE=1 及仲裁器一致）。
 - 地址：`wei` 区 Tile `t` 起始于 `t*CYCLE`；激活自 `ACT_BASE`；各 Tile 输出基址间隔 `OUT_STRIDE`，避免 OBUF 写重叠。
@@ -62,7 +63,7 @@ make clean
 - **单测超时**：`pulse_start_and_wait_done(loops_100k)` 表示最多等待约 `loops_100k×100000` 个时钟周期（避免 `repeat` 字面量触发 32 位 DCTL 截断）；`done` 先到则立即结束，不空转计数。全局仿真时长上限为 **`repeat(14400) #1000000000`**（约 4h 仿真时间，与 `timescale 1ns` 一致）。  
 - 每轮 `passed_tests` 仍用 `errs_before` 与 `total_errors` 比较。
 
-### `tb_DCIM_Tile.sv`
+### `tb/tb_DCIM_Tile.sv`
 
 - 覆盖 INT8/INT16、多种 ACC、边界与随机等大量用例。
 - 与 `DCIM_Array` 相同：`IBUF_RD_LATENCY=4` 且经单 Tile 仲裁器接 BRAM，避免直连 BRAM 时序与 DUT 状态机假设不一致。

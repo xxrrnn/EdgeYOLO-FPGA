@@ -11,7 +11,7 @@
 //
 // ============================================================================
 
-`include "../../ref/DCIM/src/inc/para.v"
+`include "../ref/DCIM/src/inc/para.v"
 
 module DCIM_Tile #(
     parameter WD1     = 4,

@@ -7,7 +7,7 @@
 // 所有 Tile 同步启动，通过 arbiter 共享 IBUF（读）和 OBUF（写）
 // ============================================================================
 
-`include "../../ref/DCIM/src/inc/para.v"
+`include "../ref/DCIM/src/inc/para.v"
 
 module DCIM_Array #(
     parameter NUM_TILES      = 16,
@@ -31,12 +31,13 @@ module DCIM_Array #(
     output wire                          done,       // 所有 Tile 完成
     output wire                          ready,      // 所有 Tile 就绪
     
-    // 配置接口（所有 Tile 共享 mode/acc/num_rows/act_base）
+    // 配置接口：
+    //   - 全阵列共享：mode / acc_depth / num_rows / act_base_addr（激活在 IBUF 中同一起点）
+    //   - 每 Tile 独立：wei_base_addrs、out_base_addrs（各 Tile 权重区与 OBUF 写回区基址）
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
     input  wire [31:0]                   num_rows,
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
-    // 每个 Tile 独立的权重和输出基地址
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0] wei_base_addrs,
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0] out_base_addrs,
     
