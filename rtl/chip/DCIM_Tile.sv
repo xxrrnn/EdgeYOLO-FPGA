@@ -42,7 +42,7 @@ module DCIM_Tile #(
     // 配置接口
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    input  wire [15:0]                   num_rows,
+    input  wire [31:0]                   num_rows,
     input  wire [BUF_ADDR_WIDTH-1:0]     wei_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,
@@ -115,10 +115,10 @@ module DCIM_Tile #(
     // ========================================================================
     // 计数器和配置寄存器
     // ========================================================================
-    reg [15:0]               row_cnt;
+    reg [31:0]               row_cnt;
     reg [3:0]                wei_load_cnt;
     reg [3:0]                ppcache_cnt;
-    reg [15:0]               result_cnt;
+    reg [31:0]               result_cnt;
     reg [BUF_DATA_WIDTH-1:0] act_buf_lo;
     reg [BUF_DATA_WIDTH-1:0] ibuf_data_latch;  // 锁存从IBUF返回的数据
     
@@ -135,12 +135,12 @@ module DCIM_Tile #(
     
     (* max_fanout = 32 *) reg [2:0] mode_reg;
     reg [ACC_UBD_WD-1:0]     acc_reg;
-    reg [15:0]               num_rows_reg;
+    reg [31:0]               num_rows_reg;
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] out_base_addr_reg;
     
-    wire [15:0] expected_outputs = (acc_reg == 0) ? num_rows_reg : (num_rows_reg / acc_reg);
+    wire [31:0] expected_outputs = (acc_reg == 0) ? num_rows_reg : (num_rows_reg / acc_reg);
     
     (* max_fanout = 16 *) reg is_int16_reg;
     wire is_int16 = is_int16_reg;

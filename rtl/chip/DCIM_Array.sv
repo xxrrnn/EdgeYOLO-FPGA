@@ -34,7 +34,7 @@ module DCIM_Array #(
     // 配置接口（所有 Tile 共享 mode/acc/num_rows/act_base）
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    input  wire [15:0]                   num_rows,
+    input  wire [31:0]                   num_rows,
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     // 每个 Tile 独立的权重和输出基地址
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0] wei_base_addrs,

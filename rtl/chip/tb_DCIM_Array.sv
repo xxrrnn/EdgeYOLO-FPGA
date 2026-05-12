@@ -5,7 +5,7 @@
 // tb_DCIM_Array - 多 Tile 测试平台
 // ============================================================================
 // NUM_TILES 可配置（默认 8）：各 Tile 独立权重基址与输出区，共享激活。
-// 覆盖多种 acc_depth 与行数，带 golden 比对。
+// Test 8–13：ONNX shape_inference 全分辨率 M×W×H；num_rows=M×acc(im2col)；RTL num_rows 已扩至 32 位，BUF 地址 19 位。
 // ============================================================================
 
 module tb_DCIM_Array;
@@ -17,7 +17,9 @@ module tb_DCIM_Array;
     localparam SRAM_DP      = 128;
     localparam CYCLE        = 8;
     localparam ACC          = 80;
-    localparam BUF_ADDR_WIDTH = 14;
+    // 与 ONNX 全分辨率一致：最大 num_rows = 160×160×7 = 179200（model.0 im2col）
+    localparam DUT_BUF_AW     = 19;
+    localparam BUF_ADDR_WIDTH = DUT_BUF_AW;
     localparam BUF_DATA_WIDTH = 128;
     localparam SRAM_WD      = CH_IN * CH_OUT * WD1 / CYCLE;
     localparam WD2          = 2 * WD1 + $clog2(CH_IN);
@@ -27,14 +29,14 @@ module tb_DCIM_Array;
 
     // IBUF：Tile t 权重占用 [t*CYCLE, (t+1)*CYCLE)；激活在 ACT_BASE 起
     localparam ACT_BASE     = NUM_TILES * CYCLE + 32;
-    // OBUF：各 Tile 输出区错开，避免写穿
-    localparam OUT_STRIDE   = 14'd256;
+    // OBUF：每 Tile 最大约 25600×2 字；65536 间隔避免 19 位地址重叠
+    localparam [BUF_ADDR_WIDTH-1:0] OUT_STRIDE = BUF_ADDR_WIDTH'(19'h10000);
 
     reg clk, rst_n, start;
     wire done, ready;
     reg [2:0] mode;
     reg [ACC_UBD_WD-1:0] acc_depth;
-    reg [15:0] num_rows;
+    reg [31:0] num_rows;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr;
     reg [NUM_TILES*BUF_ADDR_WIDTH-1:0] wei_base_addrs;
     reg [NUM_TILES*BUF_ADDR_WIDTH-1:0] out_base_addrs;
@@ -50,6 +52,19 @@ module tb_DCIM_Array;
     reg  [BUF_ADDR_WIDTH-1:0]   obuf_ext_addra;
     reg  [BUF_DATA_WIDTH-1:0]   obuf_ext_dina;
     wire [BUF_DATA_WIDTH-1:0]   obuf_ext_douta;
+
+    localparam integer MAX_ACT_ROWS    = 200000;
+    localparam integer MAX_OUT_GROUPS  = 28000;
+
+    reg signed [15:0] activation[0:MAX_ACT_ROWS-1][0:CH_IN-1];
+    reg signed [31:0] golden[0:NUM_TILES-1][0:MAX_OUT_GROUPS-1][0:7];
+    reg signed [3:0] weight_nibble[0:NUM_TILES-1][0:CH_IN-1][0:CH_OUT-1];
+
+    integer total_errors, total_tests, passed_tests;
+    integer seed;
+
+    initial clk = 0;
+    always #(T / 2) clk = ~clk;
 
     DCIM_Array #(
         .NUM_TILES(NUM_TILES),
@@ -85,18 +100,6 @@ module tb_DCIM_Array;
         .obuf_ext_dina(obuf_ext_dina),
         .obuf_ext_douta(obuf_ext_douta)
     );
-
-    initial clk = 0;
-    always #(T / 2) clk = ~clk;
-
-    localparam MAX_TEST_ROWS = 80;
-
-    reg signed [3:0] weight_nibble[0:NUM_TILES-1][0:CH_IN-1][0:CH_OUT-1];
-    reg signed [15:0] activation[0:MAX_TEST_ROWS-1][0:CH_IN-1];
-    reg signed [31:0] golden[0:NUM_TILES-1][0:MAX_TEST_ROWS-1][0:7];
-
-    integer total_errors, total_tests, passed_tests;
-    integer seed;
 
     task write_ibuf(input [BUF_ADDR_WIDTH-1:0] addr, input [BUF_DATA_WIDTH-1:0] data);
         begin
@@ -197,6 +200,26 @@ module tb_DCIM_Array;
         end
     endtask
 
+    // im2col：每个输出组占 t_acc 行激活；线性 K 下标 = (row % t_acc)*CH_IN + ch
+    // 当 K_raw 不整除 16*t_acc 时，将 K_raw..ceil16-1 对应位置置 0（与硬件 acc_depth 对齐）
+    task zero_pad_im2col_k(input integer rows, input integer t_acc, input integer k_raw);
+        integer row, ch, row_in_g, linear_k, k_eff;
+        begin
+            if (t_acc > 0) begin
+                k_eff = (k_raw <= 0) ? (t_acc * CH_IN) : k_raw;
+                if (k_eff > t_acc * CH_IN) k_eff = t_acc * CH_IN;
+                for (row = 0; row < rows; row = row + 1) begin
+                    row_in_g = row % t_acc;
+                    for (ch = 0; ch < CH_IN; ch = ch + 1) begin
+                        linear_k = row_in_g * CH_IN + ch;
+                        if (linear_k >= k_eff)
+                            activation[row][ch] = 0;
+                    end
+                end
+            end
+        end
+    endtask
+
     task compute_golden(input integer tile_id, input integer rows, input integer t_acc);
         integer row, out_ch, in_ch, acc_group, row_in_group;
         integer phys_ch_lo, phys_ch_hi;
@@ -207,7 +230,7 @@ module tb_DCIM_Array;
         begin
             acc_val         = (t_acc == 0) ? 1 : t_acc;
             num_acc_groups  = rows / acc_val;
-            for (row = 0; row < MAX_TEST_ROWS; row = row + 1)
+            for (row = 0; row < MAX_OUT_GROUPS; row = row + 1)
                 for (out_ch = 0; out_ch < 8; out_ch = out_ch + 1)
                     golden[tile_id][row][out_ch] = 0;
 
@@ -268,7 +291,9 @@ module tb_DCIM_Array;
         end
     endtask
 
-    task pulse_start_and_wait_done;
+    // 超时以「×100000 个时钟周期」计，避免 repeat 字面量超过 32 位有符号范围
+    task pulse_start_and_wait_done(input integer loops_100k);
+        integer idx;
         begin
             @(posedge clk);
             start <= 1'b1;
@@ -280,8 +305,9 @@ module tb_DCIM_Array;
                     wait (done);
                 end
                 begin
-                    repeat (20000000) @(posedge clk);
-                    $display("  [TIMEOUT]");
+                    for (idx = 0; idx < loops_100k; idx = idx + 1)
+                        repeat (100000) @(posedge clk);
+                    $display("  [TIMEOUT] loops_100k=%0d (~%0d cycles)", loops_100k, loops_100k * 100000);
                 end
             join_any
             disable fork;
@@ -373,7 +399,7 @@ module tb_DCIM_Array;
         acc_depth     = 0;
         num_rows      = 8;
         act_base_addr = ACT_BASE;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(8, 0, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
@@ -416,7 +442,7 @@ module tb_DCIM_Array;
         mode      = `MODE_INT8;
         acc_depth = 2;
         num_rows  = 8;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(8, 2, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
@@ -458,7 +484,7 @@ module tb_DCIM_Array;
         wait (ready);
         acc_depth = 4;
         num_rows  = 8;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(8, 4, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
@@ -499,7 +525,7 @@ module tb_DCIM_Array;
         wait (ready);
         acc_depth = 8;
         num_rows  = 8;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(8, 8, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
@@ -541,7 +567,7 @@ module tb_DCIM_Array;
         wait (ready);
         acc_depth = 4;
         num_rows  = 16;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(16, 4, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
@@ -580,7 +606,7 @@ module tb_DCIM_Array;
         wait (ready);
         acc_depth = 1;
         num_rows  = 8;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(8, 1, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
@@ -622,8 +648,259 @@ module tb_DCIM_Array;
         wait (ready);
         acc_depth = 18;
         num_rows  = 72;
-        pulse_start_and_wait_done();
+        pulse_start_and_wait_done(200);
         verify_all_tiles(72, 18, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // ------------------------------------------------------------------
+        // Test 8: ONNX 全分辨率 — model.3 输出 [1,64,40,40] → M=1600, K=288, acc=18, num_rows=M×acc=28800
+        // ------------------------------------------------------------------
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 8: im2col acc=18, num_rows=28800 (M=40×40=1600, model.3)");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 808080;
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1) begin
+                seed = 9000 * ti + 818181;
+                generate_weights(ti, 2);
+            end
+        end
+        seed = 828282;
+        generate_activations(1, 28800);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 28800);
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                compute_golden(ti, 28800, 18);
+        end
+
+        wait (ready);
+        acc_depth = 18;
+        num_rows  = 28800;
+        pulse_start_and_wait_done(120000);
+        verify_all_tiles(28800, 18, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // ------------------------------------------------------------------
+        // Test 9: ONNX 全分辨率 — model.5 输出 [1,128,20,20] → M=400, acc=36, num_rows=14400
+        // ------------------------------------------------------------------
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 9: im2col acc=36, num_rows=14400 (M=20×20=400, model.5)");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 909090;
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1) begin
+                seed = 12000 * ti + 919191;
+                generate_weights(ti, 2);
+            end
+        end
+        seed = 929292;
+        generate_activations(1, 14400);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 14400);
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                compute_golden(ti, 14400, 36);
+        end
+
+        wait (ready);
+        acc_depth = 36;
+        num_rows  = 14400;
+        pulse_start_and_wait_done(80000);
+        verify_all_tiles(14400, 36, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // ------------------------------------------------------------------
+        // Test 10: ONNX 全分辨率 — model.7 / model.21 输出 [1,256,10,10] → M=100, acc=72, num_rows=7200
+        // ------------------------------------------------------------------
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 10: im2col acc=72, num_rows=7200 (M=10×10=100, model.7/21)");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 1010101;
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1) begin
+                seed = 15000 * ti + 1020202;
+                generate_weights(ti, 2);
+            end
+        end
+        seed = 1030303;
+        generate_activations(1, 7200);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 7200);
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                compute_golden(ti, 7200, 72);
+        end
+
+        wait (ready);
+        acc_depth = 72;
+        num_rows  = 7200;
+        pulse_start_and_wait_done(40000);
+        verify_all_tiles(7200, 72, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // ------------------------------------------------------------------
+        // Test 11: ONNX 全分辨率 — model.9.cv2 输出 [1,256,10,10] → M=100, acc=32, num_rows=3200
+        // ------------------------------------------------------------------
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 11: im2col acc=32, num_rows=3200 (M=10×10=100, model.9.cv2)");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 1111111;
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1) begin
+                seed = 18000 * ti + 1121212;
+                generate_weights(ti, 2);
+            end
+        end
+        seed = 1131313;
+        generate_activations(1, 3200);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 3200);
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                compute_golden(ti, 3200, 32);
+        end
+
+        wait (ready);
+        acc_depth = 32;
+        num_rows  = 3200;
+        pulse_start_and_wait_done(25000);
+        verify_all_tiles(3200, 32, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // ------------------------------------------------------------------
+        // Test 12: ONNX 全分辨率 — model.0 输出 [1,16,160,160] → M=25600, K=108 pad→acc=7, num_rows=179200
+        // ------------------------------------------------------------------
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 12: K=108→acc=7 pad, num_rows=179200 (M=160×160=25600, model.0)");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 1212121;
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                generate_weights(ti, 1);
+        end
+        seed = 1232323;
+        generate_activations(1, 179200);
+        zero_pad_im2col_k(179200, 7, 108);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 179200);
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                compute_golden(ti, 179200, 7);
+        end
+
+        wait (ready);
+        acc_depth = 7;
+        num_rows  = 179200;
+        pulse_start_and_wait_done(2000000);
+        verify_all_tiles(179200, 7, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // ------------------------------------------------------------------
+        // Test 13: ONNX 全分辨率 — model.1 输出 [1,32,80,80] → M=6400, acc=9, num_rows=57600
+        // ------------------------------------------------------------------
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 13: im2col acc=9, num_rows=57600 (M=80×80=6400, model.1)");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 1313131;
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1) begin
+                seed = 20000 * ti + 1323232;
+                generate_weights(ti, 2);
+            end
+        end
+        seed = 1333333;
+        generate_activations(0, 57600);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 57600);
+        begin
+            integer ti;
+            for (ti = 0; ti < NUM_TILES; ti = ti + 1)
+                compute_golden(ti, 57600, 9);
+        end
+
+        wait (ready);
+        acc_depth = 9;
+        num_rows  = 57600;
+        pulse_start_and_wait_done(250000);
+        verify_all_tiles(57600, 9, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
             passed_tests = passed_tests + 1;
@@ -652,16 +929,16 @@ module tb_DCIM_Array;
         $finish;
     end
 
+    // Wall-clock style cap: 14400 * 1s sim time = 4h (timescale 1ns: #1_000_000_000 = 1s)
     initial begin
-        #500000000;
+        repeat (14400) #1000000000;
         $display("GLOBAL TIMEOUT!");
         $finish;
     end
 
     initial begin
         $fsdbDumpfile("dcim_array.fsdb");
-        $fsdbDumpvars(0, tb_DCIM_Array, "+all");
-        $fsdbDumpMDA();
+        $fsdbDumpvars(1, tb_DCIM_Array);
     end
 
 endmodule

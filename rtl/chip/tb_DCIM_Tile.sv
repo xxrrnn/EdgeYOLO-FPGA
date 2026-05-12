@@ -22,7 +22,7 @@ module tb_DCIM_Tile;
     wire done, ready;
     reg [2:0] mode;
     reg [6:0] acc_depth;
-    reg [15:0] num_rows;
+    reg [31:0] num_rows;
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr, act_base_addr, out_base_addr;
     
     localparam IBUF_RD_LATENCY = 4;  // 与 DCIM_Array / ibuf NBPIPE=1 一致
