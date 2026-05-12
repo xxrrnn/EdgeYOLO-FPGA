@@ -1,101 +1,85 @@
 `timescale 1ns / 1ps
 
 // ============================================================================
-// DCIM_Macro - 基于 DCIM 核心的矩阵乘法加速器
+// DCIM_Tile - 单个 DCIM 计算 Tile，使用 ready/valid 握手协议访问外部 IBUF/OBUF
 // ============================================================================
 //
-// 功能：封装 DCIM 核心，提供简单的 BRAM 接口进行矩阵乘法计算
-//       Y = X × W，其中 X 是激活矩阵，W 是权重矩阵
-//
-// 数据格式：
-//   - IBUF/OBUF 位宽：128-bit
-//   - 权重：4-bit nibble，存储在 IBUF[0:7]（共 8×128=1024 bit = 16×16×4 bit）
-//   - INT8 激活：16×8=128-bit，每行 1 次 IBUF 读取
-//   - INT16 激活：16×16=256-bit，每行 2 次 IBUF 读取
-//
-// 输出格式（统一为连续 INT32）：
-//   - INT8：8 个逻辑通道，每个通道 WD3-bit 符号扩展到 32-bit
-//           逻辑通道 i → 物理通道 (i*2+2)
-//           输出：8 × 32-bit = 256-bit = 2 × 128-bit OBUF 写入
-//   - INT16：4 个逻辑通道，每个通道 32-bit
-//           逻辑通道 i → 物理通道 (i*4, i*4+1)，32-bit = {phys[i*4+1], phys[i*4]}
-//           输出：4 × 32-bit = 128-bit = 1 × 128-bit OBUF 写入
-//
-// 时序优化：
-//   - 输出数据路径采用 3 级流水线：锁存 → 提取/打包 → 写入 OBUF
-//   - 高扇出信号添加 max_fanout 约束
-//   - 关键寄存器添加 KEEP 属性防止优化
+// 接口协议：
+//   - IBUF 读：Tile 发出 (rd_valid, rd_addr)，等待 rd_ready 握手，
+//              数据通过 (rd_data_valid, rd_data) 返回
+//   - OBUF 写：Tile 发出 (wr_valid, wr_addr, wr_data, wr_strb)，等待 wr_ready 握手
 //
 // ============================================================================
 
 `include "../../ref/DCIM/src/inc/para.v"
 
 module DCIM_Tile #(
-    parameter WD1     = 4,          // 权重位宽（nibble）
-    parameter CH_IN   = 16,         // 输入通道数
-    parameter CH_OUT  = 16,         // 输出通道数
-    parameter SRAM_DP = 128,        // SRAM 深度
-    parameter CYCLE   = 8,          // 权重加载周期数
-    parameter ACC     = 80,         // 最大累加深度（支持 K=1152 → 72 次累加）
+    parameter WD1     = 4,
+    parameter CH_IN   = 16,
+    parameter CH_OUT  = 16,
+    parameter SRAM_DP = 128,
+    parameter CYCLE   = 8,
+    parameter ACC     = 80,
     
-    parameter BUF_ADDR_WIDTH = 12,  // IBUF/OBUF 地址位宽
-    parameter BUF_DATA_WIDTH = 128, // IBUF/OBUF 数据位宽
+    parameter BUF_ADDR_WIDTH = 14,
+    parameter BUF_DATA_WIDTH = 128,
     
-    localparam SRAM_WD     = CH_IN * CH_OUT * WD1 / CYCLE,  // 128 bits
+    localparam SRAM_WD     = CH_IN * CH_OUT * WD1 / CYCLE,
     localparam ADDR_WD     = $clog2(SRAM_DP),
     localparam ACC_UBD_WD  = $clog2(ACC+1),
-    localparam WD2         = 2*WD1 + $clog2(CH_IN),         // 12 bits
-    localparam WD3         = WD2 + $clog2(ACC),             // 19 bits (ACC=80)
-    localparam OUT_WIDTH   = CH_OUT * WD3                   // 304 bits
+    localparam WD2         = 2*WD1 + $clog2(CH_IN),
+    localparam WD3         = WD2 + $clog2(ACC),
+    localparam OUT_WIDTH   = CH_OUT * WD3
 )(
     input  wire                          clk,
     input  wire                          rst_n,
     
     // 控制接口
-    input  wire                          start,      // 启动信号（单周期脉冲）
-    output wire                          done,       // 完成信号
-    output wire                          ready,      // 就绪信号（可接收新任务）
+    input  wire                          start,
+    output wire                          done,
+    output wire                          ready,
     
     // 配置接口
-    input  wire [2:0]                    mode,       // 计算模式：MODE_INT8 或 MODE_INT16
-    input  wire [ACC_UBD_WD-1:0]         acc_depth,  // 累加深度（0=不累加，N=每N行累加一次）
-    input  wire [15:0]                   num_rows,   // 激活矩阵行数
-    input  wire [BUF_ADDR_WIDTH-1:0]     wei_base_addr,  // 权重在 IBUF 中的起始地址
-    input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,  // 激活在 IBUF 中的起始地址
-    input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,  // 输出在 OBUF 中的起始地址
+    input  wire [2:0]                    mode,
+    input  wire [ACC_UBD_WD-1:0]         acc_depth,
+    input  wire [15:0]                   num_rows,
+    input  wire [BUF_ADDR_WIDTH-1:0]     wei_base_addr,
+    input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
+    input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,
     
-    // 外部 IBUF 接口（读取权重和激活数据）
-    output reg  [BUF_ADDR_WIDTH-1:0]     ibuf_addr,
-    output reg                           ibuf_en,
-    input  wire [BUF_DATA_WIDTH-1:0]     ibuf_dout,
+    // IBUF 读接口 (ready/valid)
+    output reg                           ibuf_rd_valid,
+    input  wire                          ibuf_rd_ready,
+    output reg  [BUF_ADDR_WIDTH-1:0]     ibuf_rd_addr,
+    input  wire                          ibuf_rd_data_valid,
+    input  wire [BUF_DATA_WIDTH-1:0]     ibuf_rd_data,
     
-    // 外部 OBUF 接口（写入计算结果）
-    output reg  [BUF_DATA_WIDTH/8-1:0]   obuf_we,
-    output reg  [BUF_ADDR_WIDTH-1:0]     obuf_addr,
-    output reg  [BUF_DATA_WIDTH-1:0]     obuf_din,
-    output reg                           obuf_en
+    // OBUF 写接口 (ready/valid)
+    output reg                           obuf_wr_valid,
+    input  wire                          obuf_wr_ready,
+    output reg  [BUF_ADDR_WIDTH-1:0]     obuf_wr_addr,
+    output reg  [BUF_DATA_WIDTH-1:0]     obuf_wr_data,
+    output reg  [BUF_DATA_WIDTH/8-1:0]   obuf_wr_strb
 );
 
     // ========================================================================
     // 状态机定义
     // ========================================================================
     typedef enum logic [3:0] {
-        ST_IDLE,            // 空闲，等待启动
-        ST_LOAD_WEI_ADDR,   // 设置 IBUF 读地址（权重）
-        ST_LOAD_WEI_WAIT,   // 等待 IBUF 读延迟
-        ST_LOAD_WEI,        // 将权重写入 DCIM SRAM
-        ST_PREP_PPCACHE,    // 准备 ppCache 加载（设置 base_addr=0）
-        ST_LOAD_PPCACHE,    // 触发 ppCache 从 SRAM 加载权重
-        ST_SWAP_PPCACHE,    // 触发 swap 切换双缓冲
-        ST_LOAD_ACT_ADDR,   // 设置 IBUF 读地址（激活）
-        ST_LOAD_ACT_WAIT,   // 等待 IBUF 读延迟
-        ST_LOAD_ACT,        // 读取激活数据（INT8 完成，INT16 第一次）
-        ST_LOAD_ACT2_ADDR,  // INT16：设置第二次读地址
-        ST_LOAD_ACT2_WAIT,  // INT16：等待第二次读延迟
-        ST_LOAD_ACT2,       // INT16：读取高 128-bit
-        ST_COMPUTE,         // 发送激活数据到 DCIM
-        ST_WAIT_RESULT,     // 等待所有结果写入 OBUF
-        ST_DONE             // 完成
+        ST_IDLE,
+        ST_LOAD_WEI_REQ,    // 发出权重读请求，等待 ready 握手
+        ST_LOAD_WEI_RESP,   // 等待 data_valid 返回
+        ST_LOAD_WEI_DONE,   // 将数据写入 DCIM SRAM
+        ST_PREP_PPCACHE,
+        ST_LOAD_PPCACHE,
+        ST_SWAP_PPCACHE,
+        ST_LOAD_ACT_REQ,    // 发出激活读请求，等待 ready 握手
+        ST_LOAD_ACT_RESP,   // 等待 data_valid 返回
+        ST_LOAD_ACT2_REQ,   // INT16 第二次读请求
+        ST_LOAD_ACT2_RESP,  // INT16 第二次等待返回
+        ST_COMPUTE,
+        ST_WAIT_RESULT,
+        ST_DONE
     } state_t;
     
     state_t state, next_state;
@@ -105,58 +89,72 @@ module DCIM_Tile #(
     // ========================================================================
     wire                     dcim_clr;
     wire                     dcim_ena = 1'b1;
-    reg                      dcim_wr_wei;        // 写权重到 SRAM
-    reg                      dcim_load_wei;      // 触发 ppCache 加载
-    reg                      dcim_swap_wei;      // 触发双缓冲切换
-    wire                     dcim_ready_wei;     // SRAM 写就绪
-    reg  [ADDR_WD-1:0]       dcim_addr_wei;      // SRAM 地址
-    reg  [SRAM_WD-1:0]       dcim_data_wei;      // SRAM 写数据
+    reg                      dcim_wr_wei;
+    reg                      dcim_load_wei;
+    reg                      dcim_swap_wei;
+    wire                     dcim_ready_wei;
+    reg  [ADDR_WD-1:0]       dcim_addr_wei;
+    reg  [SRAM_WD-1:0]       dcim_data_wei;
     
-    // clr 信号：在 IDLE 状态时清除累加器，确保每次新计算从零开始
     assign dcim_clr = (state == ST_IDLE);
     
-    wire                     dcim_valid_out;     // 输出有效
-    wire                     dcim_ready_out = 1'b1;  // 始终接收输出
-    wire [OUT_WIDTH-1:0]     dcim_data_out;      // 256-bit 输出
+    wire                     dcim_valid_out;
+    wire                     dcim_ready_out = 1'b1;
+    wire [OUT_WIDTH-1:0]     dcim_data_out;
     
     // ========================================================================
     // 激活预处理接口信号
     // ========================================================================
-    reg                      conv_valid;         // 原始激活有效
-    wire                     conv_ready;         // 预处理器就绪
-    reg  [CH_IN*16-1:0]      conv_data;          // 256-bit 原始激活
-    wire                     dcim_valid_act;     // nibble 流有效
-    wire                     dcim_ready_act;     // DCIM 就绪
-    wire [CH_IN*WD1-1:0]     dcim_data_act;      // 64-bit nibble 流
+    reg                      conv_valid;
+    wire                     conv_ready;
+    reg  [CH_IN*16-1:0]      conv_data;
+    wire                     dcim_valid_act;
+    wire                     dcim_ready_act;
+    wire [CH_IN*WD1-1:0]     dcim_data_act;
     
     // ========================================================================
     // 计数器和配置寄存器
     // ========================================================================
-    reg [15:0]               row_cnt;            // 当前处理的行号
-    reg [3:0]                wei_load_cnt;       // 权重加载计数（0-7）
-    reg [3:0]                ppcache_cnt;        // ppCache 加载计数
-    reg [15:0]               result_cnt;         // 已保存的结果数
-    reg [2:0]                wait_cnt;           // BRAM 读延迟计数
-    reg [BUF_DATA_WIDTH-1:0] act_buf_lo;         // INT16 低 128-bit 缓存
+    reg [15:0]               row_cnt;
+    reg [3:0]                wei_load_cnt;
+    reg [3:0]                ppcache_cnt;
+    reg [15:0]               result_cnt;
+    reg [BUF_DATA_WIDTH-1:0] act_buf_lo;
+    reg [BUF_DATA_WIDTH-1:0] ibuf_data_latch;  // 锁存从IBUF返回的数据
     
-    // 配置寄存器 - 添加 max_fanout 约束减少扇出
-    (* max_fanout = 32 *) reg [2:0]                mode_reg;
+    // ========================================================================
+    // start 上升沿检测（支持电平输入）
+    // ========================================================================
+    reg start_d;
+    wire start_pulse = start && !start_d;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) start_d <= 0;
+        else start_d <= start;
+    end
+    
+    (* max_fanout = 32 *) reg [2:0] mode_reg;
     reg [ACC_UBD_WD-1:0]     acc_reg;
     reg [15:0]               num_rows_reg;
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] out_base_addr_reg;
     
-    // 计算期望的输出数量
     wire [15:0] expected_outputs = (acc_reg == 0) ? num_rows_reg : (num_rows_reg / acc_reg);
     
-    // is_int16 信号复制以减少扇出
     (* max_fanout = 16 *) reg is_int16_reg;
     wire is_int16 = is_int16_reg;
     
-    // 状态输出
     assign ready = (state == ST_IDLE);
-    assign done  = (state == ST_DONE);
+    
+    // done 信号：置位后保持，直到下次启动时清除
+    reg done_reg;
+    assign done = done_reg;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) done_reg <= 0;
+        else if (state == ST_DONE) done_reg <= 1'b1;
+        else if (state == ST_IDLE && start_pulse) done_reg <= 1'b0;
+    end
     
     // ========================================================================
     // 状态机：状态转换
@@ -169,31 +167,32 @@ module DCIM_Tile #(
     always_comb begin
         next_state = state;
         case (state)
-            ST_IDLE:          if (start) next_state = ST_LOAD_WEI_ADDR;
-            ST_LOAD_WEI_ADDR: next_state = ST_LOAD_WEI_WAIT;
-            ST_LOAD_WEI_WAIT: if (wait_cnt >= 3) next_state = ST_LOAD_WEI;
-            ST_LOAD_WEI: begin
+            ST_IDLE:           if (start_pulse) next_state = ST_LOAD_WEI_REQ;
+            ST_LOAD_WEI_REQ:   if (ibuf_rd_valid && ibuf_rd_ready) next_state = ST_LOAD_WEI_RESP;
+            ST_LOAD_WEI_RESP:  if (ibuf_rd_data_valid) next_state = ST_LOAD_WEI_DONE;
+            ST_LOAD_WEI_DONE: begin
                 if (wei_load_cnt >= CYCLE - 1) next_state = ST_PREP_PPCACHE;
-                else next_state = ST_LOAD_WEI_ADDR;
+                else next_state = ST_LOAD_WEI_REQ;
             end
-            ST_PREP_PPCACHE:  next_state = ST_LOAD_PPCACHE;
-            ST_LOAD_PPCACHE:  if (ppcache_cnt >= CYCLE + 2) next_state = ST_SWAP_PPCACHE;
-            ST_SWAP_PPCACHE:  next_state = ST_LOAD_ACT_ADDR;
-            ST_LOAD_ACT_ADDR: next_state = ST_LOAD_ACT_WAIT;
-            ST_LOAD_ACT_WAIT: if (wait_cnt >= 3) next_state = ST_LOAD_ACT;
-            ST_LOAD_ACT:      next_state = is_int16 ? ST_LOAD_ACT2_ADDR : ST_COMPUTE;
-            ST_LOAD_ACT2_ADDR: next_state = ST_LOAD_ACT2_WAIT;
-            ST_LOAD_ACT2_WAIT: if (wait_cnt >= 3) next_state = ST_LOAD_ACT2;
-            ST_LOAD_ACT2:     next_state = ST_COMPUTE;
+            ST_PREP_PPCACHE:   next_state = ST_LOAD_PPCACHE;
+            ST_LOAD_PPCACHE:   if (ppcache_cnt >= CYCLE + 2) next_state = ST_SWAP_PPCACHE;
+            ST_SWAP_PPCACHE:   next_state = ST_LOAD_ACT_REQ;
+            ST_LOAD_ACT_REQ:   if (ibuf_rd_valid && ibuf_rd_ready) next_state = ST_LOAD_ACT_RESP;
+            ST_LOAD_ACT_RESP:  if (ibuf_rd_data_valid) begin
+                if (is_int16) next_state = ST_LOAD_ACT2_REQ;
+                else next_state = ST_COMPUTE;
+            end
+            ST_LOAD_ACT2_REQ:  if (ibuf_rd_valid && ibuf_rd_ready) next_state = ST_LOAD_ACT2_RESP;
+            ST_LOAD_ACT2_RESP: if (ibuf_rd_data_valid) next_state = ST_COMPUTE;
             ST_COMPUTE: begin
                 if (conv_valid && conv_ready) begin
                     if (row_cnt >= num_rows_reg - 1) next_state = ST_WAIT_RESULT;
-                    else next_state = ST_LOAD_ACT_ADDR;
+                    else next_state = ST_LOAD_ACT_REQ;
                 end
             end
-            ST_WAIT_RESULT:   if (result_cnt >= expected_outputs) next_state = ST_DONE;
-            ST_DONE:          next_state = ST_IDLE;
-            default:          next_state = ST_IDLE;
+            ST_WAIT_RESULT:    if (result_cnt >= expected_outputs) next_state = ST_DONE;
+            ST_DONE:           next_state = ST_IDLE;
+            default:           next_state = ST_IDLE;
         endcase
     end
     
@@ -209,7 +208,7 @@ module DCIM_Tile #(
             act_base_addr_reg <= 0;
             out_base_addr_reg <= 0;
             is_int16_reg <= 0;
-        end else if (state == ST_IDLE && start) begin
+        end else if (state == ST_IDLE && start_pulse) begin
             mode_reg <= mode;
             acc_reg <= acc_depth;
             num_rows_reg <= num_rows;
@@ -225,116 +224,110 @@ module DCIM_Tile #(
     // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0; wait_cnt <= 0;
+            wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
             dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
             dcim_addr_wei <= 0; dcim_data_wei <= 0;
             conv_valid <= 0; conv_data <= 0;
-            ibuf_addr <= 0; ibuf_en <= 0;
+            ibuf_rd_valid <= 0; ibuf_rd_addr <= 0;
+            ibuf_data_latch <= 0;
             act_buf_lo <= 0;
         end else begin
             case (state)
-                // ============================================================
-                // 空闲状态：复位所有计数器
-                // ============================================================
                 ST_IDLE: begin
-                    wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0; wait_cnt <= 0;
+                    wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
                     dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
-                    conv_valid <= 0; ibuf_en <= 0;
+                    conv_valid <= 0; ibuf_rd_valid <= 0;
                 end
                 
-                // ============================================================
-                // 权重加载阶段：从 IBUF 读取权重，写入 DCIM SRAM
-                // ============================================================
-                ST_LOAD_WEI_ADDR: begin
-                    ibuf_addr <= wei_base_addr_reg + wei_load_cnt;
-                    ibuf_en <= 1'b1;
+                // ==============================================================
+                // 权重加载：发出读请求 → 等待数据 → 写入SRAM → 循环
+                // ==============================================================
+                ST_LOAD_WEI_REQ: begin
+                    ibuf_rd_valid <= 1'b1;
+                    ibuf_rd_addr <= wei_base_addr_reg + wei_load_cnt;
                     dcim_wr_wei <= 0;
-                    wait_cnt <= 0;
+                    if (ibuf_rd_valid && ibuf_rd_ready)
+                        ibuf_rd_valid <= 1'b0;
                 end
                 
-                ST_LOAD_WEI_WAIT: begin
-                    ibuf_en <= 0;
-                    wait_cnt <= wait_cnt + 1;
+                ST_LOAD_WEI_RESP: begin
+                    ibuf_rd_valid <= 0;
+                    if (ibuf_rd_data_valid)
+                        ibuf_data_latch <= ibuf_rd_data;
                 end
                 
-                ST_LOAD_WEI: begin
+                ST_LOAD_WEI_DONE: begin
                     dcim_wr_wei <= 1'b1;
                     dcim_addr_wei <= wei_load_cnt;
-                    dcim_data_wei <= ibuf_dout;
-                    if (dcim_ready_wei) wei_load_cnt <= wei_load_cnt + 1;
+                    dcim_data_wei <= ibuf_data_latch;
+                    wei_load_cnt <= wei_load_cnt + 1;
                 end
                 
-                // ============================================================
-                // ppCache 加载阶段：将 SRAM 中的权重加载到 ppCache
-                // ============================================================
+                // ==============================================================
+                // ppCache 加载阶段
+                // ==============================================================
                 ST_PREP_PPCACHE: begin
                     dcim_wr_wei <= 0;
-                    dcim_addr_wei <= 0;  // 设置 base_addr = 0
+                    dcim_addr_wei <= 0;
                     dcim_load_wei <= 0;
                 end
                 
                 ST_LOAD_PPCACHE: begin
                     dcim_wr_wei <= 0;
-                    dcim_load_wei <= (ppcache_cnt == 0);  // 只在第一个周期触发
+                    dcim_load_wei <= (ppcache_cnt == 0);
                     ppcache_cnt <= ppcache_cnt + 1;
                 end
                 
                 ST_SWAP_PPCACHE: begin
                     dcim_load_wei <= 0;
-                    dcim_swap_wei <= 1'b1;  // 切换双缓冲，使新权重生效
+                    dcim_swap_wei <= 1'b1;
                 end
                 
-                // ============================================================
-                // 激活加载阶段：从 IBUF 读取激活数据
-                // ============================================================
-                ST_LOAD_ACT_ADDR: begin
+                // ==============================================================
+                // 激活加载：发出读请求 → 等待数据
+                // ==============================================================
+                ST_LOAD_ACT_REQ: begin
                     dcim_swap_wei <= 0;
                     dcim_load_wei <= 0;
-                    // INT8: 每行 1 次读取，INT16: 每行 2 次读取
-                    ibuf_addr <= is_int16 ? (act_base_addr_reg + row_cnt * 2) 
-                                           : (act_base_addr_reg + row_cnt);
-                    ibuf_en <= 1'b1;
+                    ibuf_rd_valid <= 1'b1;
+                    ibuf_rd_addr <= is_int16 ? (act_base_addr_reg + row_cnt * 2)
+                                             : (act_base_addr_reg + row_cnt);
                     conv_valid <= 0;
-                    wait_cnt <= 0;
+                    if (ibuf_rd_valid && ibuf_rd_ready)
+                        ibuf_rd_valid <= 1'b0;
                 end
                 
-                ST_LOAD_ACT_WAIT: begin
-                    ibuf_en <= 0;
-                    wait_cnt <= wait_cnt + 1;
-                end
-                
-                ST_LOAD_ACT: begin
-                    if (is_int16) begin
-                        // INT16: 缓存低 128-bit，等待高 128-bit
-                        act_buf_lo <= ibuf_dout;
-                    end else begin
-                        // INT8: 将 8-bit 符号扩展到 16-bit
-                        for (int ch = 0; ch < CH_IN; ch++) begin
-                            conv_data[ch*16 +: 16] <= {{8{ibuf_dout[ch*8 + 7]}}, ibuf_dout[ch*8 +: 8]};
+                ST_LOAD_ACT_RESP: begin
+                    ibuf_rd_valid <= 0;
+                    if (ibuf_rd_data_valid) begin
+                        if (is_int16) begin
+                            act_buf_lo <= ibuf_rd_data;
+                        end else begin
+                            for (int ch = 0; ch < CH_IN; ch++) begin
+                                conv_data[ch*16 +: 16] <= {{8{ibuf_rd_data[ch*8 + 7]}}, ibuf_rd_data[ch*8 +: 8]};
+                            end
                         end
                     end
                 end
                 
                 // INT16 第二次读取
-                ST_LOAD_ACT2_ADDR: begin
-                    ibuf_addr <= act_base_addr_reg + row_cnt * 2 + 1;
-                    ibuf_en <= 1'b1;
-                    wait_cnt <= 0;
+                ST_LOAD_ACT2_REQ: begin
+                    ibuf_rd_valid <= 1'b1;
+                    ibuf_rd_addr <= act_base_addr_reg + row_cnt * 2 + 1;
+                    if (ibuf_rd_valid && ibuf_rd_ready)
+                        ibuf_rd_valid <= 1'b0;
                 end
                 
-                ST_LOAD_ACT2_WAIT: begin
-                    ibuf_en <= 0;
-                    wait_cnt <= wait_cnt + 1;
+                ST_LOAD_ACT2_RESP: begin
+                    ibuf_rd_valid <= 0;
+                    if (ibuf_rd_data_valid) begin
+                        conv_data <= {ibuf_rd_data, act_buf_lo};
+                    end
                 end
                 
-                ST_LOAD_ACT2: begin
-                    // INT16: 组合 256-bit（高 128-bit 在高位）
-                    conv_data <= {ibuf_dout, act_buf_lo};
-                end
-                
-                // ============================================================
-                // 计算阶段：发送激活数据到预处理器
-                // ============================================================
+                // ==============================================================
+                // 计算阶段
+                // ==============================================================
                 ST_COMPUTE: begin
                     conv_valid <= 1'b1;
                     if (conv_valid && conv_ready) begin
@@ -349,51 +342,24 @@ module DCIM_Tile #(
                 
                 default: begin
                     dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
-                    conv_valid <= 0; ibuf_en <= 0;
+                    conv_valid <= 0; ibuf_rd_valid <= 0;
                 end
             endcase
         end
     end
     
     // ========================================================================
-    // 结果保存：提取逻辑通道数据，统一输出为连续 INT32 格式
+    // 结果保存：OBUF 写入（使用 ready/valid 握手）
     // ========================================================================
-    // INT8：8 个逻辑通道 × 32-bit = 256-bit → 2 次 OBUF 写入
-    // INT16：4 个逻辑通道 × 32-bit = 128-bit → 1 次 OBUF 写入
-    // ========================================================================
-    // 
-    // 流水线结构（3 级）：
-    //   Stage 0: 锁存 DCIM 输出 (dcim_data_latch)
-    //   Stage 1: 提取逻辑通道并打包 (int8_packed_reg / int16_packed_reg)
-    //   Stage 2: 写入 OBUF
-    //
-    // ========================================================================
-    
-    // 写入阶段状态机
-    // 0: 等待 DCIM 输出
-    // 1: 锁存完成，准备提取
-    // 2: 提取完成，写第一块数据
-    // 3: (仅 INT8) 写第二块数据
     reg [2:0] save_phase;
-    
-    // Stage 0: DCIM 输出锁存寄存器
     (* keep = "true" *) reg [OUT_WIDTH-1:0] dcim_data_latch;
-    
-    // 从物理通道提取逻辑通道数据并转换为 INT32
-    // 使用寄存器版本的 phys_ch 以减少组合逻辑深度
     (* keep = "true" *) reg signed [WD3-1:0] phys_ch_reg [0:CH_OUT-1];
-    
-    // Stage 1: 打包后的输出数据寄存器
     (* keep = "true" *) reg [255:0] int8_packed_reg;
     (* keep = "true" *) reg [127:0] int16_packed_reg;
     
-    // INT8 逻辑通道提取结果（组合逻辑）
     wire signed [31:0] int8_result [0:7];
     wire signed [31:0] int16_result [0:3];
     
-    // INT8 逻辑通道提取：逻辑通道 i → 物理通道 (i*2+2)
-    // 注意：逻辑通道 7 对应物理通道 16，超出范围，使用物理通道 14（与通道 6 相同）
-    // WD3-bit 符号扩展到 32-bit（若 WD3 > 32 则截断高位）
     genvar gi;
     generate
         for (gi = 0; gi < 8; gi = gi + 1) begin : int8_extract
@@ -407,9 +373,6 @@ module DCIM_Tile #(
         end
     endgenerate
     
-    // INT16 逻辑通道提取：逻辑通道 i → 物理通道 (i*4, i*4+1, i*4+2, i*4+3)
-    // INT16 模式下，4 个物理通道组成一个 4*WD3 bit 的累加结果
-    // 取低 32-bit 作为最终结果
     generate
         for (gi = 0; gi < 4; gi = gi + 1) begin : int16_extract
             localparam PHYS_BASE = gi * 4;
@@ -419,18 +382,20 @@ module DCIM_Tile #(
         end
     endgenerate
     
-    // 组装输出数据（组合逻辑，用于下一级寄存器）
     wire [255:0] int8_packed_comb = {int8_result[7], int8_result[6], int8_result[5], int8_result[4],
                                       int8_result[3], int8_result[2], int8_result[1], int8_result[0]};
     wire [127:0] int16_packed_comb = {int16_result[3], int16_result[2], int16_result[1], int16_result[0]};
     
-    // ========================================================================
-    // 流水线状态机
-    // ========================================================================
+    // save_phase:
+    //   0: 等待 DCIM 输出
+    //   1: 解包物理通道
+    //   2: 打包为 INT32
+    //   3: 发出第一次 OBUF 写请求，等待 wr_ready
+    //   4: (INT8) 发出第二次 OBUF 写请求，等待 wr_ready
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             result_cnt <= 0;
-            obuf_we <= 0; obuf_en <= 0; obuf_addr <= 0; obuf_din <= 0;
+            obuf_wr_valid <= 0; obuf_wr_addr <= 0; obuf_wr_data <= 0; obuf_wr_strb <= 0;
             save_phase <= 0;
             dcim_data_latch <= 0;
             int8_packed_reg <= 0;
@@ -439,14 +404,12 @@ module DCIM_Tile #(
         end else begin
             if (state == ST_IDLE) begin
                 result_cnt <= 0;
-                obuf_we <= 0; obuf_en <= 0;
+                obuf_wr_valid <= 0;
                 save_phase <= 0;
             end else begin
                 case (save_phase)
                     3'd0: begin
-                        // Stage 0: 等待并锁存 DCIM 输出
-                        obuf_en <= 0;
-                        obuf_we <= 0;
+                        obuf_wr_valid <= 0;
                         if (dcim_valid_out && dcim_ready_out) begin
                             dcim_data_latch <= dcim_data_out;
                             save_phase <= 3'd1;
@@ -454,56 +417,54 @@ module DCIM_Tile #(
                     end
                     
                     3'd1: begin
-                        // Stage 1: 解包物理通道到寄存器
                         for (int i = 0; i < CH_OUT; i++) begin
                             phys_ch_reg[i] <= dcim_data_latch[i*WD3 +: WD3];
                         end
                         save_phase <= 3'd2;
-                        obuf_en <= 0;
-                        obuf_we <= 0;
                     end
                     
                     3'd2: begin
-                        // Stage 2: 打包并准备写入
                         int8_packed_reg <= int8_packed_comb;
                         int16_packed_reg <= int16_packed_comb;
                         save_phase <= 3'd3;
-                        obuf_en <= 0;
-                        obuf_we <= 0;
                     end
                     
                     3'd3: begin
-                        // Stage 3: 写第一块数据到 OBUF
-                        obuf_en <= 1'b1;
-                        obuf_we <= {(BUF_DATA_WIDTH/8){1'b1}};
+                        obuf_wr_valid <= 1'b1;
+                        obuf_wr_strb <= {(BUF_DATA_WIDTH/8){1'b1}};
                         
                         if (is_int16_reg) begin
-                            // INT16：写 128-bit（4 个 INT32），完成
-                            obuf_addr <= out_base_addr_reg + result_cnt;
-                            obuf_din <= int16_packed_reg;
-                            save_phase <= 3'd0;
-                            result_cnt <= result_cnt + 1;
+                            obuf_wr_addr <= out_base_addr_reg + result_cnt;
+                            obuf_wr_data <= int16_packed_reg;
+                            if (obuf_wr_valid && obuf_wr_ready) begin
+                                obuf_wr_valid <= 0;
+                                save_phase <= 3'd0;
+                                result_cnt <= result_cnt + 1;
+                            end
                         end else begin
-                            // INT8：写低 128-bit（逻辑通道 0-3）
-                            obuf_addr <= out_base_addr_reg + result_cnt * 2;
-                            obuf_din <= int8_packed_reg[127:0];
-                            save_phase <= 3'd4;  // 还需要写高 128-bit
+                            obuf_wr_addr <= out_base_addr_reg + result_cnt * 2;
+                            obuf_wr_data <= int8_packed_reg[127:0];
+                            if (obuf_wr_valid && obuf_wr_ready) begin
+                                obuf_wr_valid <= 0;
+                                save_phase <= 3'd4;
+                            end
                         end
                     end
                     
                     3'd4: begin
-                        // Stage 4（仅 INT8）：写高 128-bit（逻辑通道 4-7）
-                        obuf_en <= 1'b1;
-                        obuf_we <= {(BUF_DATA_WIDTH/8){1'b1}};
-                        obuf_addr <= out_base_addr_reg + result_cnt * 2 + 1;
-                        obuf_din <= int8_packed_reg[255:128];
-                        save_phase <= 3'd0;
-                        result_cnt <= result_cnt + 1;
+                        obuf_wr_valid <= 1'b1;
+                        obuf_wr_strb <= {(BUF_DATA_WIDTH/8){1'b1}};
+                        obuf_wr_addr <= out_base_addr_reg + result_cnt * 2 + 1;
+                        obuf_wr_data <= int8_packed_reg[255:128];
+                        if (obuf_wr_valid && obuf_wr_ready) begin
+                            obuf_wr_valid <= 0;
+                            save_phase <= 3'd0;
+                            result_cnt <= result_cnt + 1;
+                        end
                     end
                     
                     default: begin
-                        obuf_en <= 0;
-                        obuf_we <= 0;
+                        obuf_wr_valid <= 0;
                         save_phase <= 3'd0;
                     end
                 endcase
@@ -515,7 +476,6 @@ module DCIM_Tile #(
     // 模块实例化
     // ========================================================================
     
-    // DCIM 核心
     dcim #(
         .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT),
         .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC)
@@ -529,7 +489,6 @@ module DCIM_Tile #(
         .dn_valid(dcim_valid_out), .dn_ready(dcim_ready_out), .dn_data(dcim_data_out)
     );
     
-    // 激活预处理器：将 INT8/INT16 拆分为 4-bit nibble 流
     act_nibble_converter #(
         .CH_IN(CH_IN), .MODE_INT8(`MODE_INT8), .MODE_INT16(`MODE_INT16)
     ) u_converter (
@@ -537,7 +496,5 @@ module DCIM_Tile #(
         .raw_act_valid(conv_valid), .raw_act_ready(conv_ready), .raw_act_data(conv_data),
         .dcim_act_valid(dcim_valid_act), .dcim_act_ready(dcim_ready_act), .dcim_act_data(dcim_data_act)
     );
-    
-
 
 endmodule

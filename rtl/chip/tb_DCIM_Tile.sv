@@ -4,9 +4,8 @@
 // ============================================================================
 // tb_DCIM_Tile - DCIM_Tile 测试平台（复用 DCIM_Macro 的测试）
 // ============================================================================
-// 与 tb_DCIM_Macro 的唯一区别：
-//   - 外部实例化 IBUF/OBUF
-//   - DUT 连接到外部 IBUF/OBUF 接口
+// DUT 使用 ibuf_rd_* / obuf_wr_* 握手；本 TB 用 ibuf_rd_arbiter / obuf_wr_arbiter
+// (NUM_TILES=1) 接 ibuf/obuf，与 DCIM_Array 侧读延迟模型一致。
 // ============================================================================
 
 module tb_DCIM_Tile;
@@ -26,16 +25,26 @@ module tb_DCIM_Tile;
     reg [15:0] num_rows;
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr, act_base_addr, out_base_addr;
     
-    // 外部 IBUF/OBUF 接口（连接到 DUT）
-    wire [BUF_ADDR_WIDTH-1:0] ibuf_addr_dut;
-    wire ibuf_en_dut;
-    wire [BUF_DATA_WIDTH-1:0] ibuf_dout;
+    localparam IBUF_RD_LATENCY = 4;  // 与 DCIM_Array / ibuf NBPIPE=1 一致
     
-    wire [BUF_DATA_WIDTH/8-1:0] obuf_we_dut;
-    wire [BUF_ADDR_WIDTH-1:0] obuf_addr_dut;
-    wire [BUF_DATA_WIDTH-1:0] obuf_din_dut;
-    wire obuf_en_dut;
-    wire [BUF_DATA_WIDTH-1:0] obuf_dout;
+    // Tile <-> 单 Tile 仲裁（与 DCIM_Array 相同握手与读延迟模型）
+    wire                         ibuf_rd_valid, ibuf_rd_ready, ibuf_rd_data_valid;
+    wire [BUF_ADDR_WIDTH-1:0]    ibuf_rd_addr;
+    wire [BUF_DATA_WIDTH-1:0]    ibuf_rd_data;
+    
+    wire                         obuf_wr_valid, obuf_wr_ready;
+    wire [BUF_ADDR_WIDTH-1:0]    obuf_wr_addr;
+    wire [BUF_DATA_WIDTH-1:0]    obuf_wr_data;
+    wire [BUF_DATA_WIDTH/8-1:0]  obuf_wr_strb;
+    
+    wire                         ibuf_int_en;
+    wire [BUF_ADDR_WIDTH-1:0]    ibuf_int_addr;
+    wire [BUF_DATA_WIDTH-1:0]    ibuf_int_dout;
+    
+    wire                         obuf_int_en;
+    wire [BUF_DATA_WIDTH/8-1:0] obuf_int_we;
+    wire [BUF_ADDR_WIDTH-1:0]    obuf_int_addr;
+    wire [BUF_DATA_WIDTH-1:0]    obuf_int_din;
     
     // Testbench 访问 IBUF/OBUF 的接口
     reg  [BUF_DATA_WIDTH/8-1:0] ibuf_wea, obuf_wea;
@@ -44,7 +53,6 @@ module tb_DCIM_Tile;
     reg  ibuf_ena, obuf_ena;
     wire [BUF_DATA_WIDTH-1:0] ibuf_douta, obuf_douta;
     
-    // DUT 实例
     DCIM_Tile #(
         .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC),
         .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH), .BUF_DATA_WIDTH(BUF_DATA_WIDTH)
@@ -55,16 +63,52 @@ module tb_DCIM_Tile;
         .wei_base_addr(wei_base_addr),
         .act_base_addr(act_base_addr),
         .out_base_addr(out_base_addr),
-        .ibuf_addr(ibuf_addr_dut),
-        .ibuf_en(ibuf_en_dut),
-        .ibuf_dout(ibuf_dout),
-        .obuf_we(obuf_we_dut),
-        .obuf_addr(obuf_addr_dut),
-        .obuf_din(obuf_din_dut),
-        .obuf_en(obuf_en_dut)
+        .ibuf_rd_valid(ibuf_rd_valid),
+        .ibuf_rd_ready(ibuf_rd_ready),
+        .ibuf_rd_addr(ibuf_rd_addr),
+        .ibuf_rd_data_valid(ibuf_rd_data_valid),
+        .ibuf_rd_data(ibuf_rd_data),
+        .obuf_wr_valid(obuf_wr_valid),
+        .obuf_wr_ready(obuf_wr_ready),
+        .obuf_wr_addr(obuf_wr_addr),
+        .obuf_wr_data(obuf_wr_data),
+        .obuf_wr_strb(obuf_wr_strb)
     );
     
-    // 外部 IBUF (双端口 BRAM)
+    ibuf_rd_arbiter #(
+        .NUM_TILES(1),
+        .ADDR_WIDTH(BUF_ADDR_WIDTH),
+        .DATA_WIDTH(BUF_DATA_WIDTH),
+        .IBUF_RD_LATENCY(IBUF_RD_LATENCY)
+    ) u_ibuf_arb (
+        .clk(clk), .rst_n(rst_n),
+        .tile_rd_valid(ibuf_rd_valid),
+        .tile_rd_ready(ibuf_rd_ready),
+        .tile_rd_addr(ibuf_rd_addr),
+        .tile_rd_data_valid(ibuf_rd_data_valid),
+        .tile_rd_data(ibuf_rd_data),
+        .ibuf_en(ibuf_int_en),
+        .ibuf_addr(ibuf_int_addr),
+        .ibuf_dout(ibuf_int_dout)
+    );
+    
+    obuf_wr_arbiter #(
+        .NUM_TILES(1),
+        .ADDR_WIDTH(BUF_ADDR_WIDTH),
+        .DATA_WIDTH(BUF_DATA_WIDTH)
+    ) u_obuf_arb (
+        .clk(clk), .rst_n(rst_n),
+        .tile_wr_valid(obuf_wr_valid),
+        .tile_wr_ready(obuf_wr_ready),
+        .tile_wr_addr(obuf_wr_addr),
+        .tile_wr_data(obuf_wr_data),
+        .tile_wr_strb(obuf_wr_strb),
+        .obuf_en(obuf_int_en),
+        .obuf_we(obuf_int_we),
+        .obuf_addr(obuf_int_addr),
+        .obuf_din(obuf_int_din)
+    );
+    
     ibuf #(
         .AWIDTH(BUF_ADDR_WIDTH),
         .NUM_COL(BUF_DATA_WIDTH/8),
@@ -72,21 +116,18 @@ module tb_DCIM_Tile;
         .NBPIPE(1)
     ) ibuf_inst (
         .clk(clk),
-        // Port A: Testbench 写入
         .wea(ibuf_wea),
         .mem_ena(ibuf_ena),
         .dina(ibuf_dina),
         .addra(ibuf_addra),
         .douta(ibuf_douta),
-        // Port B: DUT 读取
         .web({(BUF_DATA_WIDTH/8){1'b0}}),
-        .mem_enb(ibuf_en_dut),
+        .mem_enb(ibuf_int_en),
         .dinb({BUF_DATA_WIDTH{1'b0}}),
-        .addrb(ibuf_addr_dut),
-        .doutb(ibuf_dout)
+        .addrb(ibuf_int_addr),
+        .doutb(ibuf_int_dout)
     );
     
-    // 外部 OBUF (双端口 BRAM)
     obuf #(
         .AWIDTH(BUF_ADDR_WIDTH),
         .NUM_COL(BUF_DATA_WIDTH/8),
@@ -94,18 +135,16 @@ module tb_DCIM_Tile;
         .NBPIPE(1)
     ) obuf_inst (
         .clk(clk),
-        // Port A: Testbench 读取
         .wea(obuf_wea),
         .mem_ena(obuf_ena),
         .dina(obuf_dina),
         .addra(obuf_addra),
         .douta(obuf_douta),
-        // Port B: DUT 写入
-        .web(obuf_we_dut),
-        .mem_enb(obuf_en_dut),
-        .dinb(obuf_din_dut),
-        .addrb(obuf_addr_dut),
-        .doutb(obuf_dout)
+        .web(obuf_int_we),
+        .mem_enb(obuf_int_en),
+        .dinb(obuf_int_din),
+        .addrb(obuf_int_addr),
+        .doutb()
     );
     
     initial clk = 0;
@@ -444,12 +483,15 @@ module tb_DCIM_Tile;
             wait(ready); repeat(5) @(posedge clk);
             @(posedge clk); start <= 1'b1; @(posedge clk); start <= 1'b0;
             
+            // done 在上一轮后保持为高，须先等拉低再等新一次完成
+            wait(!done);
+            
             fork
                 begin
                     wait(done);
                 end
                 begin
-                    repeat(100000) @(posedge clk);
+                    repeat(500000) @(posedge clk);
                     $display("  [TIMEOUT] Test did not complete in time!");
                     $display("  State=%0d, row_cnt=%0d, result_cnt=%0d", 
                              dut.state, dut.row_cnt, dut.result_cnt);
