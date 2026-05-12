@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
-`include "para.v"
-`include "counter.v"
-`include "pipe_stage.v"
+// `include "para.v"  // 注释掉，已在 filelist.f 中包含
+// `include "counter.v"
+// `include "pipe_stage.v"
 
 module accumulateArray#(
 	parameter WD1 = 4,

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
-`include "para.v"
-`include "counter.v"
+// `include "para.v"  // 注释掉，已在 filelist.f 中包含
+// `include "counter.v"
 
 module mergeArray#(
 	parameter WD1 = 4,

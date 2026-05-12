@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "counter.v"
+// `include "counter.v"  // 注释掉，已在 filelist.f 中包含
 module ppCache#(
 	parameter CH_IN = 16,
 	parameter CH_OUT = 16,

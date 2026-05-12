@@ -3,12 +3,13 @@
 # 目录
 BUILD_DIR = build
 SRC_DIR = .
-REF_DIR = ../../ref/DCIM
+REF_DIR = ../ref/DCIM
 
 # VCS 选项
 VCS = vcs
 VCS_FLAGS = -sverilog -full64 -debug_access+all -timescale=1ns/1ps
 VCS_FLAGS += +incdir+$(REF_DIR)/src/inc
+VCS_FLAGS += +incdir+$(REF_DIR)/src/dcim
 VCS_FLAGS += -ignore initializer_driver_checks
 
 # Verdi/FSDB 选项

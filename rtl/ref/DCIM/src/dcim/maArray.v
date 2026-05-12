@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
-`include "para.v"
-`include "counter.v"
-`include "dff.v"
+// `include "para.v"  // 注释掉，已在 filelist.f 中包含
+// `include "counter.v"
+// `include "dff.v"
 
 //ma: multiply & add
 module maArray#(

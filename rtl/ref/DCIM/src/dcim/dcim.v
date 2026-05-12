@@ -1,9 +1,10 @@
 `timescale 1ns / 1ps
 
-`include "para.v"
-`include "counter.v"
-`include "dff.v"
-`include "pipe_stage.v"
+// Include 语句已注释，因为这些文件在 filelist.f 中已明确包含
+// `include "para.v"
+// `include "counter.v"
+// `include "dff.v"
+// `include "pipe_stage.v"
 
 module dcim #(
     parameter WD1 = 4,
