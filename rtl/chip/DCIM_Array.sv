@@ -7,7 +7,8 @@
 // 所有 Tile 同步启动，通过 arbiter 共享 IBUF（读）和 OBUF（写）
 // ============================================================================
 
-`include "../ref/DCIM/src/inc/para.v"
+// para.v 已在 filelist 中包含，此处注释掉避免重复
+// `include "para.v"
 
 module DCIM_Array #(
     parameter NUM_TILES      = 16,

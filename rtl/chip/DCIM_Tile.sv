@@ -11,7 +11,7 @@
 //
 // ============================================================================
 
-`include "../ref/DCIM/src/inc/para.v"
+`include "para.v"
 
 module DCIM_Tile #(
     parameter WD1     = 4,
@@ -157,8 +157,37 @@ module DCIM_Tile #(
     end
     
     // ========================================================================
-    // 状态机：状态转换
+    // 状态机：状态转换（添加流水线优化）
     // ========================================================================
+    // 添加辅助信号，打破组合逻辑链
+    (* max_fanout = 8 *) reg ibuf_handshake_done;
+    (* max_fanout = 8 *) reg ibuf_data_received;
+    (* max_fanout = 8 *) reg conv_handshake_done;
+    (* max_fanout = 8 *) reg wei_load_finished;
+    (* max_fanout = 8 *) reg ppcache_finished;
+    (* max_fanout = 8 *) reg all_rows_processed;
+    (* max_fanout = 8 *) reg all_results_collected;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ibuf_handshake_done <= 0;
+            ibuf_data_received <= 0;
+            conv_handshake_done <= 0;
+            wei_load_finished <= 0;
+            ppcache_finished <= 0;
+            all_rows_processed <= 0;
+            all_results_collected <= 0;
+        end else begin
+            ibuf_handshake_done <= (ibuf_rd_valid && ibuf_rd_ready);
+            ibuf_data_received <= ibuf_rd_data_valid;
+            conv_handshake_done <= (conv_valid && conv_ready);
+            wei_load_finished <= (wei_load_cnt >= CYCLE - 1);
+            ppcache_finished <= (ppcache_cnt >= CYCLE + 2);
+            all_rows_processed <= (row_cnt >= num_rows_reg - 1);
+            all_results_collected <= (result_cnt >= expected_outputs);
+        end
+    end
+    
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= ST_IDLE;
         else state <= next_state;
@@ -168,29 +197,29 @@ module DCIM_Tile #(
         next_state = state;
         case (state)
             ST_IDLE:           if (start_pulse) next_state = ST_LOAD_WEI_REQ;
-            ST_LOAD_WEI_REQ:   if (ibuf_rd_valid && ibuf_rd_ready) next_state = ST_LOAD_WEI_RESP;
-            ST_LOAD_WEI_RESP:  if (ibuf_rd_data_valid) next_state = ST_LOAD_WEI_DONE;
+            ST_LOAD_WEI_REQ:   if (ibuf_handshake_done) next_state = ST_LOAD_WEI_RESP;
+            ST_LOAD_WEI_RESP:  if (ibuf_data_received) next_state = ST_LOAD_WEI_DONE;
             ST_LOAD_WEI_DONE: begin
-                if (wei_load_cnt >= CYCLE - 1) next_state = ST_PREP_PPCACHE;
+                if (wei_load_finished) next_state = ST_PREP_PPCACHE;
                 else next_state = ST_LOAD_WEI_REQ;
             end
             ST_PREP_PPCACHE:   next_state = ST_LOAD_PPCACHE;
-            ST_LOAD_PPCACHE:   if (ppcache_cnt >= CYCLE + 2) next_state = ST_SWAP_PPCACHE;
+            ST_LOAD_PPCACHE:   if (ppcache_finished) next_state = ST_SWAP_PPCACHE;
             ST_SWAP_PPCACHE:   next_state = ST_LOAD_ACT_REQ;
-            ST_LOAD_ACT_REQ:   if (ibuf_rd_valid && ibuf_rd_ready) next_state = ST_LOAD_ACT_RESP;
-            ST_LOAD_ACT_RESP:  if (ibuf_rd_data_valid) begin
+            ST_LOAD_ACT_REQ:   if (ibuf_handshake_done) next_state = ST_LOAD_ACT_RESP;
+            ST_LOAD_ACT_RESP:  if (ibuf_data_received) begin
                 if (is_int16) next_state = ST_LOAD_ACT2_REQ;
                 else next_state = ST_COMPUTE;
             end
-            ST_LOAD_ACT2_REQ:  if (ibuf_rd_valid && ibuf_rd_ready) next_state = ST_LOAD_ACT2_RESP;
-            ST_LOAD_ACT2_RESP: if (ibuf_rd_data_valid) next_state = ST_COMPUTE;
+            ST_LOAD_ACT2_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_ACT2_RESP;
+            ST_LOAD_ACT2_RESP: if (ibuf_data_received) next_state = ST_COMPUTE;
             ST_COMPUTE: begin
-                if (conv_valid && conv_ready) begin
-                    if (row_cnt >= num_rows_reg - 1) next_state = ST_WAIT_RESULT;
+                if (conv_handshake_done) begin
+                    if (all_rows_processed) next_state = ST_WAIT_RESULT;
                     else next_state = ST_LOAD_ACT_REQ;
                 end
             end
-            ST_WAIT_RESULT:    if (result_cnt >= expected_outputs) next_state = ST_DONE;
+            ST_WAIT_RESULT:    if (all_results_collected) next_state = ST_DONE;
             ST_DONE:           next_state = ST_IDLE;
             default:           next_state = ST_IDLE;
         endcase
@@ -220,7 +249,7 @@ module DCIM_Tile #(
     end
     
     // ========================================================================
-    // 主控制逻辑
+    // 主控制逻辑（优化组合逻辑深度）
     // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -232,11 +261,16 @@ module DCIM_Tile #(
             ibuf_data_latch <= 0;
             act_buf_lo <= 0;
         end else begin
+            // 默认控制信号
+            dcim_wr_wei <= 0;
+            dcim_load_wei <= 0;
+            dcim_swap_wei <= 0;
+            conv_valid <= 0;
+            
             case (state)
                 ST_IDLE: begin
                     wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
-                    dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
-                    conv_valid <= 0; ibuf_rd_valid <= 0;
+                    ibuf_rd_valid <= 0;
                 end
                 
                 // ==============================================================
@@ -245,14 +279,13 @@ module DCIM_Tile #(
                 ST_LOAD_WEI_REQ: begin
                     ibuf_rd_valid <= 1'b1;
                     ibuf_rd_addr <= wei_base_addr_reg + wei_load_cnt;
-                    dcim_wr_wei <= 0;
-                    if (ibuf_rd_valid && ibuf_rd_ready)
+                    if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
                 
                 ST_LOAD_WEI_RESP: begin
                     ibuf_rd_valid <= 0;
-                    if (ibuf_rd_data_valid)
+                    if (ibuf_data_received)
                         ibuf_data_latch <= ibuf_rd_data;
                 end
                 
@@ -267,19 +300,15 @@ module DCIM_Tile #(
                 // ppCache 加载阶段
                 // ==============================================================
                 ST_PREP_PPCACHE: begin
-                    dcim_wr_wei <= 0;
                     dcim_addr_wei <= 0;
-                    dcim_load_wei <= 0;
                 end
                 
                 ST_LOAD_PPCACHE: begin
-                    dcim_wr_wei <= 0;
                     dcim_load_wei <= (ppcache_cnt == 0);
                     ppcache_cnt <= ppcache_cnt + 1;
                 end
                 
                 ST_SWAP_PPCACHE: begin
-                    dcim_load_wei <= 0;
                     dcim_swap_wei <= 1'b1;
                 end
                 
@@ -287,19 +316,16 @@ module DCIM_Tile #(
                 // 激活加载：发出读请求 → 等待数据
                 // ==============================================================
                 ST_LOAD_ACT_REQ: begin
-                    dcim_swap_wei <= 0;
-                    dcim_load_wei <= 0;
                     ibuf_rd_valid <= 1'b1;
                     ibuf_rd_addr <= is_int16 ? (act_base_addr_reg + row_cnt * 2)
                                              : (act_base_addr_reg + row_cnt);
-                    conv_valid <= 0;
-                    if (ibuf_rd_valid && ibuf_rd_ready)
+                    if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
                 
                 ST_LOAD_ACT_RESP: begin
                     ibuf_rd_valid <= 0;
-                    if (ibuf_rd_data_valid) begin
+                    if (ibuf_data_received) begin
                         if (is_int16) begin
                             act_buf_lo <= ibuf_rd_data;
                         end else begin
@@ -314,13 +340,13 @@ module DCIM_Tile #(
                 ST_LOAD_ACT2_REQ: begin
                     ibuf_rd_valid <= 1'b1;
                     ibuf_rd_addr <= act_base_addr_reg + row_cnt * 2 + 1;
-                    if (ibuf_rd_valid && ibuf_rd_ready)
+                    if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
                 
                 ST_LOAD_ACT2_RESP: begin
                     ibuf_rd_valid <= 0;
-                    if (ibuf_rd_data_valid) begin
+                    if (ibuf_data_received) begin
                         conv_data <= {ibuf_rd_data, act_buf_lo};
                     end
                 end
@@ -330,19 +356,16 @@ module DCIM_Tile #(
                 // ==============================================================
                 ST_COMPUTE: begin
                     conv_valid <= 1'b1;
-                    if (conv_valid && conv_ready) begin
+                    if (conv_handshake_done) begin
                         conv_valid <= 0;
                         row_cnt <= row_cnt + 1;
                     end
                 end
                 
                 ST_WAIT_RESULT: begin
-                    conv_valid <= 0;
                 end
                 
                 default: begin
-                    dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
-                    conv_valid <= 0; ibuf_rd_valid <= 0;
                 end
             endcase
         end

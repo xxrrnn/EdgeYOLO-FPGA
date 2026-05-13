@@ -39,29 +39,43 @@ module obuf_wr_arbiter #(
     
     // ========================================================================
     // 仲裁逻辑：从 rr_ptr 开始找到第一个有效写请求
+    // 添加流水线寄存器打破组合逻辑链
     // ========================================================================
+    (* max_fanout = 8 *) reg [NUM_TILES-1:0] tile_wr_valid_q;
     reg [TILE_IDX_W-1:0] grant_idx;
     reg                   grant_valid;
+    
+    // 第一级：请求锁存
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) tile_wr_valid_q <= 0;
+        else tile_wr_valid_q <= tile_wr_valid;
+    end
      
+    // 第二级：仲裁逻辑
     always_comb begin
         grant_valid = 1'b0;
         grant_idx = 0;
         for (int i = 0; i < NUM_TILES; i++) begin
             automatic int idx = (rr_ptr + i) % NUM_TILES;
-            if (!grant_valid && tile_wr_valid[idx]) begin
+            if (!grant_valid && tile_wr_valid_q[idx]) begin
                 grant_valid = 1'b1;
                 grant_idx = idx[TILE_IDX_W-1:0];
             end
         end
     end
     
-    // ready 信号：当前周期被选中的 Tile
-    generate
-        genvar g;
-        for (g = 0; g < NUM_TILES; g = g + 1) begin : gen_ready
-            assign tile_wr_ready[g] = grant_valid && (grant_idx == g);
+    // ready 信号：注册减少扇出
+    (* max_fanout = 4 *) reg [NUM_TILES-1:0] tile_wr_ready_reg;
+    assign tile_wr_ready = tile_wr_ready_reg;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) tile_wr_ready_reg <= 0;
+        else begin
+            for (int g = 0; g < NUM_TILES; g++) begin
+                tile_wr_ready_reg[g] <= grant_valid && (grant_idx == g);
+            end
         end
-    endgenerate
+    end
     
     // ========================================================================
     // 写入逻辑：每周期最多服务一个 Tile 的写请求
