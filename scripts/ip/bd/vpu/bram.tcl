@@ -12,7 +12,7 @@ set_property -dict [list \
   CONFIG.use_bram_block {BRAM_Controller} \
   CONFIG.EN_SAFETY_CKT {false} \
   CONFIG.Memory_Type {Single_Port_RAM} \
-  CONFIG.Write_Depth_A {2048} \
+  CONFIG.Write_Depth_A {4096} \
   CONFIG.Write_Width_A {256} \
   CONFIG.Read_Width_A {256} \
   CONFIG.Byte_Size {8} \
