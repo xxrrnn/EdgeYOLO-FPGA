@@ -22,11 +22,11 @@ from pathlib import Path
 from dataclasses import dataclass
 
 # 地址映射（与 scripts/ip/bd/vpu/address.tcl 一致）
-GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (64KB)
-VPU_GB_BASE = 0x10010000        # VPU Global Buffer (64KB)
-VPU_WB_BASE = 0x10020000        # VPU Weight Buffer (64KB)
-CDMA_BASE = 0x10030000          # CDMA 寄存器 (64KB)
-VPU_REGS_BASE = 0x10040000      # VPU AXI Regs (4KB)
+GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (8MB)
+VPU_GB_BASE = 0x10800000        # VPU Global Buffer (64KB)
+VPU_WB_BASE = 0x10810000        # VPU Weight Buffer (64KB)
+CDMA_BASE = 0x10820000          # CDMA 寄存器 (64KB)
+VPU_REGS_BASE = 0x10830000      # VPU AXI Regs (4KB)
 
 # 查找 xdma_rw.exe
 SCRIPT_DIR = Path(__file__).parent.resolve()
