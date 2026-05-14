@@ -1,11 +1,4 @@
 `timescale 1ns / 1ps
-//==============================================================================
-// nn_lut_unit：分段 LUT 激活：自 WB 加载分段断点 B、斜率 S、偏置 T，自 GB 读入
-//              特征，比较区间后与 FP 阵列完成乘加，结果写回 GB。
-// 启动：nn_unit_start；空闲时 nn_unit_ready=1。
-// 配置：nn_addr_break/s/t 指向 WB 中 LUT 表；nn_src_*、nn_dst_addr 描述特征张量；
-//      INTERVAL_NUM、各宽度参数须与权重打包格式一致。
-//==============================================================================
 module nn_lut_unit#(
     parameter ADDR_WIDTH = 32,
     parameter INTERVAL_NUM = 16,
@@ -100,7 +93,7 @@ module nn_lut_unit#(
     } state_t;
 
     // 声明状态寄存器
-    (* fsm_encoding = "one_hot" *)state_t c_state, n_state;
+    (* fsm_encoding = "auto" *)state_t c_state, n_state;
 
     assign nn_unit_ready = c_state == IDLE;
     // addr generate part

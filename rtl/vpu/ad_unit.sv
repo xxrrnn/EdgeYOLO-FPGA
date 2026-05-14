@@ -1,11 +1,5 @@
 `timescale 1ns/1ps
-//==============================================================================
-// ad_unit：逐元素相加（add），两路特征从 GB 按块读取，经内部调度写回目的地址。
-// 启动：ad_unit_start；空闲时 ad_unit_ready=1。
-// 配置：ad_src_addr、ad_src2_addr、ad_src_c/h/w、ad_dst_addr；FP_CORE_NUM、
-//      FP_WIDTH、GB_BANDWIDTH 决定单次搬运与浮点核并行度。
-// 端口：gb_* 接 Global Buffer；行为与 DCIM/LOAD-WAIT-SAVE 风格状态机一致。
-//==============================================================================
+
 module ad_unit #(
     parameter ADDR_WIDTH =      32,
     parameter GB_BANDWIDTH =    256,
@@ -48,7 +42,7 @@ module ad_unit #(
         AD_COMPUTE_WAIT,
         AD_SAVE
     } state_t;
-    (* fsm_encoding = "one_hot" *) state_t c_state, n_state;
+    (* fsm_encoding = "auto" *) state_t c_state, n_state;
     
     assign ad_unit_ready  = (c_state == IDLE);
 
@@ -147,7 +141,8 @@ module ad_unit #(
             endcase
         end
     end
-    wire  fp_res_tvalid;
+    wire fp_res_tvalid;
+
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             ad_out_reg <= '0;
@@ -183,15 +178,14 @@ module ad_unit #(
     assign fp_a_tdata       = (c_state == AD_COMPUTE)? ad_fp_in_reg: '0;
     assign fp_b_tdata       = (c_state == AD_COMPUTE)? ad_fp_in2_reg : '0;
 
-    
 
-    // 实例化 fp32_add_array
-    fp32_add_array #(
+    
+    // 实例化 fp16_add_array
+    fp_add_array #(
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_WIDTH(FP_WIDTH)
-    ) fp32_add_array_inst (
+    ) fp_add_array_inst (
         .clk(clk),
-        .rst_n(rst_n),
         .fp_array_tvalid(fp_array_tvalid),
         .a_tdata(fp_a_tdata),
         .b_tdata(fp_b_tdata),

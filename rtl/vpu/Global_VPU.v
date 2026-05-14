@@ -1,16 +1,11 @@
 `timescale 1ns/1ps
-//==============================================================================
-// Global_VPU：顶层封装各功能单元（ad/mp/us/qa/dqa/nn_lut）、FP MAC 阵列、
-//             Global Buffer 与 Weight Buffer 互联；unit_choose 选择执行路径。
-// 使用：vpu_start 启动任务；ready 为高时可下发；src/dst 等地址端口含义随所选
-//      单元而定（与各 *_unit 端口一致）。参数需与 BRAM 深度、数据位宽一致。
-//==============================================================================
+
 module Global_VPU #(
     parameter ADDR_WIDTH = 32,
     
     parameter GB_ADDR_WIDTH = 20,
     parameter C_INT_WIDTH_IN = 32,
-    parameter BANDWIDTH = 256,    // 修正：与 axi_bram_ctrl DATA_WIDTH 一致
+    parameter BANDWIDTH = 32,
 
     parameter FP_CORE_NUM = 32,
     parameter FP_TRAN_NUM = 8,
@@ -23,33 +18,32 @@ module Global_VPU #(
     parameter RAM_DEPTH_GB    = 1024,
     parameter RAM_DEPTH_WB    = 1024,
     parameter Q_INT_WIDTH_OUT = 8,
-    
+
     parameter NB_COL = 32,
     parameter COL_WIDTH = 8
-    
-    
 
 
 )(
     input   wire                     clk,
     input   wire                     rst_n,
-    output   wire                    ready,
-    input   wire                     vpu_start,
+    output   wire                    config_ready,
+    input   wire                     config_valid,
+    input   wire                     start,
       
     input   wire[ADDR_WIDTH - 1:0]   unit_choose,
 
-    input   wire[ADDR_WIDTH - 1:0]   src_addr,
-    input   wire[ADDR_WIDTH - 1:0]   src2_addr,
-    input   wire[ADDR_WIDTH - 1:0]   src_c,
-    input   wire[ADDR_WIDTH - 1:0]   src_h,
-    input   wire[ADDR_WIDTH - 1:0]   src_w,
-    input   wire[ADDR_WIDTH - 1:0]   scale_addr,
-    input   wire[ADDR_WIDTH - 1:0]   bias_addr,
-    input   wire[ADDR_WIDTH - 1:0]   dst_addr,
+    input   wire[ADDR_WIDTH - 1:0]          src_addr,
+    input   wire[ADDR_WIDTH - 1:0]          src2_addr,
+    input   wire[ADDR_WIDTH - 1:0]          src_c,
+    input   wire[ADDR_WIDTH - 1:0]          src_h,
+    input   wire[ADDR_WIDTH - 1:0]          src_w,
+    input   wire[ADDR_WIDTH - 1:0]          scale_addr,
+    input   wire[ADDR_WIDTH - 1:0]          bias_addr,
+    input   wire[ADDR_WIDTH - 1:0]          dst_addr,
 
-    input wire [ADDR_WIDTH-1:0]      addr_break,
-    input wire [ADDR_WIDTH-1:0]      addr_s,
-    input wire [ADDR_WIDTH-1:0]      addr_t,
+    input wire [ADDR_WIDTH-1:0]             addr_break,
+    input wire [ADDR_WIDTH-1:0]             addr_s,
+    input wire [ADDR_WIDTH-1:0]             addr_t,
 
     input wire [GB_ADDR_WIDTH-1:0]          gb_addra,
     input wire [(NB_COL*COL_WIDTH)-1:0]     gb_dina,
@@ -64,7 +58,8 @@ module Global_VPU #(
     output wire [(NB_COL*COL_WIDTH)-1:0]    wb_douta
 );
   localparam RAM_PERFORMANCE = "LOW_LATENCY";
-
+  // localparam NB_COL = 32;
+  // localparam COL_WIDTH = 8;
   
   localparam BREAK_WIDTH = FP_WIDTH;
   localparam WEIGHT_WIDTH = FP_WIDTH;
@@ -82,21 +77,65 @@ module Global_VPU #(
   localparam UNIT_US  = 32'd05;
   localparam UNIT_AD  = 32'd06;
 
+
+    wire   rst_n_local;
+    rst_n_sync rst_n_sync_inst(
+        .clk(clk),
+        .rst_n_i(rst_n),
+        .rst_n_o(rst_n_local)
+    );
+
   // -------------------------------
   // Internal registers
   // -------------------------------
-  // reg [ADDR_WIDTH - 1:0]   unit_choose;
-  // reg [ADDR_WIDTH - 1:0]   src_addr;
-  // reg [ADDR_WIDTH - 1:0]   src_c;
-  // reg [ADDR_WIDTH - 1:0]   src_h;
-  // reg [ADDR_WIDTH - 1:0]   src_w;
-  // reg [ADDR_WIDTH - 1:0]   scale_addr;
-  // reg [ADDR_WIDTH - 1:0]   dst_addr;
-  // reg [ADDR_WIDTH - 1:0]   addr_break;
-  // reg [ADDR_WIDTH - 1:0]   addr_s;
-  // reg [ADDR_WIDTH - 1:0]   addr_t;
+    reg [ADDR_WIDTH - 1:0]          unit_choose_reg;
+    reg [ADDR_WIDTH - 1:0]          src_addr_reg;
+    reg [ADDR_WIDTH - 1:0]          src2_addr_reg;
+    reg [ADDR_WIDTH - 1:0]          src_c_reg;
+    reg [ADDR_WIDTH - 1:0]          src_h_reg;
+    reg [ADDR_WIDTH - 1:0]          src_w_reg;
+    reg [ADDR_WIDTH - 1:0]          scale_addr_reg;
+    reg [ADDR_WIDTH - 1:0]          bias_addr_reg;
+    reg [ADDR_WIDTH - 1:0]          dst_addr_reg;
+
+    reg [ADDR_WIDTH-1:0]            addr_break_reg;
+    reg [ADDR_WIDTH-1:0]            addr_s_reg;
+    reg [ADDR_WIDTH-1:0]            addr_t_reg;
 
   // 假设存在 vpu_config_valid/config_ready（仅修复语法）
+
+  always @(posedge clk or negedge rst_n_local) begin
+    if(!rst_n_local) begin
+      unit_choose_reg <= 0;
+      src_addr_reg    <= 0;
+      src2_addr_reg   <= 0;
+      src_c_reg   <= 0;
+      src_h_reg   <= 0;
+      src_w_reg   <= 0;
+      scale_addr_reg    <= 0;
+      bias_addr_reg   <= 0;
+      dst_addr_reg    <= 0;
+      addr_break_reg    <= 0;
+      addr_s_reg    <= 0;
+      addr_t_reg    <= 0;
+    end else begin
+      if(config_ready && config_valid) begin
+        unit_choose_reg <= unit_choose;
+        src_addr_reg    <= src_addr;
+        src2_addr_reg   <= src2_addr;
+        src_c_reg       <= src_c;
+        src_h_reg       <= src_h;
+        src_w_reg       <= src_w;
+        scale_addr_reg  <= scale_addr;
+        bias_addr_reg   <= bias_addr;
+        dst_addr_reg    <= dst_addr;
+        addr_break_reg  <= addr_break;
+        addr_s_reg      <= addr_s;
+        addr_t_reg      <= addr_t;
+      end
+    end
+    
+  end
   
 
 
@@ -113,7 +152,7 @@ module Global_VPU #(
     wire [WB_BANDWIDTH-1:0]     wb_doutb;
 
     wire  dqa_fp_array_tvalid, nn_fp_array_tvalid, qa_fp_array_tvalid;
-    wire mp_unit_start, us_unit_start, nn_unit_start, qa_unit_start, dqa_unit_start, ad_unit_start;
+    wire mp_unit_start, us_unit_start, nn_unit_start, qa_unit_start, dqa_unit_start,ad_unit_start;
     wire mp_unit_ready, us_unit_ready, nn_unit_ready, qa_unit_ready, dqa_unit_ready, ad_unit_ready;
 
     wire [FP_CORE_NUM*FP_WIDTH-1:0] fp_res;
@@ -141,15 +180,15 @@ module Global_VPU #(
       .MAX_CHANNEL_NUM (MAX_CHANNEL_NUM)
   ) i_mp_unit (
       .clk                (clk),
-      .rst_n              (rst_n),
+      .rst_n              (rst_n_local),
       .mp_unit_start      (mp_unit_start),
       .mp_unit_ready      (mp_unit_ready),
       
-      .mp_src_addr        (src_addr),
-      .mp_src_h           (src_h),
-      .mp_src_w           (src_w),
-      .mp_src_c           (src_c),
-      .mp_dst_addr        (dst_addr),
+      .mp_src_addr        (src_addr_reg),
+      .mp_src_h           (src_h_reg),
+      .mp_src_w           (src_w_reg),
+      .mp_src_c           (src_c_reg),
+      .mp_dst_addr        (dst_addr_reg),
       
       // GB 接口输出 (需要 MUX 到顶层 top_gb_* 信号)
       .gb_addrb           (mp_gb_addrb), 
@@ -168,15 +207,15 @@ module Global_VPU #(
       .MAX_MP_CHANNEL_NUM (MAX_CHANNEL_NUM)
   ) i_us_unit (
       .clk                (clk),
-      .rst_n              (rst_n),
+      .rst_n              (rst_n_local),
       .us_unit_start      (us_unit_start),
       .us_unit_ready      (us_unit_ready),
       
-      .us_src_addr        (src_addr),
-      .us_src_h           (src_h),
-      .us_src_w           (src_w),
-      .us_src_c           (src_c),
-      .us_dst_addr        (dst_addr),
+      .us_src_addr        (src_addr_reg),
+      .us_src_h           (src_h_reg),
+      .us_src_w           (src_w_reg),
+      .us_src_c           (src_c_reg),
+      .us_dst_addr        (dst_addr_reg),
       
       // GB 接口输出 (需要 MUX 到顶层 top_gb_* 信号)
       .gb_addrb           (us_gb_addrb), 
@@ -186,7 +225,6 @@ module Global_VPU #(
       .gb_doutb           (gb_doutb)   // 连接顶层 GB BRAM 的输出
   );
 
-/* 暂时注释 nn_lut_unit，简化上板调试
 nn_lut_unit #(
     .ADDR_WIDTH(ADDR_WIDTH),
     .INTERVAL_NUM(INTERVAL_NUM),
@@ -202,19 +240,19 @@ nn_lut_unit #(
 )nn_lut_inst(
     // --- Control/Status Ports ---
     .clk(clk),
-    .rst_n(rst_n),
+    .rst_n(rst_n_local),
     .nn_unit_start(nn_unit_start),
     .nn_unit_ready(nn_unit_ready),
     
     // --- Configuration/Address Ports ---
-    .nn_addr_break(addr_break),
-    .nn_addr_s(addr_s),
-    .nn_addr_t(addr_t),
-    .nn_src_addr(src_addr),
-    .nn_src_c(src_c),
-    .nn_src_h(src_h),
-    .nn_src_w(src_w),
-    .nn_dst_addr(dst_addr),
+    .nn_addr_break(addr_break_reg),
+    .nn_addr_s(addr_s_reg),
+    .nn_addr_t(addr_t_reg),
+    .nn_src_addr(src_addr_reg),
+    .nn_src_c(src_c_reg),
+    .nn_src_h(src_h_reg),
+    .nn_src_w(src_w_reg),
+    .nn_dst_addr(dst_addr_reg),
 
     // --- Floating Point Array Ports (AXI Stream-like interfaces) ---
     .fp_array_tready(fp_array_tready),
@@ -239,22 +277,6 @@ nn_lut_unit #(
     .wb_enb(nn_wb_enb),
     .wb_doutb(wb_doutb)
 );
-*/
-
-// nn_lut_unit 暂时注释，所有输出置零
-assign nn_unit_ready = 1'b1;
-assign nn_fp_array_tvalid = 1'b0;
-assign nn_fp_a_tdata = {FP_CORE_NUM*FP_WIDTH{1'b0}};
-assign nn_fp_b_tdata = {FP_CORE_NUM*FP_WIDTH{1'b0}};
-assign nn_fp_c_tdata = {FP_CORE_NUM*FP_WIDTH{1'b0}};
-assign nn_gb_addrb = {GB_ADDR_WIDTH{1'b0}};
-assign nn_gb_dinb = {GB_BANDWIDTH{1'b0}};
-assign nn_gb_web = {(GB_BANDWIDTH/8){1'b0}};
-assign nn_gb_enb = 1'b0;
-assign nn_wb_addrb = {WB_ADDR_WIDTH{1'b0}};
-assign nn_wb_dinb = {WB_BANDWIDTH{1'b0}};
-assign nn_wb_web = {(WB_BANDWIDTH/8){1'b0}};
-assign nn_wb_enb = 1'b0;
 
 
 
@@ -273,17 +295,17 @@ assign nn_wb_enb = 1'b0;
   ) u_qa_unit (
       // --- Control/Status Ports ---
       .clk(clk),
-      .rst_n(rst_n),
+      .rst_n(rst_n_local),
       .qa_unit_start(qa_unit_start),
       .qa_unit_ready(qa_unit_ready),
       
       // --- Configuration/Address Ports ---
-      .qa_src_addr(src_addr),
-      .qa_src_c(src_c),
-      .qa_src_h(src_h),
-      .qa_src_w(src_w),
-      .qa_scale_addr(scale_addr),
-      .qa_dst_addr(dst_addr),
+      .qa_src_addr(src_addr_reg),
+      .qa_src_c(src_c_reg),
+      .qa_src_h(src_h_reg),
+      .qa_src_w(src_w_reg),
+      .qa_scale_addr(scale_addr_reg),
+      .qa_dst_addr(dst_addr_reg),
 
       // --- Floating Point Array Ports (AXI Stream-like interfaces) ---
       .fp_array_tready(fp_array_tready),
@@ -318,15 +340,16 @@ assign nn_wb_enb = 1'b0;
       .FP_WIDTH(FP_WIDTH)
     ) ad_unit_inst (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_n_local),
         .ad_unit_start(ad_unit_start),
         .ad_unit_ready(ad_unit_ready),
-        .ad_src_addr(src_addr),
-        .ad_src2_addr(src2_addr),
-        .ad_src_c(src_c),
-        .ad_src_h(src_h),
-        .ad_src_w(src_w),
-        .ad_dst_addr(dst_addr),
+
+        .ad_src_addr(src_addr_reg),
+        .ad_src2_addr(src2_addr_reg),
+        .ad_src_c(src_c_reg),
+        .ad_src_h(src_h_reg),
+        .ad_src_w(src_w_reg),
+        .ad_dst_addr(dst_addr_reg),
 
         .gb_addrb( ad_gb_addrb),
         .gb_dinb( ad_gb_dinb),
@@ -359,7 +382,7 @@ assign nn_wb_enb = 1'b0;
       .MAX_CHANNEL_NUM(FP_CORE_NUM)
     ) dqa_inst (
         .clk(clk),
-        .rst_n(rst_n),
+        .rst_n(rst_n_local),
         .dqa_unit_start(dqa_unit_start),
         .dqa_unit_ready(dqa_unit_ready),
         .dqa_src_addr(src_addr),
@@ -391,13 +414,13 @@ assign nn_wb_enb = 1'b0;
         .wb_doutb(wb_doutb)
     );
 
-    assign ready = nn_unit_ready & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready & ad_unit_ready;
-    assign dqa_unit_start = (unit_choose == UNIT_DQA) ? vpu_start : 1'b0;
-    assign qa_unit_start  = (unit_choose == UNIT_QA ) ? vpu_start : 1'b0;
-    assign nn_unit_start  = (unit_choose == UNIT_NN ) ? vpu_start : 1'b0;
-    assign mp_unit_start  = (unit_choose == UNIT_MP ) ? vpu_start : 1'b0;
-    assign us_unit_start  = (unit_choose == UNIT_US ) ? vpu_start : 1'b0;
-    assign ad_unit_start  = (unit_choose == UNIT_AD ) ? vpu_start : 1'b0;
+    assign config_ready = nn_unit_ready & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready;
+    assign dqa_unit_start = (unit_choose == UNIT_DQA) ? start : 1'b0;
+    assign qa_unit_start  = (unit_choose == UNIT_QA ) ? start : 1'b0;
+    assign nn_unit_start  = (unit_choose == UNIT_NN ) ? start : 1'b0;
+    assign mp_unit_start  = (unit_choose == UNIT_MP ) ? start : 1'b0;
+    assign us_unit_start  = (unit_choose == UNIT_US ) ? start : 1'b0;
+    assign ad_unit_start  = (unit_choose == UNIT_AD ) ? start : 1'b0;
 
 
  // GB Address (Output from Unit to BRAM)
@@ -504,43 +527,18 @@ assign fp_c_tdata   = (unit_choose == UNIT_DQA) ? dqa_fp_c_tdata  :
                          (unit_choose == UNIT_QA) ? qa_fp_c_tdata   : // Handles QA and SU
                                                          {FP_CORE_NUM*FP_WIDTH{1'b0}};
 
-// FP32 MAC 阵列：res = a*b + c（直接例化 IP，避免 BD 综合依赖问题）
-assign fp_array_tready = 1'b1;
-
-wire [FP_CORE_NUM-1:0] mult_tvalid_arr;
-wire [FP_CORE_NUM*FP_WIDTH-1:0] mult_result;
-wire [FP_CORE_NUM-1:0] add_tvalid_arr;
-
-genvar mac_i;
-generate
-    for (mac_i = 0; mac_i < FP_CORE_NUM; mac_i = mac_i + 1) begin: FP32_MAC_LANE
-        // 乘法：a * b
-        fp32_mult_lane fp32_mult_inst (
-            .aclk(clk),
-            .aresetn(rst_n),
-            .s_axis_a_tvalid(fp_array_tvalid),
-            .s_axis_a_tdata(fp_a_tdata[mac_i*FP_WIDTH +: FP_WIDTH]),
-            .s_axis_b_tvalid(fp_array_tvalid),
-            .s_axis_b_tdata(fp_b_tdata[mac_i*FP_WIDTH +: FP_WIDTH]),
-            .m_axis_result_tvalid(mult_tvalid_arr[mac_i]),
-            .m_axis_result_tdata(mult_result[mac_i*FP_WIDTH +: FP_WIDTH])
-        );
-
-        // 加法：(a*b) + c
-        fp32_add_lane fp32_add_inst (
-            .aclk(clk),
-            .aresetn(rst_n),
-            .s_axis_a_tvalid(mult_tvalid_arr[mac_i]),
-            .s_axis_a_tdata(mult_result[mac_i*FP_WIDTH +: FP_WIDTH]),
-            .s_axis_b_tvalid(mult_tvalid_arr[mac_i]),
-            .s_axis_b_tdata(fp_c_tdata[mac_i*FP_WIDTH +: FP_WIDTH]),
-            .m_axis_result_tvalid(add_tvalid_arr[mac_i]),
-            .m_axis_result_tdata(fp_res[mac_i*FP_WIDTH +: FP_WIDTH])
-        );
-    end
-endgenerate
-
-assign fp_res_tvalid = add_tvalid_arr[0];
+  fp_mac_array #(
+    .FP_CORE_NUM(FP_CORE_NUM)
+  ) fp_mac_array_inst(
+    .clk(clk),
+    .fp_array_tvalid(fp_array_tvalid),
+    .fp_array_tready(fp_array_tready),
+    .a_tdata(fp_a_tdata),        // packed: core0 LSB .. coreN MSB
+    .b_tdata(fp_b_tdata),
+    .c_tdata(fp_c_tdata),        // bias inputs
+    .res(fp_res),      // each core's 16-bit result
+    .res_tvalid(fp_res_tvalid)
+);
 
   // --------------------------------------------------
   // Instantiate global_buffer_bram for GB (port B -> DUT)
@@ -562,8 +560,8 @@ assign fp_res_tvalid = add_tvalid_arr[0];
     .web(gb_web),
     .ena(gb_ena),
     .enb(gb_enb),
-    .rsta(~rst_n),
-    .rstb(~rst_n),
+    .rsta(1'b0),
+    .rstb(1'b0),
     .regcea(1'b1),
     .regceb(1'b1),
     .douta(gb_douta),
@@ -590,8 +588,8 @@ assign fp_res_tvalid = add_tvalid_arr[0];
     .web(wb_web),
     .ena(wb_ena),
     .enb(wb_enb),
-    .rsta(~rst_n),
-    .rstb(~rst_n),
+    .rsta(1'b0),
+    .rstb(1'b0),
     .regcea(1'b1),
     .regceb(1'b1),
     .douta(wb_douta),

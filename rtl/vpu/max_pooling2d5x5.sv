@@ -1,12 +1,3 @@
-`timescale 1ns / 1ps
-//==============================================================================
-// max_pooling2d5x5：对展平的 25 组 GB 宽度输入做分层比较，输出每组（每 lane）
-//                  的最大值；掩码 mp_valid_mask 指示每组是否参与比较。
-// 时序：mp_act_valid 拉高后内部状态机完成 SEL/CMP 流水线，mp_res_valid 指示
-//       输出有效。rst_n 异步复位。
-// 参数：FP_WIDTH 须整除 GB_BANDWIDTH（通道并行数 = GB_BANDWIDTH/FP_WIDTH）。
-// 用法：由 mp_unit 例化；不复位时需保证输入与掩码与数据源一致。
-//==============================================================================
 module max_pooling2d5x5 #(
     parameter int FP_WIDTH     = 32,    // bits per channel (must divide GB_BANDWIDTH)
     parameter int GB_BANDWIDTH = 256

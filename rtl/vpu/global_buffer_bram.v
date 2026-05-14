@@ -1,9 +1,4 @@
-//==============================================================================
-// global_buffer_bram：True Dual Port BRAM 行为模型（字节写使能、读优先）。参数
-//                    NB_COL/COL_WIDTH/RAM_DEPTH 决定总线宽度与深度；可选 INIT_FILE。
-// 用法：Port A/B 独立时钟域此处共 clk；ena/enb、wea/web 控制读写。例化见各 *_unit
-//      与 Global_VPU；仿真可直接用该模型代替 Xilinx BRAM IP。
-//==============================================================================
+
 //  Xilinx True Dual Port RAM Byte Write Read First Single Clock RAM
 //  This code implements a parameterizable true dual port memory (both ports can read and write).
 //  The behavior of this RAM is when data is written, the prior memory contents at the write

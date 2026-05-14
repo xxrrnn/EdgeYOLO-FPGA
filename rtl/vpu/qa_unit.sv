@@ -1,11 +1,5 @@
 `timescale 1ns/1ps
-//==============================================================================
-// qa_unit：量化激活（QA）：从 WB 读 scale，从 GB 读浮点特征，送 fp_mac_array
-//         做缩放/融合后再整型化并写回 GB；同时访问 wb_* 与 gb_*。
-// 启动：qa_unit_start；空闲时 qa_unit_ready=1。
-// 配置：qa_src_*、qa_scale_addr、qa_dst_addr；Q_INT_WIDTH_OUT 为整型输出位宽；
-//      FP_CORE_NUM、FP_WIDTH 须与所接 FP 运算阵列一致。
-//==============================================================================
+
 module qa_unit #(
     parameter ADDR_WIDTH =      32,
     parameter GB_BANDWIDTH =    256,
@@ -95,7 +89,8 @@ module qa_unit #(
     */
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_load_addr;
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks;
-    assign      qa_x_total_blocks             = qa_src_c * qa_src_h * qa_src_w * FP_WIDTH / GB_BANDWIDTH;
+    // 使用预计算的寄存器值，而不是直接组合逻辑计算
+    assign      qa_x_total_blocks             = qa_x_total_blocks_reg;
 
     
 
@@ -214,15 +209,14 @@ module qa_unit #(
     assign  s_axis_tvalid = (c_state == QA_INT); 
     assign  s_axis_tdata  = qa_fp_in_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH];
 
-    // FP32 → INT8 转换（FP_WIDTH 固定为 32）
-    fp32_2_int8_array # (
-        .FP_TRAN_NUM(FP_TRAN_NUM)
-    ) fp32_2_int8_array_inst (
+    fp16_2_int8_array # (
+    .FP_TRAN_NUM(FP_TRAN_NUM)
+    )fp16_2_int8_array_inst(
         .clk(clk),
         .s_axis_a_tvalid(s_axis_tvalid),
         .s_axis_a_tdata(s_axis_tdata),
-        .m_axis_result_tvalid(m_axis_int_tvalid),
-        .m_axis_result_tdata(m_axis_int_tdata)
+        .m_axis_result_tdata(m_axis_int_tdata),
+        .m_axis_result_tvalid(m_axis_int_tvalid)
     );
 
     always_ff@(posedge clk or negedge rst_n) begin
@@ -234,7 +228,7 @@ module qa_unit #(
             qa_out_q_reg <= fp_res;
         end else if(c_state == QA_COMPUTE_WAIT && m_axis_int_tvalid) begin
             qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
-            qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH] <= m_axis_int_tdata;
+            qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
         end else if(c_state == IDLE) begin
             qa_x_tran_cnt<= '0;
             qa_out_q_reg <= '0;

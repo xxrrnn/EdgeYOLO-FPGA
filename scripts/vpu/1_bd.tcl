@@ -28,11 +28,17 @@ if {[file exists [file dirname $bdFile]]} {
 
 create_bd_design -dir $bdDir $bdName
 
-# 收集所有 VPU RTL 文件（.v 和 .sv）
-set vpuRtlFiles [concat \
-    [glob -nocomplain [file normalize "$vpuRtlDir/*.v"]] \
-    [glob -nocomplain [file normalize "$vpuRtlDir/*.sv"]] \
-]
+# 收集所有 VPU RTL 文件（.v 和 .sv），包括子目录，但排除测试文件和备份文件
+set vpuRtlFiles {}
+foreach pattern {*.v *.sv */*.v */*.sv} {
+    foreach f [glob -nocomplain [file normalize "$vpuRtlDir/$pattern"]] {
+        # 排除 testbench 文件和备份文件
+        if {![regexp {(tb_.*|.*_v2)\.(v|sv)$} [file tail $f]]} {
+            lappend vpuRtlFiles $f
+        }
+    }
+}
+
 if {[llength $vpuRtlFiles] == 0} {
     error "No RTL files under $vpuRtlDir"
 }
@@ -43,7 +49,7 @@ foreach f $vpuRtlFiles {
 }
 
 add_files -norecurse $vpuRtlFiles
-set_property include_dirs [list $vpuRtlDir] [current_fileset]
+set_property include_dirs [list $vpuRtlDir "$vpuRtlDir/fp array"] [current_fileset]
 update_compile_order -fileset sources_1
 
 # 强制刷新 IP 目录以识别所有 RTL 模块
