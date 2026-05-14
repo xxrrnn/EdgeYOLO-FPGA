@@ -14,13 +14,26 @@ VCS_FLAGS += -ignore initializer_driver_checks
 VCS_FLAGS += -kdb -lca
 FSDB_FLAGS = +fsdb+autoflush
 
-.PHONY: all clean compile sim test test_array test_tile compile_tile sim_tile fsdb verdi test_all
+.PHONY: all clean compile sim test test_array test_tile compile_tile sim_tile fsdb verdi test_all test_group compile_group sim_group
 
-all: test
+all: test_group
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# 测试单组（8 Tile + 1 IBUF + 1 OBUF）
+compile_group: $(BUILD_DIR)
+	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) +define+SIM \
+		-f ../filelist.f \
+		../tb/tb_DCIM_Array_Group.sv \
+		-o simv_group
+
+sim_group: compile_group
+	cd $(BUILD_DIR) && chmod +x simv_group && ./simv_group
+
+test_group: sim_group
+
+# 测试完整阵列（8 组 × 8 Tile = 64 Tile）
 compile: $(BUILD_DIR)
 	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) +define+SIM \
 		-f ../filelist.f \
@@ -43,13 +56,13 @@ sim_tile: compile_tile
 
 test_tile: sim_tile
 
-test_all: test test_tile
+test_all: test_group test_tile
 
-fsdb: compile
-	cd $(BUILD_DIR) && chmod +x simv && ./simv $(FSDB_FLAGS) +fsdbfile+dcim_array.fsdb
+fsdb: compile_group
+	cd $(BUILD_DIR) && chmod +x simv_group && ./simv_group $(FSDB_FLAGS) +fsdbfile+dcim_array_group.fsdb
 
 verdi:
-	cd $(BUILD_DIR) && verdi -dbdir simv.daidir -ssf dcim_array.fsdb &
+	cd $(BUILD_DIR) && verdi -dbdir simv_group.daidir -ssf dcim_array_group.fsdb &
 
 clean:
 	rm -rf $(BUILD_DIR) $(CHIP_DIR)/csrc $(CHIP_DIR)/*.daidir $(CHIP_DIR)/*.log $(CHIP_DIR)/*.key $(CHIP_DIR)/*.vpd $(CHIP_DIR)/DVEfiles

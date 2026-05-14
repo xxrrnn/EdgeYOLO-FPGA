@@ -27,6 +27,7 @@ set chipRtlFiles [list \
     [file normalize "$srcDir/chip/DCIM_Array_AXI.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_Top.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
+    [file normalize "$srcDir/chip/DCIM_Array_Group.sv"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
     [file normalize "$srcDir/chip/ibuf_rd_arbiter.sv"] \
     [file normalize "$srcDir/chip/obuf_wr_arbiter.sv"] \
@@ -99,6 +100,8 @@ create_bd_cell -type module -reference DCIM_Array_bd dcim_array_0
 # ============================================================================
 # 加载 IP 配置脚本
 # ============================================================================
+# DCIM done/ready：已由 DCIM_Array_AXI 映射到 AXI-Lite STATUS（基址见 address.tcl，
+# 偏移 +0x004，rdata[0]=done，rdata[1]=ready）。主机经 XDMA M_AXI（PCIe BAR）读该字即可。
 source [file normalize "$ipBdDir/../xdma.tcl"]
 source [file normalize "$ipBdDir/bram.tcl"]
 source [file normalize "$ipBdDir/cdma.tcl"]

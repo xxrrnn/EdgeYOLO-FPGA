@@ -8,7 +8,7 @@ VSRC=..
 TARGET_ARCH=
 
 # Choose name of executable 
-PRODUCTBASE=$(VSRC)/simv
+PRODUCTBASE=$(VSRC)/simv_group
 
 PRODUCT=$(PRODUCTBASE)
 
@@ -39,7 +39,7 @@ STDLIB =
 STRIPFLAGS= 
 
 PRE_LDFLAGS= # Loader Flags
-LDFLAGS= -rdynamic  -Wl,-rpath='$$ORIGIN'/simv.daidir -Wl,-rpath=./simv.daidir -Wl,-rpath=/home/EDAtools/synopsys/vcs/V-2023.12-SP1/linux64/lib -L/home/EDAtools/synopsys/vcs/V-2023.12-SP1/linux64/lib 
+LDFLAGS= -rdynamic  -Wl,-rpath='$$ORIGIN'/simv_group.daidir -Wl,-rpath=./simv_group.daidir -Wl,-rpath=/home/EDAtools/synopsys/vcs/V-2023.12-SP1/linux64/lib -L/home/EDAtools/synopsys/vcs/V-2023.12-SP1/linux64/lib 
 # Picarchive Flags
 PICLDFLAGS= -Wl,-rpath-link=./ 
 PIC_LD=ld

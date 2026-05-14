@@ -6,17 +6,22 @@
 // Vivado IP Integrator 不支持 SystemVerilog 作为 module reference 的顶层，
 // 因此用纯 Verilog wrapper 包装 DCIM_Array_Top。
 //
+// 架构：8 组 × 8 Tile/组 = 64 Tile
+// 每组独立的 IBUF/OBUF，需要 8 组独立的 AXI BRAM Controller 接口
+//
 // 地址转换：
-//   AXI BRAM Controller 输出字节地址（23 位用于 8MB）
-//   DCIM_Array 内部使用字地址（19 位，128-bit = 16 bytes per word）
+//   AXI BRAM Controller 输出字节地址
+//   DCIM_Array 内部使用字地址（128-bit = 16 bytes per word）
 //   转换：word_addr = byte_addr >> 4 (除以 16)
 // ============================================================================
 
 module DCIM_Array_bd #(
-    parameter NUM_TILES           = 32,
-    parameter BUF_ADDR_WIDTH      = 19,     // 内部字地址宽度
+    parameter NUM_GROUPS          = 8,
+    parameter TILES_PER_GROUP     = 8,
+    parameter NUM_TILES           = 64,       // NUM_GROUPS × TILES_PER_GROUP
+    parameter BUF_ADDR_WIDTH      = 14,       // 每组 IBUF/OBUF 内部字地址宽度
     parameter BUF_DATA_WIDTH      = 128,
-    parameter AXI_BRAM_ADDR_WIDTH = 23,     // AXI BRAM Controller 字节地址宽度 (8MB)
+    parameter AXI_BRAM_ADDR_WIDTH = 18,       // AXI BRAM Controller 字节地址宽度 (每组 256KB)
     parameter AXI_ADDR_WIDTH      = 12,
     parameter AXI_DATA_WIDTH      = 32
 )(
@@ -48,19 +53,109 @@ module DCIM_Array_bd #(
     output wire                          s_axi_rvalid,
     input  wire                          s_axi_rready,
     
-    // 外部 IBUF 接口（连接 AXI BRAM Controller，字节地址）
-    input  wire [BUF_DATA_WIDTH/8-1:0]   ibuf_ext_wea,
-    input  wire                          ibuf_ext_ena,
-    input  wire [AXI_BRAM_ADDR_WIDTH-1:0] ibuf_ext_addra,  // 字节地址
-    input  wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_douta,
+    // ========================================================================
+    // 8 组外部 IBUF 接口（连接 AXI BRAM Controller，字节地址）
+    // ========================================================================
+    // Group 0
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_0,
+    input  wire                               ibuf_ext_ena_0,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_0,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_0,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_0,
+    // Group 1
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_1,
+    input  wire                               ibuf_ext_ena_1,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_1,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_1,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_1,
+    // Group 2
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_2,
+    input  wire                               ibuf_ext_ena_2,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_2,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_2,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_2,
+    // Group 3
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_3,
+    input  wire                               ibuf_ext_ena_3,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_3,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_3,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_3,
+    // Group 4
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_4,
+    input  wire                               ibuf_ext_ena_4,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_4,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_4,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_4,
+    // Group 5
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_5,
+    input  wire                               ibuf_ext_ena_5,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_5,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_5,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_5,
+    // Group 6
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_6,
+    input  wire                               ibuf_ext_ena_6,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_6,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_6,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_6,
+    // Group 7
+    input  wire [BUF_DATA_WIDTH/8-1:0]        ibuf_ext_wea_7,
+    input  wire                               ibuf_ext_ena_7,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     ibuf_ext_addra_7,
+    input  wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_dina_7,
+    output wire [BUF_DATA_WIDTH-1:0]          ibuf_ext_douta_7,
     
-    // 外部 OBUF 接口（连接 AXI BRAM Controller，字节地址）
-    input  wire [BUF_DATA_WIDTH/8-1:0]   obuf_ext_wea,
-    input  wire                          obuf_ext_ena,
-    input  wire [AXI_BRAM_ADDR_WIDTH-1:0] obuf_ext_addra,  // 字节地址
-    input  wire [BUF_DATA_WIDTH-1:0]     obuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     obuf_ext_douta,
+    // ========================================================================
+    // 8 组外部 OBUF 接口（连接 AXI BRAM Controller，字节地址）
+    // ========================================================================
+    // Group 0
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_0,
+    input  wire                               obuf_ext_ena_0,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_0,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_0,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_0,
+    // Group 1
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_1,
+    input  wire                               obuf_ext_ena_1,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_1,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_1,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_1,
+    // Group 2
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_2,
+    input  wire                               obuf_ext_ena_2,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_2,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_2,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_2,
+    // Group 3
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_3,
+    input  wire                               obuf_ext_ena_3,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_3,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_3,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_3,
+    // Group 4
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_4,
+    input  wire                               obuf_ext_ena_4,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_4,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_4,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_4,
+    // Group 5
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_5,
+    input  wire                               obuf_ext_ena_5,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_5,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_5,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_5,
+    // Group 6
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_6,
+    input  wire                               obuf_ext_ena_6,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_6,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_6,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_6,
+    // Group 7
+    input  wire [BUF_DATA_WIDTH/8-1:0]        obuf_ext_wea_7,
+    input  wire                               obuf_ext_ena_7,
+    input  wire [AXI_BRAM_ADDR_WIDTH-1:0]     obuf_ext_addra_7,
+    input  wire [BUF_DATA_WIDTH-1:0]          obuf_ext_dina_7,
+    output wire [BUF_DATA_WIDTH-1:0]          obuf_ext_douta_7,
     
     // 状态输出
     output wire                          done,
@@ -70,14 +165,133 @@ module DCIM_Array_bd #(
     // 地址转换：字节地址 -> 字地址
     // 128-bit = 16 bytes, 所以右移 4 位
     localparam ADDR_SHIFT = 4;  // log2(128/8) = log2(16) = 4
+    localparam STRB_WIDTH = BUF_DATA_WIDTH / 8;  // 128/8 = 16
     
-    wire [BUF_ADDR_WIDTH-1:0] ibuf_word_addr;
-    wire [BUF_ADDR_WIDTH-1:0] obuf_word_addr;
+    // ========================================================================
+    // 聚合信号
+    // ========================================================================
+    wire [NUM_GROUPS*STRB_WIDTH-1:0]     ibuf_ext_wea;
+    wire [NUM_GROUPS-1:0]                ibuf_ext_ena;
+    wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0] ibuf_ext_addra;
+    wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0] ibuf_ext_dina;
+    wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0] ibuf_ext_douta;
     
-    assign ibuf_word_addr = ibuf_ext_addra[ADDR_SHIFT +: BUF_ADDR_WIDTH];
-    assign obuf_word_addr = obuf_ext_addra[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    wire [NUM_GROUPS*STRB_WIDTH-1:0]     obuf_ext_wea;
+    wire [NUM_GROUPS-1:0]                obuf_ext_ena;
+    wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0] obuf_ext_addra;
+    wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0] obuf_ext_dina;
+    wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0] obuf_ext_douta;
+    
+    // ========================================================================
+    // IBUF 信号聚合与地址转换
+    // ========================================================================
+    // Group 0
+    assign ibuf_ext_wea[0*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_0;
+    assign ibuf_ext_ena[0] = ibuf_ext_ena_0;
+    assign ibuf_ext_addra[0*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_0[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[0*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_0;
+    assign ibuf_ext_douta_0 = ibuf_ext_douta[0*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 1
+    assign ibuf_ext_wea[1*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_1;
+    assign ibuf_ext_ena[1] = ibuf_ext_ena_1;
+    assign ibuf_ext_addra[1*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_1[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[1*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_1;
+    assign ibuf_ext_douta_1 = ibuf_ext_douta[1*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 2
+    assign ibuf_ext_wea[2*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_2;
+    assign ibuf_ext_ena[2] = ibuf_ext_ena_2;
+    assign ibuf_ext_addra[2*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_2[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_2;
+    assign ibuf_ext_douta_2 = ibuf_ext_douta[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 3
+    assign ibuf_ext_wea[3*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_3;
+    assign ibuf_ext_ena[3] = ibuf_ext_ena_3;
+    assign ibuf_ext_addra[3*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_3[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_3;
+    assign ibuf_ext_douta_3 = ibuf_ext_douta[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 4
+    assign ibuf_ext_wea[4*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_4;
+    assign ibuf_ext_ena[4] = ibuf_ext_ena_4;
+    assign ibuf_ext_addra[4*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_4[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[4*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_4;
+    assign ibuf_ext_douta_4 = ibuf_ext_douta[4*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 5
+    assign ibuf_ext_wea[5*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_5;
+    assign ibuf_ext_ena[5] = ibuf_ext_ena_5;
+    assign ibuf_ext_addra[5*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_5[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[5*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_5;
+    assign ibuf_ext_douta_5 = ibuf_ext_douta[5*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 6
+    assign ibuf_ext_wea[6*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_6;
+    assign ibuf_ext_ena[6] = ibuf_ext_ena_6;
+    assign ibuf_ext_addra[6*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_6[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[6*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_6;
+    assign ibuf_ext_douta_6 = ibuf_ext_douta[6*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 7
+    assign ibuf_ext_wea[7*STRB_WIDTH +: STRB_WIDTH] = ibuf_ext_wea_7;
+    assign ibuf_ext_ena[7] = ibuf_ext_ena_7;
+    assign ibuf_ext_addra[7*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = ibuf_ext_addra_7[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign ibuf_ext_dina[7*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = ibuf_ext_dina_7;
+    assign ibuf_ext_douta_7 = ibuf_ext_douta[7*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    
+    // ========================================================================
+    // OBUF 信号聚合与地址转换
+    // ========================================================================
+    // Group 0
+    assign obuf_ext_wea[0*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_0;
+    assign obuf_ext_ena[0] = obuf_ext_ena_0;
+    assign obuf_ext_addra[0*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_0[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[0*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_0;
+    assign obuf_ext_douta_0 = obuf_ext_douta[0*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 1
+    assign obuf_ext_wea[1*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_1;
+    assign obuf_ext_ena[1] = obuf_ext_ena_1;
+    assign obuf_ext_addra[1*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_1[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[1*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_1;
+    assign obuf_ext_douta_1 = obuf_ext_douta[1*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 2
+    assign obuf_ext_wea[2*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_2;
+    assign obuf_ext_ena[2] = obuf_ext_ena_2;
+    assign obuf_ext_addra[2*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_2[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_2;
+    assign obuf_ext_douta_2 = obuf_ext_douta[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 3
+    assign obuf_ext_wea[3*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_3;
+    assign obuf_ext_ena[3] = obuf_ext_ena_3;
+    assign obuf_ext_addra[3*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_3[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_3;
+    assign obuf_ext_douta_3 = obuf_ext_douta[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 4
+    assign obuf_ext_wea[4*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_4;
+    assign obuf_ext_ena[4] = obuf_ext_ena_4;
+    assign obuf_ext_addra[4*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_4[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[4*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_4;
+    assign obuf_ext_douta_4 = obuf_ext_douta[4*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 5
+    assign obuf_ext_wea[5*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_5;
+    assign obuf_ext_ena[5] = obuf_ext_ena_5;
+    assign obuf_ext_addra[5*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_5[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[5*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_5;
+    assign obuf_ext_douta_5 = obuf_ext_douta[5*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 6
+    assign obuf_ext_wea[6*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_6;
+    assign obuf_ext_ena[6] = obuf_ext_ena_6;
+    assign obuf_ext_addra[6*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_6[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[6*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_6;
+    assign obuf_ext_douta_6 = obuf_ext_douta[6*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    // Group 7
+    assign obuf_ext_wea[7*STRB_WIDTH +: STRB_WIDTH] = obuf_ext_wea_7;
+    assign obuf_ext_ena[7] = obuf_ext_ena_7;
+    assign obuf_ext_addra[7*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] = obuf_ext_addra_7[ADDR_SHIFT +: BUF_ADDR_WIDTH];
+    assign obuf_ext_dina[7*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = obuf_ext_dina_7;
+    assign obuf_ext_douta_7 = obuf_ext_douta[7*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
 
+    // ========================================================================
+    // DCIM_Array_Top 实例化
+    // ========================================================================
     DCIM_Array_Top #(
+        .NUM_GROUPS(NUM_GROUPS),
+        .TILES_PER_GROUP(TILES_PER_GROUP),
         .NUM_TILES(NUM_TILES),
         .WD1(4),
         .CH_IN(16),
@@ -87,7 +301,7 @@ module DCIM_Array_bd #(
         .ACC(80),
         .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH),
         .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
-        .IBUF_RD_LATENCY(4),
+        .IBUF_RD_LATENCY(8),
         .AXI_ADDR_WIDTH(AXI_ADDR_WIDTH),
         .AXI_DATA_WIDTH(AXI_DATA_WIDTH)
     ) u_top (
@@ -120,13 +334,13 @@ module DCIM_Array_bd #(
         
         .ibuf_ext_wea(ibuf_ext_wea),
         .ibuf_ext_ena(ibuf_ext_ena),
-        .ibuf_ext_addra(ibuf_word_addr),  // 转换后的字地址
+        .ibuf_ext_addra(ibuf_ext_addra),
         .ibuf_ext_dina(ibuf_ext_dina),
         .ibuf_ext_douta(ibuf_ext_douta),
         
         .obuf_ext_wea(obuf_ext_wea),
         .obuf_ext_ena(obuf_ext_ena),
-        .obuf_ext_addra(obuf_word_addr),  // 转换后的字地址
+        .obuf_ext_addra(obuf_ext_addra),
         .obuf_ext_dina(obuf_ext_dina),
         .obuf_ext_douta(obuf_ext_douta),
         

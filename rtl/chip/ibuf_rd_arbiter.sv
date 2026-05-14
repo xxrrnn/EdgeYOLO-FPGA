@@ -45,25 +45,16 @@ module ibuf_rd_arbiter #(
     
     // ========================================================================
     // 仲裁逻辑：从 rr_ptr 开始找到第一个有效请求
-    // 添加流水线寄存器打破组合逻辑链
     // ========================================================================
-    (* max_fanout = 8 *) reg [NUM_TILES-1:0] tile_rd_valid_q;
     reg [TILE_IDX_W-1:0] grant_idx;
     reg                   grant_valid;
     
-    // 第一级：请求锁存
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) tile_rd_valid_q <= 0;
-        else tile_rd_valid_q <= tile_rd_valid;
-    end
-    
-    // 第二级：仲裁逻辑（使用锁存后的请求）
     always_comb begin
         grant_valid = 1'b0;
         grant_idx = 0;
         for (int i = 0; i < NUM_TILES; i++) begin
             automatic int idx = (rr_ptr + i) % NUM_TILES;
-            if (!grant_valid && tile_rd_valid_q[idx]) begin
+            if (!grant_valid && tile_rd_valid[idx]) begin
                 grant_valid = 1'b1;
                 grant_idx = idx[TILE_IDX_W-1:0];
             end
@@ -83,26 +74,17 @@ module ibuf_rd_arbiter #(
     reg [TILE_IDX_W-1:0] active_tile;
     reg [3:0] latency_cnt;
     
-    // ready 信号：注册以减少扇出
-    (* max_fanout = 4 *) reg [NUM_TILES-1:0] tile_rd_ready_reg;
-    assign tile_rd_ready = tile_rd_ready_reg;
-    
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) tile_rd_ready_reg <= 0;
-        else begin
-            for (int g = 0; g < NUM_TILES; g++) begin
-                tile_rd_ready_reg[g] <= (arb_state == ARB_IDLE) && grant_valid && (grant_idx == g);
-            end
+    // ready 信号：仅在 IDLE 状态且被选中的 Tile 才拉高
+    generate
+        genvar g;
+        for (g = 0; g < NUM_TILES; g = g + 1) begin : gen_ready
+            assign tile_rd_ready[g] = (arb_state == ARB_IDLE) && grant_valid && (grant_idx == g);
         end
-    end
+    endgenerate
     
-    // 读数据广播给所有 Tile（添加寄存器减少扇出）
-    (* max_fanout = 8 *) reg [DATA_WIDTH-1:0] tile_rd_data_reg;
-    assign tile_rd_data = tile_rd_data_reg;
+    // 读数据广播给所有 Tile（只有 data_valid 对应的 Tile 会使用）
+    assign tile_rd_data = ibuf_dout;
     
-    always_ff @(posedge clk) begin
-        tile_rd_data_reg <= ibuf_dout;
-    end    
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             arb_state <= ARB_IDLE;

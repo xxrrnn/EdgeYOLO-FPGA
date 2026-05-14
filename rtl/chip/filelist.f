@@ -32,4 +32,5 @@
 ../DCIM_Tile.sv
 ../ibuf_rd_arbiter.sv
 ../obuf_wr_arbiter.sv
+../DCIM_Array_Group.sv
 ../DCIM_Array.sv

@@ -11,15 +11,6 @@
 //   - INT8 模式：接收 1 次 raw_act_valid → 输出 2 次 dcim_act_valid（低/高nibble）
 //   - INT16 模式：接收 1 次 raw_act_valid → 输出 4 次 dcim_act_valid（4个nibble）
 //
-// 握手协议：
-//   - 上游（raw）: 标准 valid/ready 握手
-//   - 下游（dcim）: 标准 valid/ready 握手
-//   - 背压支持：dcim_act_ready 反压时，模块暂停输出并阻塞上游
-//
-// 使用示例：
-//   mode = MODE_INT8  → 每次接收 CH_IN×8bit，分2拍输出 CH_IN×4bit
-//   mode = MODE_INT16 → 每次接收 CH_IN×16bit，分4拍输出 CH_IN×4bit
-//
 // ============================================================================
 
 module act_nibble_converter #(
@@ -135,12 +126,6 @@ module act_nibble_converter #(
     end
     
     // ========== Nibble 提取逻辑 ==========
-    // 根据当前相位，从锁存的数据中提取对应的 nibble
-    // 注意：DCIM 期望先发送高 nibble，再发送低 nibble
-    // 因为 merge 模块的累加逻辑是：result = new + old << 4
-    // 所以先发送的 nibble 会被左移，后发送的不会
-    // 对于 INT8：先发送 bit[7:4]（高），再发送 bit[3:0]（低）
-    // 对于 INT16：先发送 bit[15:12]，再发送 bit[11:8]，再发送 bit[7:4]，最后 bit[3:0]
     always_comb begin
         dcim_act_data = '0;
         
@@ -167,16 +152,5 @@ module act_nibble_converter #(
             endcase
         end
     end
-    
-    // ========== 断言检查（仿真用）==========
-    `ifdef SIMULATION
-    always_ff @(posedge clk) begin
-        if (rst_n && raw_act_valid && raw_act_ready) begin
-            // 检查 mode 是否合法
-            assert (mode == MODE_INT8 || mode == MODE_INT16)
-                else $error("act_nibble_converter: Unsupported mode=%b", mode);
-        end
-    end
-    `endif
 
 endmodule

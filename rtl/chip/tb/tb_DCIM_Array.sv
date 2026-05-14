@@ -76,7 +76,7 @@ module tb_DCIM_Array;
         .ACC(ACC),
         .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH),
         .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
-        .IBUF_RD_LATENCY(4)
+        .IBUF_RD_LATENCY(8)
     ) dut (
         .clk(clk),
         .rst_n(rst_n),

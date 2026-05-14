@@ -4,24 +4,27 @@
 // DCIM_Array_Top - 顶层封装模块
 // ============================================================================
 // 集成 DCIM_Array 计算核心 + AXI-Lite 配置接口
+// 架构：8 组 × 8 Tile/组 = 64 Tile
 // 对外提供：
 //   - AXI-Lite Slave: 配置寄存器
-//   - BRAM 接口: IBUF/OBUF 外部访问端口
+//   - BRAM 接口: 8 组独立的 IBUF/OBUF 外部访问端口
 // ============================================================================
 
-`include "../ref/DCIM/src/inc/para.v"
+`include "para.v"
 
 module DCIM_Array_Top #(
-    parameter NUM_TILES       = 32,
+    parameter NUM_GROUPS      = 8,
+    parameter TILES_PER_GROUP = 8,
+    parameter NUM_TILES       = 64,       // NUM_GROUPS × TILES_PER_GROUP
     parameter WD1             = 4,
     parameter CH_IN           = 16,
     parameter CH_OUT          = 16,
     parameter SRAM_DP         = 128,
     parameter CYCLE           = 8,
     parameter ACC             = 80,
-    parameter BUF_ADDR_WIDTH  = 19,
+    parameter BUF_ADDR_WIDTH  = 14,       // 每组 IBUF/OBUF 地址宽度
     parameter BUF_DATA_WIDTH  = 128,
-    parameter IBUF_RD_LATENCY = 4,
+    parameter IBUF_RD_LATENCY = 8,        // 8 Tile 仲裁 + URAM 延迟
     parameter AXI_ADDR_WIDTH  = 12,
     parameter AXI_DATA_WIDTH  = 32,
     
@@ -56,19 +59,19 @@ module DCIM_Array_Top #(
     output wire                          s_axi_rvalid,
     input  wire                          s_axi_rready,
     
-    // 外部 IBUF 接口（Port A: 外部加载数据，连接 AXI BRAM Controller）
-    input  wire [STRB_WIDTH-1:0]         ibuf_ext_wea,
-    input  wire                          ibuf_ext_ena,
-    input  wire [BUF_ADDR_WIDTH-1:0]     ibuf_ext_addra,
-    input  wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_douta,
+    // 8 组外部 IBUF 接口（Port A: 外部加载数据）
+    input  wire [NUM_GROUPS*STRB_WIDTH-1:0]         ibuf_ext_wea,
+    input  wire [NUM_GROUPS-1:0]                    ibuf_ext_ena,
+    input  wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]     ibuf_ext_addra,
+    input  wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     ibuf_ext_dina,
+    output wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     ibuf_ext_douta,
     
-    // 外部 OBUF 接口（Port A: 外部读取结果，连接 AXI BRAM Controller）
-    input  wire [STRB_WIDTH-1:0]         obuf_ext_wea,
-    input  wire                          obuf_ext_ena,
-    input  wire [BUF_ADDR_WIDTH-1:0]     obuf_ext_addra,
-    input  wire [BUF_DATA_WIDTH-1:0]     obuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     obuf_ext_douta,
+    // 8 组外部 OBUF 接口（Port A: 外部读取结果）
+    input  wire [NUM_GROUPS*STRB_WIDTH-1:0]         obuf_ext_wea,
+    input  wire [NUM_GROUPS-1:0]                    obuf_ext_ena,
+    input  wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]     obuf_ext_addra,
+    input  wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     obuf_ext_dina,
+    output wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     obuf_ext_douta,
     
     // 状态输出（可选，用于中断或 LED）
     output wire                          done,
@@ -78,16 +81,16 @@ module DCIM_Array_Top #(
     // ========================================================================
     // AXI-Lite 配置模块 <-> DCIM_Array 连线
     // ========================================================================
-    wire                                 cfg_start;
-    wire [2:0]                           cfg_mode;
-    wire [ACC_UBD_WD-1:0]                cfg_acc_depth;
-    wire [31:0]                          cfg_num_rows;
-    wire [BUF_ADDR_WIDTH-1:0]            cfg_act_base_addr;
-    wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]  cfg_wei_base_addrs;
-    wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]  cfg_out_base_addrs;
+    wire                                        cfg_start;
+    wire [2:0]                                  cfg_mode;
+    wire [ACC_UBD_WD-1:0]                       cfg_acc_depth;
+    wire [31:0]                                 cfg_num_rows;
+    wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]        cfg_act_base_addrs;
+    wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]         cfg_wei_base_addrs;
+    wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]         cfg_out_base_addrs;
     
-    wire                                 sts_done;
-    wire                                 sts_ready;
+    wire                                        sts_done;
+    wire                                        sts_ready;
     
     assign done  = sts_done;
     assign ready = sts_ready;
@@ -96,6 +99,8 @@ module DCIM_Array_Top #(
     // AXI-Lite 配置寄存器模块
     // ========================================================================
     DCIM_Array_AXI #(
+        .NUM_GROUPS(NUM_GROUPS),
+        .TILES_PER_GROUP(TILES_PER_GROUP),
         .NUM_TILES(NUM_TILES),
         .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH),
         .ACC_UBD_WD(ACC_UBD_WD),
@@ -133,7 +138,7 @@ module DCIM_Array_Top #(
         .cfg_mode(cfg_mode),
         .cfg_acc_depth(cfg_acc_depth),
         .cfg_num_rows(cfg_num_rows),
-        .cfg_act_base_addr(cfg_act_base_addr),
+        .cfg_act_base_addrs(cfg_act_base_addrs),
         .cfg_wei_base_addrs(cfg_wei_base_addrs),
         .cfg_out_base_addrs(cfg_out_base_addrs),
         
@@ -142,9 +147,11 @@ module DCIM_Array_Top #(
     );
     
     // ========================================================================
-    // DCIM_Array 计算核心
+    // DCIM_Array 计算核心（8 组 × 8 Tile）
     // ========================================================================
     DCIM_Array #(
+        .NUM_GROUPS(NUM_GROUPS),
+        .TILES_PER_GROUP(TILES_PER_GROUP),
         .NUM_TILES(NUM_TILES),
         .WD1(WD1),
         .CH_IN(CH_IN),
@@ -166,7 +173,7 @@ module DCIM_Array_Top #(
         .mode(cfg_mode),
         .acc_depth(cfg_acc_depth),
         .num_rows(cfg_num_rows),
-        .act_base_addr(cfg_act_base_addr),
+        .act_base_addrs(cfg_act_base_addrs),
         .wei_base_addrs(cfg_wei_base_addrs),
         .out_base_addrs(cfg_out_base_addrs),
         
