@@ -291,13 +291,30 @@ print("✅ 硬件验证通过!")
 
 ### 地址映射
 
-```
-0x1000_0000  GLOBAL_BRAM (64KB)  - 主机暂存缓冲区
-0x1001_0000  VPU_GB (64KB)       - Global Buffer (输入/输出数据)
-0x1002_0000  VPU_WB (64KB)       - Weight Buffer (权重/参数)
-0x1003_0000  CDMA (64KB)         - CDMA寄存器
-0x1004_0000  VPU_REGS (4KB)      - VPU控制寄存器
-```
+**地址空间定义** (定义于 `scripts/ip/bd/vpu/address.tcl`)
+
+| 地址 | 大小 | 名称 | 说明 |
+|------|------|------|------|
+| `0x1000_0000` | 64KB | `GLOBAL_BRAM_BASE` | 主机暂存缓冲区 (staging buffer) |
+| `0x1001_0000` | 64KB | `VPU_GB_BASE` | VPU Global Buffer (输入/输出数据) |
+| `0x1002_0000` | 64KB | `VPU_WB_BASE` | VPU Weight Buffer (权重/参数/Scale) |
+| `0x1003_0000` | 64KB | `CDMA_BASE` | CDMA 寄存器 |
+| `0x1004_0000` | 4KB | `VPU_REGS_BASE` | VPU 控制寄存器 |
+
+**注意**: 
+- 这些地址在以下文件中保持一致：
+  - `scripts/ip/bd/vpu/address.tcl` (Vivado Block Design地址配置)
+  - `tests/vpu/xdma_helpers.py` (Python API常量定义)
+  - `tests/vpu/README.md` (本文档)
+- **修改地址映射的步骤**：
+  1. 修改 `scripts/ip/bd/vpu/address.tcl` 中的地址偏移
+  2. 同步更新 `tests/vpu/xdma_helpers.py` 中的常量定义
+  3. 重新生成 bitstream (`make vpu` 或 `vivado -source scripts/vpu/run.tcl`)
+  4. 更新本文档中的地址表
+- **当前地址分配说明**：
+  - 所有外设统一映射在 `0x1000_0000` ~ `0x1004_1000` 地址空间
+  - XDMA 和 CDMA 都可以访问这些地址
+  - VPU_GB 和 VPU_WB 的地址需要与 RTL 中的 AXI 接口匹配
 
 ### VPU控制寄存器
 

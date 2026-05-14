@@ -1,10 +1,18 @@
 # VPU + XDMA/CDMA 地址映射
 #
-# 0x1000_0000  staging global_bram (64KB)
-# 0x1001_0000  VPU GB (vpu_0/gb_axis, 64KB)
-# 0x1002_0000  VPU WB (vpu_0/wb_axis, 64KB)
-# 0x1003_0000  CDMA 寄存器 (64KB)
-# 0x1004_0000  VPU_AXI_Regs (4KB)
+# ==================== 地址空间分配 ====================
+# 地址             大小    名称                 说明
+# 0x1000_0000      64KB    GLOBAL_BRAM_BASE    主机暂存缓冲区 (staging buffer)
+# 0x1001_0000      64KB    VPU_GB_BASE         VPU Global Buffer (输入/输出数据)
+# 0x1002_0000      64KB    VPU_WB_BASE         VPU Weight Buffer (权重/参数/Scale)
+# 0x1003_0000      64KB    CDMA_BASE           CDMA 寄存器
+# 0x1004_0000      4KB     VPU_REGS_BASE       VPU 控制寄存器
+# ====================================================
+#
+# 注意事项：
+# 1. 修改此文件后，需要同步更新 tests/vpu/xdma_helpers.py 中的常量定义
+# 2. 需要重新生成 bitstream 才能生效
+# 3. 所有地址必须与 RTL 中的 AXI 接口匹配
 
 assign_bd_address
 

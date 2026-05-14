@@ -88,8 +88,8 @@ module qa_unit #(
 
     */
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_load_addr;
+    reg  [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks_reg;
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks;
-    // 使用预计算的寄存器值，而不是直接组合逻辑计算
     assign      qa_x_total_blocks             = qa_x_total_blocks_reg;
 
     
@@ -128,6 +128,10 @@ module qa_unit #(
         if(!rst_n) begin
             qa_x_load_block_cnt    <= '0;
             qa_x_load_cnt        <= '0;
+            qa_x_total_blocks_reg  <= '0;
+        end else if (c_state == QA_LOAD_SCALE) begin
+            // 在开始计算时计算总块数
+            qa_x_total_blocks_reg  <= (qa_src_w * qa_src_h * qa_src_c * FP_WIDTH) / GB_BANDWIDTH;
         end else if (c_state == QA_UPDATE) begin
             qa_x_load_block_cnt    <= n_qa_x_load_block_cnt;
             qa_x_load_cnt         <= n_qa_x_load_cnt;
