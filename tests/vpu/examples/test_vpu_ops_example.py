@@ -209,19 +209,27 @@ def test_neural_network_pipeline(ops, use_hardware=False):
 
 def main():
     parser = argparse.ArgumentParser(description="VPU操作测试")
-    parser.add_argument('--device', type=str, default=None,
-                      help='XDMA设备路径，例如 /dev/xdma0 (留空则仅运行Mock)')
+    parser.add_argument(
+        "--hw",
+        action="store_true",
+        help="使用 tests/bin/xdma_rw.exe 访问硬件（需已烧录 VPU 比特流）",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="已弃用：请使用 --hw。保留仅为兼容旧脚本。",
+    )
     parser.add_argument('--test', choices=['all', 'maxpool', 'upsample', 'add', 
                                           'quantize', 'pipeline'],
                       default='all', help='选择测试项')
     args = parser.parse_args()
     
-    # 创建VPU操作符
-    use_hardware = args.device is not None
+    use_hardware = bool(args.hw or args.device)
     
     if use_hardware:
-        print(f"🔧 硬件模式: {args.device}")
-        ops = create_vpu_operators(args.device)
+        print("硬件模式: tests/bin/xdma_rw.exe (channel=0)")
+        ops = create_vpu_operators(channel=0)
     else:
         print("💻 Mock模式: 仅运行CPU Golden Model")
         ops = {

@@ -10,8 +10,8 @@ VPU（PE/DCIM）+ XDMA + CDMA：global BRAM → CDMA → PE ibuf → 运算 → 
 （此时每个输出位置的 im2col 行长度正好为 C_in=16）。
 
 使用:
-  python im2col.py                    # Mock：仅用 NumPy golden
-  python im2col.py --device /dev/xdma0   # 板卡（需已烧录 xdma_dcim_bram 比特流）
+  python im2col.py                 # Mock：仅用 NumPy golden
+  python im2col.py --hw             # 板卡：xdma_rw.exe（需已烧录 xdma_dcim_bram 比特流）
 """
 
 from __future__ import annotations
@@ -24,10 +24,12 @@ from typing import Tuple
 import numpy as np
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPT_DIR)
+_VPU_DIR = os.path.dirname(_SCRIPT_DIR)
+for _p in (_VPU_DIR, _SCRIPT_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-from xdma_vpu import (
+from dcim_pe import (
     VpuBramSession,
     decode_result_rows,
     golden_int8_matmul,
@@ -125,7 +127,7 @@ def run_conv1x1_vpu_hw(sess: VpuBramSession, weight: np.ndarray, activation: np.
 # ============================================================================
 
 
-def test_vpu_im2col_colocated(device: str) -> None:
+def test_vpu_im2col_colocated(use_hw: bool) -> None:
     np.random.seed(42)
     C_in, C_out = 16, 8
     H, W = 4, 4
@@ -142,12 +144,12 @@ def test_vpu_im2col_colocated(device: str) -> None:
 
     gold = golden_conv1x1_int32(weight, activation)
 
-    if not device:
-        print("\n[Mock] 无 --device，跳过 DMA/CDMA，仅 NumPy golden")
+    if not use_hw:
+        print("\n[Mock] 无 --hw，跳过 DMA/CDMA，仅 NumPy golden")
         hw = run_conv1x1_vpu_mock(weight, activation)
     else:
-        print(f"\n[硬件] XDMA={device}，流程：global BRAM → CDMA → ibuf → VPU → obuf → …")
-        with VpuBramSession(device) as sess:
+        print("\n[硬件] 使用 tests/bin/xdma_rw.exe，流程：global BRAM → CDMA → ibuf → PE → obuf → …")
+        with VpuBramSession() as sess:
             hw = run_conv1x1_vpu_hw(sess, weight, activation)
 
     diff = np.abs(hw.astype(np.int64) - gold.astype(np.int64))
@@ -164,13 +166,13 @@ def test_vpu_im2col_colocated(device: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="VPU + CDMA + im2col（1×1 tile 约束）")
     ap.add_argument(
-        "--device",
-        default="",
-        help="例如 /dev/xdma0；留空则仅 Mock",
+        "--hw",
+        action="store_true",
+        help="使用 PCIe + xdma_rw.exe 访问硬件（xdma_dcim_bram 比特流）",
     )
     args = ap.parse_args()
     try:
-        test_vpu_im2col_colocated(args.device)
+        test_vpu_im2col_colocated(args.hw)
     except Exception as e:
         print(f"\n❌ 失败: {e}")
         import traceback
