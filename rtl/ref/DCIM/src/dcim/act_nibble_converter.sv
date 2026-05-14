@@ -44,7 +44,7 @@ module act_nibble_converter #(
     state_t state, state_next;
     
     logic [CH_IN*16-1:0] raw_data_reg;      // 锁存的原始数据
-    logic [1:0]          nibble_cnt;         // nibble 相位计数器（0~3）
+    (* max_fanout = 32 *) logic [1:0] nibble_cnt;         // nibble 相位计数器（0~3）
     logic [1:0]          nibble_cnt_next;
     logic [1:0]          nibble_ubd;         // 上界：INT8=2, INT16=4
     logic                fire_dcim;          // dcim 握手成功
@@ -52,6 +52,11 @@ module act_nibble_converter #(
     
     // 时序优化：预计算所有 nibble 相位的数据，减少组合逻辑深度
     (* max_fanout = 32 *) logic [CH_IN*4-1:0] nibble_data [0:3];  // 4 个相位的预计算结果
+    
+    // 时序优化：输出流水线寄存器，打断 nibble_cnt 到 DSP 的关键路径
+    logic [CH_IN*4-1:0] dcim_act_data_pipe;
+    logic               dcim_act_valid_pipe;
+    logic               pipe_ready;          // 流水线级是否可以接收新数据
     
     // ========== 模式相关配置 ==========
     always_comb begin
@@ -63,7 +68,13 @@ module act_nibble_converter #(
     end
     
     // ========== 握手信号 ==========
-    assign fire_dcim = dcim_act_valid && dcim_act_ready;
+    // pipe_ready: 流水线级可以接收新数据的条件
+    // - 如果流水线级无效数据，直接可以接收
+    // - 如果流水线级有有效数据，需要等下游接收
+    assign pipe_ready = !dcim_act_valid_pipe || dcim_act_ready;
+    
+    // fire_dcim: 状态机推进的条件 = 在 SEND 状态 && 流水线级可以接收
+    assign fire_dcim = (state == ST_SEND) && pipe_ready;
     assign fire_raw  = raw_act_valid && raw_act_ready;
     
     // ========== 状态机：主控制逻辑 ==========
@@ -150,19 +161,36 @@ module act_nibble_converter #(
         end
     end
     
+    // ========== 输出流水线寄存器 ==========
+    // 时序优化：在输出端插入流水线级，打断关键路径
+    // 实现 skid buffer 风格的流水线
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dcim_act_data_pipe <= '0;
+            dcim_act_valid_pipe <= 1'b0;
+        end else begin
+            // 当流水线级可以接收新数据时，更新数据和 valid
+            if (pipe_ready) begin
+                dcim_act_data_pipe <= nibble_data[nibble_cnt];
+                dcim_act_valid_pipe <= (state == ST_SEND);
+            end
+            // 否则保持当前值（阻塞状态）
+        end
+    end
+    
     // ========== 输出控制 ==========
     always_comb begin
         // 上游 ready：仅在 IDLE 状态接收新数据
         raw_act_ready = (state == ST_IDLE);
         
-        // 下游 valid：在 SEND 状态输出
-        dcim_act_valid = (state == ST_SEND);
+        // 下游 valid：使用流水线后的 valid（已在流水线寄存器中赋值）
+        dcim_act_valid = dcim_act_valid_pipe;
     end
     
     // ========== Nibble 提取逻辑 ==========
-    // 时序优化：使用预计算的 nibble_data，只需 1 层 MUX（从 17 层逻辑降到 ~3 层）
+    // 时序优化：直接使用流水线寄存器的输出
     always_comb begin
-        dcim_act_data = nibble_data[nibble_cnt];
+        dcim_act_data = dcim_act_data_pipe;
     end
 
 endmodule

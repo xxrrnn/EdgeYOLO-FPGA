@@ -27,7 +27,7 @@ set ImplOutputDir [file normalize "$projPath/ImplOutputDir"]
 set synDirective Default
 set optDirective Default
 set placeDirective Default
-set physOptDirectiveAp Default
-set routeDirective Default
-set physOptDirectiveAr Default
-set_param general.maxThreads 24
+set physOptDirectiveAp ExploreWithHoldFix
+set routeDirective AggressiveExplore
+set physOptDirectiveAr AggressiveExplore
+set_param general.maxThreads 32
