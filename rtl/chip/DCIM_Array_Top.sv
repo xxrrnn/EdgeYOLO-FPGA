@@ -84,7 +84,7 @@ module DCIM_Array_Top #(
     wire                                        cfg_start;
     wire [2:0]                                  cfg_mode;
     wire [ACC_UBD_WD-1:0]                       cfg_acc_depth;
-    wire [31:0]                                 cfg_num_rows;
+    // cfg_num_rows 已移除：在 CNN 应用中 num_rows == acc_depth
     wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]        cfg_act_base_addrs;
     wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]         cfg_wei_base_addrs;
     wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]         cfg_out_base_addrs;
@@ -137,7 +137,7 @@ module DCIM_Array_Top #(
         .cfg_start(cfg_start),
         .cfg_mode(cfg_mode),
         .cfg_acc_depth(cfg_acc_depth),
-        .cfg_num_rows(cfg_num_rows),
+        // cfg_num_rows 已移除
         .cfg_act_base_addrs(cfg_act_base_addrs),
         .cfg_wei_base_addrs(cfg_wei_base_addrs),
         .cfg_out_base_addrs(cfg_out_base_addrs),
@@ -172,7 +172,7 @@ module DCIM_Array_Top #(
         
         .mode(cfg_mode),
         .acc_depth(cfg_acc_depth),
-        .num_rows(cfg_num_rows),
+        // num_rows 端口已移除
         .act_base_addrs(cfg_act_base_addrs),
         .wei_base_addrs(cfg_wei_base_addrs),
         .out_base_addrs(cfg_out_base_addrs),

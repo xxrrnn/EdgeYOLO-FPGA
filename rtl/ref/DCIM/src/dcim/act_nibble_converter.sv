@@ -50,6 +50,9 @@ module act_nibble_converter #(
     logic                fire_dcim;          // dcim 握手成功
     logic                fire_raw;           // raw 握手成功
     
+    // 时序优化：预计算所有 nibble 相位的数据，减少组合逻辑深度
+    (* max_fanout = 32 *) logic [CH_IN*4-1:0] nibble_data [0:3];  // 4 个相位的预计算结果
+    
     // ========== 模式相关配置 ==========
     always_comb begin
         case (mode)
@@ -107,12 +110,43 @@ module act_nibble_converter #(
         endcase
     end
     
-    // ========== 数据锁存 ==========
+    // ========== 数据锁存 + 预计算 nibble ==========
+    // 时序优化：在接收数据时立即预计算所有 nibble 相位，避免后续组合逻辑深度
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             raw_data_reg <= '0;
+            for (int i = 0; i < 4; i++) begin
+                nibble_data[i] <= '0;
+            end
         end else if (fire_raw) begin
             raw_data_reg <= raw_act_data;
+            
+            // 预计算所有 4 个 nibble 相位的数据
+            for (int ch = 0; ch < CH_IN; ch++) begin
+                case (mode)
+                    MODE_INT8: begin
+                        // INT8: 只使用相位 0, 1
+                        nibble_data[0][ch*4 +: 4] <= raw_act_data[ch*16 + 4 +: 4]; // bit[7:4] 高 nibble 先发
+                        nibble_data[1][ch*4 +: 4] <= raw_act_data[ch*16 + 0 +: 4]; // bit[3:0] 低 nibble 后发
+                        nibble_data[2][ch*4 +: 4] <= 4'd0;  // 未使用
+                        nibble_data[3][ch*4 +: 4] <= 4'd0;  // 未使用
+                    end
+                    MODE_INT16: begin
+                        // INT16: 使用所有 4 个相位
+                        nibble_data[0][ch*4 +: 4] <= raw_act_data[ch*16 + 12 +: 4]; // bit[15:12] 最高 nibble
+                        nibble_data[1][ch*4 +: 4] <= raw_act_data[ch*16 +  8 +: 4]; // bit[11:8]
+                        nibble_data[2][ch*4 +: 4] <= raw_act_data[ch*16 +  4 +: 4]; // bit[7:4]
+                        nibble_data[3][ch*4 +: 4] <= raw_act_data[ch*16 +  0 +: 4]; // bit[3:0] 最低 nibble
+                    end
+                    default: begin
+                        // 默认：直接传递低 4bit
+                        nibble_data[0][ch*4 +: 4] <= raw_act_data[ch*16 +: 4];
+                        nibble_data[1][ch*4 +: 4] <= 4'd0;
+                        nibble_data[2][ch*4 +: 4] <= 4'd0;
+                        nibble_data[3][ch*4 +: 4] <= 4'd0;
+                    end
+                endcase
+            end
         end
     end
     
@@ -126,31 +160,9 @@ module act_nibble_converter #(
     end
     
     // ========== Nibble 提取逻辑 ==========
+    // 时序优化：使用预计算的 nibble_data，只需 1 层 MUX（从 17 层逻辑降到 ~3 层）
     always_comb begin
-        dcim_act_data = '0;
-        
-        for (int ch = 0; ch < CH_IN; ch++) begin
-            case (mode)
-                MODE_INT8: begin
-                    case (nibble_cnt)
-                        2'd0: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  4 +: 4]; // bit[7:4] 高 nibble 先发
-                        2'd1: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  0 +: 4]; // bit[3:0] 低 nibble 后发
-                        default: dcim_act_data[ch*4 +: 4] = 4'd0;
-                    endcase
-                end
-                MODE_INT16: begin
-                    case (nibble_cnt)
-                        2'd0: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 + 12 +: 4]; // bit[15:12] 最高 nibble 先发
-                        2'd1: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  8 +: 4]; // bit[11:8]
-                        2'd2: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  4 +: 4]; // bit[7:4]
-                        2'd3: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  0 +: 4]; // bit[3:0] 最低 nibble 最后发
-                    endcase
-                end
-                default: begin
-                    dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +: 4];
-                end
-            endcase
-        end
+        dcim_act_data = nibble_data[nibble_cnt];
     end
 
 endmodule

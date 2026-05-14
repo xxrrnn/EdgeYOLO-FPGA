@@ -48,7 +48,7 @@ module DCIM_Array_AXI #(
     output reg                           cfg_start,
     output reg  [2:0]                    cfg_mode,
     output reg  [ACC_UBD_WD-1:0]         cfg_acc_depth,
-    output reg  [31:0]                   cfg_num_rows,
+    // cfg_num_rows 已移除：在 CNN 应用中 num_rows == acc_depth
     output reg  [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]  cfg_act_base_addrs,   // 每组的激活基址
     output reg  [NUM_TILES*BUF_ADDR_WIDTH-1:0]   cfg_wei_base_addrs,   // 每 Tile 的权重基址
     output reg  [NUM_TILES*BUF_ADDR_WIDTH-1:0]   cfg_out_base_addrs,   // 每 Tile 的输出基址
@@ -64,7 +64,7 @@ module DCIM_Array_AXI #(
     // 0x000: CTRL        - [0] start (W1C), [1] soft_reset
     // 0x004: STATUS      - [0] done, [1] ready
     // 0x008: MODE        - [2:0] mode, [15:8] acc_depth
-    // 0x00C: NUM_ROWS    - [31:0] num_rows
+    // 0x00C: RESERVED    - (num_rows 已移除，在 CNN 中 num_rows == acc_depth)
     // 0x010-0x02F: ACT_BASE[0..7] - 每组的激活基址 (8 × 4B = 32B)
     // 0x030-0x03F: RESERVED
     // 0x040-0x13F: WEI_BASE[0..63] - 每 Tile 的权重基址 (64 × 4B = 256B)
@@ -127,7 +127,7 @@ module DCIM_Array_AXI #(
             cfg_start <= 1'b0;
             cfg_mode <= 3'b110;  // 默认 INT8
             cfg_acc_depth <= 0;
-            cfg_num_rows <= 0;
+            // cfg_num_rows 已移除
             for (i = 0; i < NUM_GROUPS; i = i + 1) begin
                 cfg_act_base_addrs[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH] <= 0;
             end
@@ -152,7 +152,7 @@ module DCIM_Array_AXI #(
                             cfg_acc_depth <= s_axi_wdata[8 +: ACC_UBD_WD];
                     end
                     ADDR_NUM_ROWS[11:2]: begin
-                        cfg_num_rows <= s_axi_wdata;
+                        // NUM_ROWS 寄存器已移除，写入被忽略
                     end
                     default: begin
                         // ACT_BASE[0..7]: 0x010-0x02F
@@ -233,7 +233,7 @@ module DCIM_Array_AXI #(
                     ADDR_MODE[11:2]:
                         s_axi_rdata <= {16'b0, {(8-ACC_UBD_WD){1'b0}}, cfg_acc_depth, 5'b0, cfg_mode};
                     ADDR_NUM_ROWS[11:2]:
-                        s_axi_rdata <= cfg_num_rows;
+                        s_axi_rdata <= 32'h0;  // NUM_ROWS 已移除，返回 0
                     default: begin
                         // ACT_BASE[0..7]: 0x010-0x02F
                         if (ar_addr_reg >= ADDR_ACT_BASE && ar_addr_reg < ADDR_WEI_BASE) begin

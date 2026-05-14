@@ -3,8 +3,8 @@
 # close a Vivado project, so it is safe to source after opening an existing
 # project.
 
-set projName "dcim_array_chip"
-set bdName "dcim_array_chip"
+set projName "chip"
+set bdName "chip"
 set topName "${bdName}_wrapper"
 
 set ScriptDir [file dirname [file normalize [info script]]]

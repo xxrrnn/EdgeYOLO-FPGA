@@ -33,6 +33,8 @@ module tb_DCIM_Array_Group;
     wire done, ready;
     reg [2:0] mode;
     reg [ACC_UBD_WD-1:0] acc_depth;
+    // num_rows 变量保留用于测试逻辑，但在 CNN 应用中 num_rows == acc_depth
+    // 测试时 num_rows 仅用于计算期望值，不再传递给 DUT
     reg [31:0] num_rows;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr;
     reg [TILES_PER_GROUP*BUF_ADDR_WIDTH-1:0] wei_base_addrs;
@@ -83,7 +85,7 @@ module tb_DCIM_Array_Group;
         .ready(ready),
         .mode(mode),
         .acc_depth(acc_depth),
-        .num_rows(num_rows),
+        // num_rows 端口已移除：在 CNN 应用中 num_rows == acc_depth
         .act_base_addr(act_base_addr),
         .wei_base_addrs(wei_base_addrs),
         .out_base_addrs(out_base_addrs),
@@ -335,12 +337,12 @@ module tb_DCIM_Array_Group;
         $display("║       DCIM_Array_Group Test (%0d Tiles per Group)             ║", TILES_PER_GROUP);
         $display("╚═══════════════════════════════════════════════════════════════╝");
 
-        // Test 1: INT8 ACC=0, 8 rows
+        // Test 1: INT8 ACC=8, num_rows=8 (num_rows == acc_depth)
         total_tests = total_tests + 1;
         errs_before = total_errors;
         $display("");
         $display("─────────────────────────────────────────────────────────────");
-        $display("  Test 1: INT8 ACC=0, 8 rows, %0d tiles", TILES_PER_GROUP);
+        $display("  Test 1: INT8 ACC=8, num_rows=8, %0d tiles", TILES_PER_GROUP);
         $display("─────────────────────────────────────────────────────────────");
 
         seed = 11111;
@@ -360,26 +362,26 @@ module tb_DCIM_Array_Group;
         begin
             integer ti;
             for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
-                compute_golden(ti, 8, 0);
+                compute_golden(ti, 8, 8);  // num_rows=8, acc=8
         end
 
         wait (ready);
         mode          = `MODE_INT8;
-        acc_depth     = 0;
-        num_rows      = 8;
+        acc_depth     = 8;   // num_rows == acc_depth
+        num_rows      = 8;   // 仅用于测试逻辑
         act_base_addr = ACT_BASE;
         pulse_start_and_wait_done(100000);
-        verify_all_tiles(8, 0, errors_per_tile);
+        verify_all_tiles(8, 8, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
             passed_tests = passed_tests + 1;
 
-        // Test 2: INT8 ACC=2, 8 rows
+        // Test 2: INT8 ACC=16, num_rows=16 (num_rows == acc_depth)
         total_tests = total_tests + 1;
         errs_before = total_errors;
         $display("");
         $display("─────────────────────────────────────────────────────────────");
-        $display("  Test 2: INT8 ACC=2, 8 rows, random");
+        $display("  Test 2: INT8 ACC=16, num_rows=16, random");
         $display("─────────────────────────────────────────────────────────────");
 
         seed = 22222;
@@ -391,46 +393,6 @@ module tb_DCIM_Array_Group;
             end
         end
         seed = 44444;
-        generate_activations(1, 8);
-        set_default_tile_bases();
-        begin
-            integer ti;
-            for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
-                load_weights(ti, CYCLE * ti);
-        end
-        load_activations(ACT_BASE, 8);
-        begin
-            integer ti;
-            for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
-                compute_golden(ti, 8, 2);
-        end
-
-        wait (ready);
-        acc_depth = 2;
-        num_rows  = 8;
-        pulse_start_and_wait_done(100000);
-        verify_all_tiles(8, 2, errors_per_tile);
-        total_errors = total_errors + errors_per_tile;
-        if (total_errors == errs_before)
-            passed_tests = passed_tests + 1;
-
-        // Test 3: INT8 ACC=4, 16 rows
-        total_tests = total_tests + 1;
-        errs_before = total_errors;
-        $display("");
-        $display("─────────────────────────────────────────────────────────────");
-        $display("  Test 3: INT8 ACC=4, 16 rows");
-        $display("─────────────────────────────────────────────────────────────");
-
-        seed = 55555;
-        begin
-            integer ti;
-            for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1) begin
-                seed = 7777 * ti + 88888;
-                generate_weights(ti, 2);
-            end
-        end
-        seed = 99999;
         generate_activations(1, 16);
         set_default_tile_bases();
         begin
@@ -442,24 +404,64 @@ module tb_DCIM_Array_Group;
         begin
             integer ti;
             for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
-                compute_golden(ti, 16, 4);
+                compute_golden(ti, 16, 16);  // num_rows=16, acc=16
         end
 
         wait (ready);
-        acc_depth = 4;
-        num_rows  = 16;
+        acc_depth = 16;  // num_rows == acc_depth
+        num_rows  = 16;  // 仅用于测试逻辑
         pulse_start_and_wait_done(100000);
-        verify_all_tiles(16, 4, errors_per_tile);
+        verify_all_tiles(16, 16, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
             passed_tests = passed_tests + 1;
 
-        // Test 4: INT8 ACC=8, 72 rows (stress)
+        // Test 3: INT8 ACC=32, num_rows=32 (num_rows == acc_depth)
         total_tests = total_tests + 1;
         errs_before = total_errors;
         $display("");
         $display("─────────────────────────────────────────────────────────────");
-        $display("  Test 4: INT8 ACC=8, 72 rows (stress)");
+        $display("  Test 3: INT8 ACC=32, num_rows=32");
+        $display("─────────────────────────────────────────────────────────────");
+
+        seed = 55555;
+        begin
+            integer ti;
+            for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1) begin
+                seed = 7777 * ti + 88888;
+                generate_weights(ti, 2);
+            end
+        end
+        seed = 99999;
+        generate_activations(1, 32);
+        set_default_tile_bases();
+        begin
+            integer ti;
+            for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
+                load_weights(ti, CYCLE * ti);
+        end
+        load_activations(ACT_BASE, 32);
+        begin
+            integer ti;
+            for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
+                compute_golden(ti, 32, 32);  // num_rows=32, acc=32
+        end
+
+        wait (ready);
+        acc_depth = 32;  // num_rows == acc_depth
+        num_rows  = 32;  // 仅用于测试逻辑
+        pulse_start_and_wait_done(100000);
+        verify_all_tiles(32, 32, errors_per_tile);
+        total_errors = total_errors + errors_per_tile;
+        if (total_errors == errs_before)
+            passed_tests = passed_tests + 1;
+
+        // Test 4: INT8 ACC=72, num_rows=72 (stress, num_rows == acc_depth)
+        total_tests = total_tests + 1;
+        errs_before = total_errors;
+        $display("");
+        $display("─────────────────────────────────────────────────────────────");
+        $display("  Test 4: INT8 ACC=72, num_rows=72 (stress)");
         $display("─────────────────────────────────────────────────────────────");
 
         seed = 616161;
@@ -482,14 +484,14 @@ module tb_DCIM_Array_Group;
         begin
             integer ti;
             for (ti = 0; ti < TILES_PER_GROUP; ti = ti + 1)
-                compute_golden(ti, 72, 8);
+                compute_golden(ti, 72, 72);  // num_rows=72, acc=72
         end
 
         wait (ready);
-        acc_depth = 8;
-        num_rows  = 72;
+        acc_depth = 72;  // num_rows == acc_depth
+        num_rows  = 72;  // 仅用于测试逻辑
         pulse_start_and_wait_done(200000);
-        verify_all_tiles(72, 8, errors_per_tile);
+        verify_all_tiles(72, 72, errors_per_tile);
         total_errors = total_errors + errors_per_tile;
         if (total_errors == errs_before)
             passed_tests = passed_tests + 1;

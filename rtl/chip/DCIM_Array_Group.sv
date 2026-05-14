@@ -37,7 +37,7 @@ module DCIM_Array_Group #(
     // 配置接口
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    input  wire [31:0]                   num_rows,
+    // num_rows 端口已移除：在 CNN 应用中 num_rows == acc_depth
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [TILES_PER_GROUP*BUF_ADDR_WIDTH-1:0] wei_base_addrs,
     input  wire [TILES_PER_GROUP*BUF_ADDR_WIDTH-1:0] out_base_addrs,
@@ -113,7 +113,7 @@ module DCIM_Array_Group #(
                 .ready(tile_ready[i]),
                 .mode(mode),
                 .acc_depth(acc_depth),
-                .num_rows(num_rows),
+                // num_rows 端口已移除：在 CNN 应用中 num_rows == acc_depth
                 .wei_base_addr(wei_base_addrs[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
                 .act_base_addr(act_base_addr),
                 .out_base_addr(out_base_addrs[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),

@@ -37,12 +37,12 @@ module DCIM_Array #(
     output wire                          ready,      // 所有组就绪
     
     // 配置接口：
-    //   - 全阵列共享：mode / acc_depth / num_rows
+    //   - 全阵列共享：mode / acc_depth
     //   - 每组共享：act_base_addr（激活数据基址）
     //   - 每 Tile 独立：wei_base_addrs、out_base_addrs
+    // 注：num_rows 已移除，在 CNN 应用中 num_rows == acc_depth
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    input  wire [31:0]                   num_rows,
     input  wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]     act_base_addrs,   // 每组的激活基址
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]      wei_base_addrs,   // 每 Tile 的权重基址
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]      out_base_addrs,   // 每 Tile 的输出基址
@@ -114,7 +114,7 @@ module DCIM_Array #(
                 
                 .mode(mode),
                 .acc_depth(acc_depth),
-                .num_rows(num_rows),
+                // num_rows 端口已移除
                 .act_base_addr(act_base_addrs[g*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
                 .wei_base_addrs(group_wei_base_addrs),
                 .out_base_addrs(group_out_base_addrs),

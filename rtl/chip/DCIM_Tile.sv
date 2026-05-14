@@ -42,7 +42,7 @@ module DCIM_Tile #(
     // 配置接口
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    input  wire [31:0]                   num_rows,
+    // num_rows 端口已移除：在 CNN 应用中 num_rows == acc_depth
     input  wire [BUF_ADDR_WIDTH-1:0]     wei_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,
@@ -135,12 +135,15 @@ module DCIM_Tile #(
     
     (* max_fanout = 32 *) reg [2:0] mode_reg;
     reg [ACC_UBD_WD-1:0]     acc_reg;
-    reg [31:0]               num_rows_reg;
+    // num_rows_reg 已移除：在 CNN 应用中，num_rows 永远等于 acc_depth
+    // 直接使用 acc_reg 代替 num_rows_reg，消除除法器
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] out_base_addr_reg;
     
-    wire [31:0] expected_outputs = (acc_reg == 0) ? num_rows_reg : (num_rows_reg / acc_reg);
+    // 优化：num_rows == acc_depth 时，expected_outputs = num_rows / acc = 1
+    // 完全消除除法器，将 96 层逻辑简化为常量
+    localparam [31:0] EXPECTED_OUTPUTS = 32'd1;
     
     (* max_fanout = 16 *) reg is_int16_reg;
     wire is_int16 = is_int16_reg;
@@ -183,8 +186,8 @@ module DCIM_Tile #(
             conv_handshake_done <= (conv_valid && conv_ready);
             wei_load_finished <= (wei_load_cnt >= CYCLE - 1);
             ppcache_finished <= (ppcache_cnt >= CYCLE + 2);
-            all_rows_processed <= (row_cnt >= num_rows_reg - 1);
-            all_results_collected <= (result_cnt >= expected_outputs);
+            all_rows_processed <= (row_cnt >= acc_reg - 1);  // 使用 acc_reg 代替 num_rows_reg
+            all_results_collected <= (result_cnt >= EXPECTED_OUTPUTS);  // 使用常量，消除除法
         end
     end
     
@@ -232,7 +235,7 @@ module DCIM_Tile #(
         if (!rst_n) begin
             mode_reg <= `MODE_INT8;
             acc_reg <= 0;
-            num_rows_reg <= 0;
+            // num_rows_reg 已移除
             wei_base_addr_reg <= 0;
             act_base_addr_reg <= 0;
             out_base_addr_reg <= 0;
@@ -240,7 +243,7 @@ module DCIM_Tile #(
         end else if (state == ST_IDLE && start_pulse) begin
             mode_reg <= mode;
             acc_reg <= acc_depth;
-            num_rows_reg <= num_rows;
+            // num_rows_reg 已移除：直接使用 acc_reg
             wei_base_addr_reg <= wei_base_addr;
             act_base_addr_reg <= act_base_addr;
             out_base_addr_reg <= out_base_addr;
