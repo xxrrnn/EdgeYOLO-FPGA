@@ -376,13 +376,15 @@ module INST_Decoder #(
                     cdma_dst_addr_lsb <= body_buffer[1];
                     cdma_length <= body_buffer[2];
                     cdma_config_valid <= 1'b1;
-                    cdma_start <= 1'b1;
+                    cdma_start <= 1'b1;  // 保持高电平
                 end
                 
                 S_WAIT_CDMA_CFG: begin
-                    // 等待 CDMA_Controller 接受配置
+                    // 保持 cdma_start 和 cdma_config_valid 直到 ready
+                    cdma_start <= 1'b1;
                     if (cdma_config_ready) begin
                         cdma_config_valid <= 1'b0;
+                        cdma_start <= 1'b0;  // 握手完成后清零
                     end
                 end
                 
