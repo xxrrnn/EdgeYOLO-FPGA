@@ -6,11 +6,11 @@ XDMA 读写辅助模块 - 基于 xdma_rw.exe
 使用 xdma_rw.exe 进行 PCIe XDMA 读写操作。
 
 地址映射（参考 scripts/ip/bd/vpu/address.tcl）：
-  0x1000_0000  staging global_bram (64KB)
-  0x1001_0000  VPU GB (axi_bram_ctrl, 64KB)
-  0x1002_0000  VPU WB (axi_bram_ctrl, 64KB)
-  0x1003_0000  CDMA 寄存器 (64KB)
-  0x1004_0000  VPU_AXI_Regs (4KB)
+  0x1000_0000  staging global_bram (128KB)
+  0x1002_0000  VPU GB (vpu_0/gb_axis, 64KB)
+  0x1003_0000  VPU WB (vpu_0/wb_axis, 64KB)
+  0x1004_0000  CDMA 寄存器 (64KB)
+  0x1005_0000  VPU_AXI_Regs (4KB)
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ from pathlib import Path
 from dataclasses import dataclass
 
 # 地址映射（与 scripts/ip/bd/vpu/address.tcl 一致）
-GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (8MB)
-VPU_GB_BASE = 0x10800000        # VPU Global Buffer (64KB)
-VPU_WB_BASE = 0x10810000        # VPU Weight Buffer (64KB)
-CDMA_BASE = 0x10820000          # CDMA 寄存器 (64KB)
-VPU_REGS_BASE = 0x10830000      # VPU AXI Regs (4KB)
+GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (128KB)
+VPU_GB_BASE = 0x10020000        # VPU Global Buffer (64KB)
+VPU_WB_BASE = 0x10030000        # VPU Weight Buffer (64KB)
+CDMA_BASE = 0x10040000          # CDMA 寄存器 (64KB)
+VPU_REGS_BASE = 0x10050000      # VPU AXI Regs (4KB)
 
 # 查找 xdma_rw.exe
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -50,8 +50,10 @@ for candidate in [
 else:
     XDMA_EXE = REPO_ROOT / "tests" / "bin" / "xdma_rw.exe"
 
-# 临时文件目录
-TEMP_DIR = SCRIPT_DIR / "temp"
+# 临时文件目录（使用 Windows 临时目录，因为 xdma_rw.exe 是 Windows 程序）
+import tempfile
+import os
+TEMP_DIR = Path(tempfile.gettempdir()) / "xdma_temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
 # 默认配置
@@ -174,6 +176,36 @@ def read_reg(base: int, offset: int, channel: int = CHANNEL) -> int:
     """
     data = xdma_read(base + offset, 4, channel)
     return struct.unpack('<I', data)[0]
+
+
+def write_blob(addr: int, data: bytes, channel: int = CHANNEL) -> CmdResult:
+    """
+    写入数据块（便利函数）
+    
+    Args:
+        addr: 目标地址
+        data: 要写入的数据
+        channel: DMA 通道号
+        
+    Returns:
+        命令执行结果
+    """
+    return xdma_write(addr, data, channel)
+
+
+def read_blob(addr: int, size: int, channel: int = CHANNEL) -> bytes:
+    """
+    读取数据块（便利函数）
+    
+    Args:
+        addr: 源地址
+        size: 读取字节数
+        channel: DMA 通道号
+        
+    Returns:
+        读取的数据
+    """
+    return xdma_read(addr, size, channel)
 
 
 def print_result(name: str, result: CmdResult) -> None:
