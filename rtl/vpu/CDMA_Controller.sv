@@ -89,7 +89,7 @@
     always_comb begin
         n_state = c_state;
         case (c_state)
-            IDLE:             if (cdma_start) n_state = CDMA_CHECK;
+            IDLE:             if (cdma_start) n_state = CDMA_CONFIG;
             CDMA_CONFIG:      n_state = CDMA_CHECK;
 
             //// CDMA ²¿·Ö (Ê¹ÓÃ _CLR ÖÐ¼äÌ¬À´Çå³ý valid)
