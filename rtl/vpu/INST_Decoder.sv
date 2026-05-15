@@ -163,10 +163,11 @@ module INST_Decoder #(
             end
             
             S_PARSE_HEADER: begin
-                case (current_opcode)
+                // 直接使用 inst_rd_data 解析，避免使用未更新的寄存器
+                case (inst_rd_data[31:28])  // 使用 inst_rd_data 而不是 current_opcode
                     OP_NOP:       next_state = S_EXEC_NOP;
-                    OP_CDMA_COPY: next_state = (body_length > 0) ? S_FETCH_BODY : S_ERROR;
-                    OP_VPU_EXEC:  next_state = (body_length > 0) ? S_FETCH_BODY : S_ERROR;
+                    OP_CDMA_COPY: next_state = (inst_rd_data[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
+                    OP_VPU_EXEC:  next_state = (inst_rd_data[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
                     OP_WAIT_CDMA: next_state = S_EXEC_WAIT_CDMA;
                     OP_WAIT_VPU:  next_state = S_EXEC_WAIT_VPU;
                     OP_SYNC:      next_state = S_EXEC_SYNC;
