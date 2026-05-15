@@ -6,9 +6,9 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module CDMA_Controller_wrapper #(
-    parameter int CDMA_BASE_ADDR = 0,
-    parameter int C_CDMA_AXILM_ADDR_WIDTH = 32,
-    parameter int C_CDMA_AXILM_DATA_WIDTH = 32
+    parameter CDMA_BASE_ADDR = 0,
+    parameter C_CDMA_AXILM_ADDR_WIDTH = 32,
+    parameter C_CDMA_AXILM_DATA_WIDTH = 32
 ) (
     input  wire        clk,
     input  wire        rst_n,

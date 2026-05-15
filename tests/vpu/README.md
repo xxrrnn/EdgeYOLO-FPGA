@@ -9,35 +9,76 @@
 ```
 tests/vpu/
 ├── README.md                      # ⭐ 本文档（一站式指南）
-├── vpu_operations.py              # ⭐ VPU操作Python API（核心模块）
-├── xdma_vpu.py                    # XDMA底层驱动接口
-├── examples/                      # 示例代码
-│   ├── test_vpu_ops_example.py   #   - VPU操作测试示例
-│   ├── test_vpu_units.ipynb      #   - Jupyter交互测试
-│   └── im2col.py                  #   - Im2col卷积参考实现
-└── docs/                          # 附加文档（可选）
+├── test_inst_decoder.py           # ⭐⭐ 基于指令的测试（推荐）
+├── test_e2e_flow.py               # 直接访问测试（基础验证）
+├── vpu_operations.py              # VPU操作Python API（高层封装）
+├── xdma_helpers.py                # XDMA底层驱动接口
+├── xdma_vpu.py                    # PE/DCIM 专用接口（兼容旧代码）
+└── examples/                      # 示例代码
+    ├── test_vpu_ops_example.py   #   - VPU操作测试示例
+    ├── test_vpu_units.ipynb      #   - Jupyter交互测试
+    └── im2col.py                  #   - Im2col卷积参考实现
 ```
 
-**核心文件**（只需关注这3个）:
-- `vpu_operations.py` - VPU Python API
-- `xdma_vpu.py` - XDMA驱动
-- `README.md` - 本文档
+**测试文件说明**:
+- ⭐⭐ `test_inst_decoder.py` - **推荐使用**，完整的指令流程（软件 → INST_BRAM → 硬件执行）
+- `test_e2e_flow.py` - 简单的直接访问测试（XDMA 直接读写 VPU GB/WB）
+- `vpu_operations.py` - 高层 API（MaxPooling、Upsampling 等操作封装）
+- `xdma_helpers.py` - 底层 XDMA 读写函数
 
 ---
 
 ## 🚀 快速开始
 
-### 1. Mock模式（仅CPU，无需硬件）
+### 1. 基于指令的测试（推荐，完整硬件流程）
 
-适用于算法验证、功能测试：
+**这是理想的测试方式**，完全符合硬件架构设计：软件 → INST_BRAM → INST_Decoder → CDMA/VPU → 结果验证
 
 ```bash
 cd tests/vpu
-./run_test.sh                    # 运行所有测试
-./run_test.sh --test maxpool     # 仅测试MaxPooling
+python test_inst_decoder.py
 ```
 
-或者：
+**测试流程**：
+1. 编码指令序列（CDMA_COPY、VPU_EXEC 等）
+2. 写入指令到 inst_bram (0x10200000)
+3. 写入测试数据到 global_bram (0x10000000)
+4. 启动 INST_Decoder 执行指令
+5. 等待解码器完成（轮询 decoder_status）
+6. 通过 XDMA 读取结果并验证
+
+**支持的指令类型**：
+- `CDMA_COPY`: 内存搬运（global_bram ↔ VPU GB/WB）
+- `VPU_EXEC`: VPU 操作执行（MaxPooling、Upsampling 等）
+- `WAIT_CDMA`: 等待 CDMA 完成
+- `WAIT_VPU`: 等待 VPU 完成
+- `SYNC`: 同步点
+- `END`: 指令序列结束
+
+**测试用例**：
+- ✅ inst_bram 基本读写
+- ✅ CDMA 通过解码器搬运（global_bram → global_bram）
+- ✅ CDMA 搬运到 VPU GB
+- ✅ CDMA 完整往返（global_bram → VPU GB → global_bram）
+
+### 2. 直接访问测试（简单，适用于基础验证）
+
+通过 XDMA 直接读写 VPU GB/WB，跳过 CDMA：
+
+```bash
+cd tests/vpu
+python test_e2e_flow.py
+```
+
+**测试内容**：
+- ✅ global_bram 读写
+- ✅ VPU GB/WB 直接读写
+- ✅ VPU 寄存器访问
+- ✅ 数据路径验证
+
+### 3. Mock模式（仅CPU，无需硬件）
+
+适用于算法验证、功能测试：
 
 ```bash
 cd tests/vpu/examples
@@ -47,28 +88,121 @@ PYTHONPATH=.. python test_vpu_ops_example.py
 **预期输出**:
 ```
 💻 Mock模式: 仅运行CPU Golden Model
-
-============================================================
-测试 Max Pooling 2x2
-============================================================
-输入形状: (16, 8, 8)
-...
 ✅ ALL 5 TESTS PASSED
 ```
 
-### 2. 硬件模式（需要FPGA）
+---
 
-适用于实际硬件验证：
+## 🧪 测试架构说明
 
-```bash
-# 使用包装脚本
-./run_test.sh --device /dev/xdma0
-./run_test.sh --device /dev/xdma0 --test maxpool
+### 当前实现的测试方法
 
-# 或直接运行
-cd examples
-PYTHONPATH=.. python test_vpu_ops_example.py --device /dev/xdma0
+项目提供了**三种测试方法**，按照推荐程度排序：
+
+#### 1. ⭐⭐ 基于指令的测试（`test_inst_decoder.py`）— **理想方式，推荐使用**
+
+**完整硬件流程**：软件 → INST_BRAM → INST_Decoder → CDMA_Controller → CDMA/VPU → 验证
+
+这是最符合硬件架构设计的测试方式：
+
+```python
+# 示例：通过指令实现 CDMA 搬运
+from test_inst_decoder import *
+
+# 1. 准备测试数据
+write_blob(GLOBAL_BRAM_BASE, test_data.tobytes())
+
+# 2. 编码指令序列
+instructions = [
+    encode_cdma_copy(GLOBAL_BRAM_BASE, VPU_GB_BASE, 256),
+    encode_wait_cdma(),
+    encode_vpu_exec(unit_choose=4, src_addr=0, dst_addr=0x8000, ...),
+    encode_wait_vpu(),
+    encode_cdma_copy(VPU_GB_BASE + 0x8000, GLOBAL_BRAM_BASE + 0x1000, 128),
+    encode_end(),
+]
+
+# 3. 写入指令并启动
+inst_bytes = build_instruction_sequence(instructions)
+write_blob(INST_BRAM_BASE, inst_bytes)
+decoder_start(inst_count=len(inst_bytes)//4)
+
+# 4. 等待完成并读取结果
+decoder_wait(timeout=5.0)
+result = read_blob(GLOBAL_BRAM_BASE + 0x1000, 128)
 ```
+
+**优点**：
+- ✅ 完全符合硬件架构（INST_Decoder 自动控制）
+- ✅ 高性能（CDMA 硬件加速）
+- ✅ 支持复杂流水线（多个 CDMA + VPU 操作）
+- ✅ 易于扩展（添加新指令类型）
+
+**当前测试覆盖**：
+- ✅ CDMA 内存搬运（global_bram ↔ global_bram）
+- ✅ CDMA 搬运到 VPU GB
+- ✅ CDMA 完整往返
+- ⚠️ VPU 操作指令测试（待完善）
+
+#### 2. ⭐ 直接访问测试（`test_e2e_flow.py`）— 基础验证
+
+**简化流程**：软件通过 XDMA 直接读写 VPU GB/WB
+
+```python
+# 示例：直接写入 VPU GB
+from xdma_helpers import *
+
+write_blob(VPU_GB_BASE, input_data.tobytes())
+write_reg(VPU_REGS_BASE, VPU_REG_UNIT_CHOOSE, 4)  # MaxPooling
+write_reg(VPU_REGS_BASE, VPU_REG_CTRL, 1)
+# ... 等待 VPU 完成
+result = read_blob(VPU_GB_BASE + 0x8000, output_size)
+```
+
+**优点**：
+- ✅ 简单直接，易于调试
+- ✅ 适用于基础功能验证
+- ✅ 不依赖 INST_Decoder
+
+**缺点**：
+- ❌ 性能较低（软件轮询 + 多次 PCIe 传输）
+- ❌ 无法测试 CDMA 自动搬运功能
+
+#### 3. Mock 模式测试（`test_vpu_ops_example.py`）— 算法验证
+
+**纯软件**：仅运行 CPU Golden Model，无需硬件
+
+```python
+from vpu_operations import create_vpu_operators
+
+ops = create_vpu_operators()  # Mock模式
+output = ops['maxpool'](input_data)
+golden = ops['maxpool'].golden(input_data)
+assert np.array_equal(output, golden)
+```
+
+**优点**：
+- ✅ 无需 FPGA 硬件
+- ✅ 快速验证算法正确性
+- ✅ 集成到 CI/CD
+
+**缺点**：
+- ❌ 无法验证硬件实现
+
+### 测试方法对比
+
+| 测试方法 | 硬件依赖 | 性能 | CDMA | 复杂度 | 推荐度 |
+|---------|---------|------|------|--------|--------|
+| 基于指令 | ✅ FPGA | 高 | ✅ 硬件加速 | 中 | ⭐⭐⭐ |
+| 直接访问 | ✅ FPGA | 低 | ❌ 手动搬运 | 低 | ⭐⭐ |
+| Mock模式 | ❌ 无 | N/A | N/A | 低 | ⭐ |
+
+### 开发建议
+
+1. **算法开发阶段**：使用 Mock 模式验证算法正确性
+2. **基础验证阶段**：使用直接访问测试验证硬件基本功能
+3. **性能测试阶段**：使用基于指令的测试，充分利用 CDMA 硬件加速
+4. **生产部署**：使用基于指令的方式，获得最佳性能
 
 ---
 
@@ -295,26 +429,39 @@ print("✅ 硬件验证通过!")
 
 | 地址 | 大小 | 名称 | 说明 |
 |------|------|------|------|
-| `0x1000_0000` | 64KB | `GLOBAL_BRAM_BASE` | 主机暂存缓冲区 (staging buffer) |
-| `0x1001_0000` | 64KB | `VPU_GB_BASE` | VPU Global Buffer (输入/输出数据) |
-| `0x1002_0000` | 64KB | `VPU_WB_BASE` | VPU Weight Buffer (权重/参数/Scale) |
-| `0x1003_0000` | 64KB | `CDMA_BASE` | CDMA 寄存器 |
-| `0x1004_0000` | 4KB | `VPU_REGS_BASE` | VPU 控制寄存器 |
+| `0x1000_0000` | 1MB | `GLOBAL_BRAM_BASE` | 主机暂存缓冲区 (staging buffer，数据区) |
+| `0x1020_0000` | 1MB | `INST_BRAM_BASE` | 指令存储区（供INST_Decoder使用） |
+| `0x1040_0000` | 128KB | `VPU_GB_BASE` | VPU Global Buffer (输入/输出数据) |
+| `0x1042_0000` | 128KB | `VPU_WB_BASE` | VPU Weight Buffer (权重/参数/Scale) |
+| `0x1044_0000` | 4KB | `VPU_REGS_BASE` | VPU 控制寄存器 + 解码器控制 |
 
 **注意**: 
 - 这些地址在以下文件中保持一致：
   - `scripts/ip/bd/vpu/address.tcl` (Vivado Block Design地址配置)
   - `tests/vpu/xdma_helpers.py` (Python API常量定义)
   - `tests/vpu/README.md` (本文档)
+- **⚠️ 架构重要变更（2026-05-15）**：
+  - ❌ **旧架构（已废弃）**：软件直接访问 CDMA 寄存器 (`CDMA_BASE = 0x10300000`)
+  - ✅ **新架构（当前）**：软件 → INST_BRAM → INST_Decoder → CDMA_Controller → CDMA IP
+  - 软件不再直接访问 CDMA 寄存器，改为通过指令接口控制
+  - 数据搬运两种方式：
+    1. **推荐方式**：写指令到 INST_BRAM，由 INST_Decoder 自动控制 CDMA（高性能）
+    2. **简单方式**：软件通过 XDMA 直接读写 VPU_GB/VPU_WB（低性能，适用于测试）
 - **修改地址映射的步骤**：
   1. 修改 `scripts/ip/bd/vpu/address.tcl` 中的地址偏移
   2. 同步更新 `tests/vpu/xdma_helpers.py` 中的常量定义
-  3. 重新生成 bitstream (`make vpu` 或 `vivado -source scripts/vpu/run.tcl`)
+  3. 重新生成 bitstream (`vivado -mode batch -source scripts/vpu/run.tcl`)
   4. 更新本文档中的地址表
 - **当前地址分配说明**：
-  - 所有外设统一映射在 `0x1000_0000` ~ `0x1004_1000` 地址空间
-  - XDMA 和 CDMA 都可以访问这些地址
-  - VPU_GB 和 VPU_WB 的地址需要与 RTL 中的 AXI 接口匹配
+  - 所有外设统一映射在 `0x1000_0000` ~ `0x1044_1000` 地址空间
+  - XDMA 可以直接访问 global_bram、inst_bram、VPU_GB、VPU_WB、VPU_REGS
+  - CDMA 由 INST_Decoder 控制，可以访问 global_bram、VPU_GB、VPU_WB
+- **代码兼容性说明**：
+  - `xdma_helpers.py`: 已更新，`CDMA_BASE = None`（标记为废弃）
+  - `xdma_vpu.py`: 保留 CDMA 函数接口，内部使用 XDMA 实现（用于兼容旧代码）
+  - `test_e2e_flow.py`: 已更新为使用直接 XDMA 访问方式
+  - `vpu_operations.py`: 注释已更新，反映新架构
+  - 如需使用真正的 CDMA 硬件加速，请使用基于 `INST_BRAM` 的指令接口（待实现示例）
 
 ### VPU控制寄存器
 
@@ -479,18 +626,20 @@ python test_vpu_ops_example.py
 
 ## 🔄 版本历史
 
-### v1.0 (2026-05-14)
-- ✅ 实现MaxPooling, Upsampling, Add, Quantize, Dequantize
-- ✅ Mock模式测试通过
-- ✅ Golden Model验证
-- ✅ 完整文档
+### v1.1 (2026-05-15) - 架构更新
+- ⚠️ **重要变更**：移除直接访问 CDMA 寄存器的方式
+- ✅ 更新为新架构：INST_BRAM → INST_Decoder → CDMA_Controller → CDMA IP
+- ✅ 更新地址映射：调整为 1MB global_bram、128KB VPU GB/WB
+- ✅ 更新测试脚本：`test_e2e_flow.py` 改用 XDMA 直接访问方式
+- ✅ 更新文档：所有地址和架构说明已同步
+- 🔧 代码兼容性：保留旧接口函数，内部使用 XDMA 实现
 
-### 待实现功能
-- [ ] Convolution (通过GEMM)
-- [ ] Batch Normalization
-- [ ] ReLU/Leaky ReLU
-- [ ] Concat (特征拼接)
-- [ ] 性能优化（Pipeline, DMA批量传输）
+### v1.0 (2026-05-14)
+- ✅ VPU RTL实现（5个操作单元）
+- ✅ Python API完成
+- ✅ 时序验证通过（250MHz）
+- ✅ Mock模式测试通过
+- ⚠️ 硬件验证待完成
 
 ---
 

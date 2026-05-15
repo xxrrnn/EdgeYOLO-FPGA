@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-VPU（rtl 中为 PE/DCIM）+ XDMA + CDMA 主机侧协议。
+VPU（rtl 中为 PE/DCIM）+ XDMA 主机侧协议。
 
 与 Vivado Block Design 一致，地址见 scripts/ip/bd/vpu/address.tcl。
 配置通过 XDMA H2C 写设备侧绝对地址完成。
 
 仅支持 exe 模式（通过 xdma_rw.exe 进行读写）。
+
+⚠️ 注意：本文件使用旧架构（直接访问CDMA）的接口
+   新架构中，CDMA 由 INST_Decoder 通过 CDMA_Controller 控制
+   为保持兼容性，本文件保留了 CDMA 相关函数，但标记为废弃
+   推荐使用基于 INST_BRAM 指令的新接口或直接通过 XDMA 访问 VPU GB/WB
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ import numpy as np
 
 from xdma_helpers import (
     XDMADevice, xdma_write, xdma_read, write_reg, read_reg,
-    GLOBAL_BRAM_BASE, VPU_GB_BASE, VPU_WB_BASE, CDMA_BASE, VPU_REGS_BASE
+    GLOBAL_BRAM_BASE, VPU_GB_BASE, VPU_WB_BASE, VPU_REGS_BASE, INST_BRAM_BASE
 )
 
 # 地址别名（兼容旧代码）
@@ -34,56 +39,33 @@ PE_STATUS_BASE = VPU_REGS_BASE + 0x5000
 BRAM_WORD_BYTES = 32
 MODE_INT8 = 0b110
 
-# CDMA 寄存器偏移
-CDMA_CR = 0x00
-CDMA_SR = 0x04
-CDMA_SA = 0x18
-CDMA_SA_MSB = 0x1C
-CDMA_DA = 0x20
-CDMA_DA_MSB = 0x24
-CDMA_BTT = 0x28
-CDMA_SR_IDLE = 1 << 1
-CDMA_SR_ERR_MASK = (
-    (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 9) | (1 << 10)
-)
 
+# ============================================================================
+# CDMA 相关函数（已废弃，新架构中由 INST_Decoder 控制）
+# 为保持兼容性保留，但不推荐使用
+# ============================================================================
 
-def cdma_status() -> int:
-    """读取 CDMA 状态寄存器"""
-    return read_reg(CDMA_BASE, CDMA_SR)
-
-
-def cdma_wait_idle(timeout_sec: float = 5.0) -> int:
-    """等待 CDMA 空闲"""
-    deadline = time.time() + timeout_sec
-    last = 0
-    while time.time() < deadline:
-        last = cdma_status()
-        if last & CDMA_SR_ERR_MASK:
-            raise RuntimeError(f"CDMA error status: 0x{last:08X}")
-        if last & CDMA_SR_IDLE:
-            return last
-        time.sleep(0.001)
-    raise TimeoutError(f"CDMA idle timeout, last SR=0x{last:08X}")
-
-
-def cdma_reset() -> None:
-    """复位 CDMA"""
-    write_reg(CDMA_BASE, CDMA_CR, 1 << 2)
-    cdma_wait_idle(timeout_sec=2.0)
-
-
-def cdma_memcpy(src_addr: int, dst_addr: int, nbytes: int) -> None:
-    """CDMA 内存拷贝（simple mode，仅 32-bit 地址）"""
+def cdma_memcpy_via_xdma(src_addr: int, dst_addr: int, nbytes: int) -> None:
+    """
+    使用 XDMA 模拟 CDMA 内存拷贝（替代方案）
+    
+    ⚠️ 注意：这不是真正的 CDMA，而是通过 XDMA 读写来实现数据搬运
+    性能较低，仅用于测试和兼容旧代码
+    """
     if nbytes <= 0 or nbytes > 0x7FFFFF:
-        raise ValueError(f"invalid CDMA length {nbytes}")
-    cdma_wait_idle()
-    write_reg(CDMA_BASE, CDMA_SA, src_addr & 0xFFFFFFFF)
-    write_reg(CDMA_BASE, CDMA_SA_MSB, 0)
-    write_reg(CDMA_BASE, CDMA_DA, dst_addr & 0xFFFFFFFF)
-    write_reg(CDMA_BASE, CDMA_DA_MSB, 0)
-    write_reg(CDMA_BASE, CDMA_BTT, nbytes)
-    cdma_wait_idle(timeout_sec=10.0)
+        raise ValueError(f"invalid length {nbytes}")
+    
+    # 读取源数据
+    src_data = xdma_read(src_addr, nbytes)
+    
+    # 写入目标地址
+    result = xdma_write(dst_addr, src_data)
+    if not result.ok:
+        raise RuntimeError(f"XDMA memcpy failed: {result.stderr}")
+
+
+# 为兼容性保留的别名
+cdma_memcpy = cdma_memcpy_via_xdma
 
 
 def pack_activation_rows(act: np.ndarray) -> bytes:
@@ -220,7 +202,9 @@ class VpuBramSession:
     """
     VPU BRAM 会话管理
     
-    global_bram 暂存 → CDMA → PE ibuf → GPIO 启动 VPU → CDMA obuf → global_bram 读回。
+    ⚠️ 新架构流程：
+    - 方式1（本类使用）：global_bram 暂存 → XDMA → PE ibuf → GPIO 启动 VPU → XDMA → global_bram 读回
+    - 方式2（推荐）：INST_BRAM → INST_Decoder → CDMA_Controller → CDMA IP（自动搬运）
     """
 
     def __init__(self, channel: int = 0):
@@ -251,11 +235,17 @@ class VpuBramSession:
         raw_rows: int,
         acc: int = 0,
     ) -> bytes:
-        """执行一个完整的 VPU 运算用例"""
+        """
+        执行一个完整的 VPU 运算用例（使用 XDMA 直接搬运）
+        
+        ⚠️ 注意：此方法使用 XDMA 直接访问方式，性能较低
+        推荐使用基于 INST_BRAM 的指令接口
+        """
+        # 写入数据到 global_bram
         h2c_write_blob(GLOBAL_BASE + w_global_off, weight_payload)
         h2c_write_blob(GLOBAL_BASE + a_global_off, act_payload)
 
-        cdma_reset()
+        # 使用 XDMA 直接搬运（替代 CDMA）
         cdma_memcpy(
             GLOBAL_BASE + w_global_off,
             IBUF_BASE + w_ibuf_off,
@@ -267,6 +257,7 @@ class VpuBramSession:
             len(act_payload),
         )
 
+        # 启动 PE 运算
         pe_start(
             w_ibuf_off,
             a_ibuf_off,
@@ -275,6 +266,7 @@ class VpuBramSession:
             acc,
         )
 
+        # 读回结果（通过 XDMA）
         cdma_memcpy(
             OBUF_BASE + r_obuf_off,
             GLOBAL_BASE + r_global_off,

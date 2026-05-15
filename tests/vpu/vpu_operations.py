@@ -6,11 +6,13 @@ VPU神经网络操作API - 将Python操作翻译为XDMA指令
 仅支持 exe 模式（通过 xdma_rw.exe 进行读写）
 
 地址映射（参考 scripts/ip/bd/vpu/address.tcl）：
-  0x1000_0000  staging global_bram (64KB)
-  0x1001_0000  VPU GB (axi_bram_ctrl, 64KB)
-  0x1002_0000  VPU WB (axi_bram_ctrl, 64KB)
-  0x1003_0000  CDMA 寄存器 (64KB)
-  0x1004_0000  VPU_AXI_Regs (4KB)
+  0x1000_0000  staging global_bram (1MB) - 数据区
+  0x1020_0000  inst_bram (1MB) - 指令区
+  0x1040_0000  VPU GB (128KB)
+  0x1042_0000  VPU WB (128KB)
+  0x1044_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+  
+注意：软件不再直接访问 CDMA 寄存器，由 INST_Decoder 通过 CDMA_Controller 控制
 """
 
 import numpy as np

@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-端到端 VPU 测试流程：
-1. 写入测试数据到 global_bram
-2. 使用 CDMA 将数据从 global_bram 搬运到 VPU GB/WB
-3. 使用 CDMA 将数据从 VPU GB 搬运回 global_bram
-4. 从 global_bram 读取结果并验证
+端到端 VPU 测试流程（新架构版本）：
+1. 测试 global_bram 基本读写
+2. 测试 VPU GB/WB 直接读写
+3. 测试 VPU 基本操作（通过 VPU_REGS）
+
+注意：新架构中，数据搬运通过以下方式：
+- 方式1: 软件直接访问 VPU GB/WB（通过 XDMA）
+- 方式2: 使用 INST_BRAM + INST_Decoder 控制 CDMA（推荐）
+
+本测试使用方式1（直接访问），适用于基础功能验证
 """
 
 import sys
@@ -18,15 +23,24 @@ if str(parent_dir) not in sys.path:
 
 from xdma_helpers import (
     write_blob, read_blob, write_reg, read_reg,
-    GLOBAL_BRAM_BASE, VPU_GB_BASE, VPU_WB_BASE, CDMA_BASE, VPU_REGS_BASE
+    GLOBAL_BRAM_BASE, VPU_GB_BASE, VPU_WB_BASE, VPU_REGS_BASE
 )
 
-# CDMA 寄存器偏移
-CDMA_CR  = 0x00
-CDMA_SR  = 0x04
-CDMA_SA  = 0x18
-CDMA_DA  = 0x20
-CDMA_BTT = 0x28
+# VPU寄存器偏移
+VPU_REG_CTRL = 0x00         # [0] start
+VPU_REG_STATUS = 0x04       # [0] ready
+VPU_REG_UNIT_CHOOSE = 0x08
+VPU_REG_SRC_ADDR = 0x0C
+VPU_REG_SRC2_ADDR = 0x10
+VPU_REG_SRC_C = 0x14
+VPU_REG_SRC_H = 0x18
+VPU_REG_SRC_W = 0x1C
+VPU_REG_BIAS_ADDR = 0x20
+VPU_REG_SCALE_ADDR = 0x24
+VPU_REG_DST_ADDR = 0x28
+VPU_REG_ADDR_BREAK = 0x2C
+VPU_REG_ADDR_S = 0x30
+VPU_REG_ADDR_T = 0x34
 
 
 def print_sep(title: str = ""):
@@ -34,30 +48,6 @@ def print_sep(title: str = ""):
         print(f"\n{'='*60}\n  {title}\n{'='*60}")
     else:
         print("="*60)
-
-
-def cdma_reset():
-    """复位 CDMA 并等待就绪"""
-    write_reg(CDMA_BASE, CDMA_CR, 0x04)  # Reset
-    time.sleep(0.01)
-    write_reg(CDMA_BASE, CDMA_CR, 0x01)  # Enable, no SG
-
-
-def cdma_transfer(src: int, dst: int, nbytes: int, timeout: float = 1.0):
-    """执行 CDMA 传输并等待完成"""
-    write_reg(CDMA_BASE, CDMA_SA, src)
-    write_reg(CDMA_BASE, CDMA_DA, dst)
-    write_reg(CDMA_BASE, CDMA_BTT, nbytes)
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        sr = read_reg(CDMA_BASE, CDMA_SR)
-        if sr & 0x02:  # Idle bit
-            return sr
-        if sr & 0x4070:  # Error bits
-            raise RuntimeError(f"CDMA error: SR=0x{sr:08X}")
-        time.sleep(0.001)
-    raise TimeoutError(f"CDMA transfer timeout (SR=0x{read_reg(CDMA_BASE, CDMA_SR):08X})")
 
 
 def test_global_bram():
@@ -75,91 +65,98 @@ def test_global_bram():
     print(f"✓ 读写一致, 前 8 值: {read_data[:8]}")
 
 
-def test_cdma_status():
-    """测试 2: CDMA 复位与状态读取"""
-    print_sep("测试 2: CDMA 复位与状态")
-
-    cdma_reset()
-    sr = read_reg(CDMA_BASE, CDMA_SR)
-    print(f"CDMA SR = 0x{sr:08X}")
-    assert sr & 0x02, f"CDMA not idle after reset: SR=0x{sr:08X}"
-    print("✓ CDMA 复位成功，处于 Idle 状态")
-
-
-def test_cdma_bram_to_bram():
-    """测试 3: CDMA 在 global_bram 内搬运"""
-    print_sep("测试 3: CDMA global_bram 内部搬运")
-
-    src_off, dst_off, size = 0x0000, 0x1000, 256
-
-    src_data = np.arange(size, dtype=np.uint8)
-    dst_fill = np.full(size, 0xFF, dtype=np.uint8)
-
-    write_blob(GLOBAL_BRAM_BASE + src_off, src_data.tobytes())
-    write_blob(GLOBAL_BRAM_BASE + dst_off, dst_fill.tobytes())
-
-    print(f"CDMA: 0x{GLOBAL_BRAM_BASE+src_off:08X} → 0x{GLOBAL_BRAM_BASE+dst_off:08X} ({size}B)")
-    cdma_transfer(GLOBAL_BRAM_BASE + src_off, GLOBAL_BRAM_BASE + dst_off, size)
-
-    result = np.frombuffer(read_blob(GLOBAL_BRAM_BASE + dst_off, size), dtype=np.uint8)
-    assert np.array_equal(src_data, result), \
-        f"Mismatch: expected {src_data[:16]}, got {result[:16]}"
-    print(f"✓ 搬运成功, 前 16 字节: {result[:16]}")
-
-
-def test_cdma_to_vpu_gb():
-    """测试 4: CDMA global_bram → VPU GB"""
-    print_sep("测试 4: CDMA global_bram → VPU GB")
+def test_vpu_gb_direct():
+    """测试 2: VPU GB 直接读写（通过 XDMA）"""
+    print_sep("测试 2: VPU GB 直接读写")
 
     size = 256
-    src_off = 0x2000
     test_data = np.arange(size, dtype=np.uint8)
 
-    write_blob(GLOBAL_BRAM_BASE + src_off, test_data.tobytes())
+    # 直接写入 VPU GB
+    write_blob(VPU_GB_BASE, test_data.tobytes())
 
-    print(f"CDMA: 0x{GLOBAL_BRAM_BASE+src_off:08X} → 0x{VPU_GB_BASE:08X} ({size}B)")
-    cdma_transfer(GLOBAL_BRAM_BASE + src_off, VPU_GB_BASE, size)
-
+    # 直接读取 VPU GB
     result = np.frombuffer(read_blob(VPU_GB_BASE, size), dtype=np.uint8)
     assert np.array_equal(test_data, result), \
         f"Mismatch: expected {test_data[:16]}, got {result[:16]}"
-    print(f"✓ VPU GB 数据正确, 前 16 字节: {result[:16]}")
+    print(f"✓ VPU GB 读写成功, 前 16 字节: {result[:16]}")
 
 
-def test_cdma_from_vpu_gb():
-    """测试 5: CDMA VPU GB → global_bram"""
-    print_sep("测试 5: CDMA VPU GB → global_bram")
+def test_vpu_wb_direct():
+    """测试 3: VPU WB 直接读写（通过 XDMA）"""
+    print_sep("测试 3: VPU WB 直接读写")
 
     size = 256
-    dst_off = 0x3000
-    expected = np.arange(size, dtype=np.uint8)  # 测试 4 写入的数据
+    test_data = np.arange(size, dtype=np.uint8)
 
-    write_blob(GLOBAL_BRAM_BASE + dst_off, bytes([0xAA] * size))
+    # 直接写入 VPU WB
+    write_blob(VPU_WB_BASE, test_data.tobytes())
 
-    print(f"CDMA: 0x{VPU_GB_BASE:08X} → 0x{GLOBAL_BRAM_BASE+dst_off:08X} ({size}B)")
-    cdma_transfer(VPU_GB_BASE, GLOBAL_BRAM_BASE + dst_off, size)
+    # 直接读取 VPU WB
+    result = np.frombuffer(read_blob(VPU_WB_BASE, size), dtype=np.uint8)
+    assert np.array_equal(test_data, result), \
+        f"Mismatch: expected {test_data[:16]}, got {result[:16]}"
+    print(f"✓ VPU WB 读写成功, 前 16 字节: {result[:16]}")
 
-    result = np.frombuffer(read_blob(GLOBAL_BRAM_BASE + dst_off, size), dtype=np.uint8)
-    assert np.array_equal(expected, result), \
-        f"Mismatch: expected {expected[:16]}, got {result[:16]}"
-    print(f"✓ VPU GB → global_bram 成功, 前 16 字节: {result[:16]}")
+
+def test_vpu_regs():
+    """测试 4: VPU 寄存器读写"""
+    print_sep("测试 4: VPU 寄存器访问")
+
+    # 读取状态寄存器
+    status = read_reg(VPU_REGS_BASE, VPU_REG_STATUS)
+    print(f"VPU Status = 0x{status:08X}")
+    print(f"✓ VPU 寄存器读取成功")
+
+    # 写入测试配置
+    write_reg(VPU_REGS_BASE, VPU_REG_UNIT_CHOOSE, 4)  # MaxPooling
+    unit_choose = read_reg(VPU_REGS_BASE, VPU_REG_UNIT_CHOOSE)
+    assert unit_choose == 4, f"Unit choose mismatch: expected 4, got {unit_choose}"
+    print(f"✓ VPU 寄存器写入成功, UNIT_CHOOSE = {unit_choose}")
+
+
+def test_data_path():
+    """测试 5: 数据路径（global_bram ↔ VPU GB）"""
+    print_sep("测试 5: 数据路径测试")
+
+    size = 128
+    test_data = np.arange(size, dtype=np.uint8)
+
+    # 写入 global_bram
+    write_blob(GLOBAL_BRAM_BASE, test_data.tobytes())
+    print(f"✓ 写入 global_bram: {size} 字节")
+
+    # 读取并写入 VPU GB（模拟数据搬运）
+    data_from_global = read_blob(GLOBAL_BRAM_BASE, size)
+    write_blob(VPU_GB_BASE, data_from_global)
+    print(f"✓ 搬运到 VPU GB: {size} 字节")
+
+    # 从 VPU GB 读回
+    data_from_vpu = read_blob(VPU_GB_BASE, size)
+    result = np.frombuffer(data_from_vpu, dtype=np.uint8)
+    
+    assert np.array_equal(test_data, result), \
+        f"Mismatch: expected {test_data[:16]}, got {result[:16]}"
+    print(f"✓ 数据路径验证成功, 前 16 字节: {result[:16]}")
 
 
 def main():
-    print_sep("VPU 端到端测试")
+    print_sep("VPU 端到端测试（新架构）")
     print(f"地址映射:")
-    print(f"  Global BRAM: 0x{GLOBAL_BRAM_BASE:08X}")
-    print(f"  VPU GB:      0x{VPU_GB_BASE:08X}")
-    print(f"  VPU WB:      0x{VPU_WB_BASE:08X}")
-    print(f"  CDMA:        0x{CDMA_BASE:08X}")
-    print(f"  VPU Regs:    0x{VPU_REGS_BASE:08X}")
+    print(f"  Global BRAM: 0x{GLOBAL_BRAM_BASE:08X} (1MB)")
+    print(f"  VPU GB:      0x{VPU_GB_BASE:08X} (128KB)")
+    print(f"  VPU WB:      0x{VPU_WB_BASE:08X} (128KB)")
+    print(f"  VPU Regs:    0x{VPU_REGS_BASE:08X} (4KB)")
+    print()
+    print("注意：新架构中，CDMA 由 INST_Decoder 控制")
+    print("      本测试通过 XDMA 直接访问 VPU GB/WB")
 
     try:
         test_global_bram()
-        test_cdma_status()
-        test_cdma_bram_to_bram()
-        test_cdma_to_vpu_gb()
-        test_cdma_from_vpu_gb()
+        test_vpu_gb_direct()
+        test_vpu_wb_direct()
+        test_vpu_regs()
+        test_data_path()
         print_sep("所有测试通过 ✓")
         return 0
     except Exception as e:

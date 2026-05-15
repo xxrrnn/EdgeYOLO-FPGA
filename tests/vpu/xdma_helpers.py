@@ -29,7 +29,29 @@ VPU_WB_BASE = 0x10420000        # VPU Weight Buffer (128KB)
 VPU_REGS_BASE = 0x10440000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
 
 # 兼容旧代码：CDMA_BASE 已移除（软件不再直接访问 CDMA 寄存器）
-CDMA_BASE = None  # 已废弃，由 INST_Decoder 通过 CDMA_Controller 控制
+class _DeprecatedCDMABase:
+    """占位符类，用于在旧代码尝试使用 CDMA_BASE 时抛出明确错误"""
+    def __add__(self, other):
+        raise RuntimeError(
+            "\n"
+            "=" * 70 + "\n"
+            "❌ CDMA_BASE 已废弃！\n"
+            "=" * 70 + "\n"
+            "新架构中，CDMA 由 INST_Decoder 通过 CDMA_Controller 自动管理。\n"
+            "软件不再直接访问 CDMA 寄存器。\n\n"
+            "旧代码:\n"
+            "  write_reg(CDMA_BASE, CDMA_CR, 0x04)  # ❌ 不再有效\n\n"
+            "新方案:\n"
+            "  1. 使用 test_inst_decoder.py 中的指令解码器 API\n"
+            "  2. 参考 ADDRESS_MAP_SUMMARY.md 了解新架构\n"
+            "=" * 70 + "\n"
+        )
+    def __radd__(self, other):
+        return self.__add__(other)
+    def __repr__(self):
+        return "<DeprecatedCDMABase: Use INST_Decoder API instead>"
+
+CDMA_BASE = _DeprecatedCDMABase()  # 已废弃，由 INST_Decoder 通过 CDMA_Controller 控制
 
 # 查找 xdma_rw.exe
 SCRIPT_DIR = Path(__file__).parent.resolve()
