@@ -72,7 +72,10 @@
         CDMA_WRITE_DST_LSB_CLR = 8'd12,
         CDMA_WRITE_LEN      = 8'd13,
         CDMA_WRITE_LEN_CLR  = 8'd14,
-        CDMA_WAIT           = 8'd15
+        CDMA_WAIT_START     = 8'd15,  // 等待传输开始（IDLE=0）
+        CDMA_WAIT_START_CLR = 8'd16,
+        CDMA_WAIT_DONE      = 8'd17,  // 等待传输完成（IDLE=1）
+        CDMA_WAIT_DONE_CLR  = 8'd18
     } state_t;
     (* fsm_encoding = "one_hot" *) state_t n_state, c_state;
 
@@ -105,8 +108,13 @@
             CDMA_WRITE_DST_LSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_DST_LSB_CLR;
             CDMA_WRITE_DST_LSB_CLR: n_state = CDMA_WRITE_LEN;
             CDMA_WRITE_LEN:         if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_LEN_CLR;
-            CDMA_WRITE_LEN_CLR:     n_state = CDMA_WAIT;
-            CDMA_WAIT:              if (r_handshake_cdma && cdma_axilm_rdata[1]) n_state = IDLE;
+            CDMA_WRITE_LEN_CLR:     n_state = CDMA_WAIT_START;
+            // 等待传输开始：IDLE 位变为 0
+            CDMA_WAIT_START:        if (r_handshake_cdma && !cdma_axilm_rdata[1]) n_state = CDMA_WAIT_START_CLR;
+            CDMA_WAIT_START_CLR:    n_state = CDMA_WAIT_DONE;
+            // 等待传输完成：IDLE 位变为 1
+            CDMA_WAIT_DONE:         if (r_handshake_cdma && cdma_axilm_rdata[1]) n_state = CDMA_WAIT_DONE_CLR;
+            CDMA_WAIT_DONE_CLR:     n_state = IDLE;
 
             default: n_state = IDLE;
         endcase
@@ -194,7 +202,14 @@
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
-                CDMA_WAIT: begin
+                CDMA_WAIT_START: begin
+                    // 读取状态寄存器，等待 IDLE=0（传输开始）
+                    cdma_axilm_arvalid <= 1;
+                    cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
+                    cdma_axilm_rready  <= 1;
+                end
+                CDMA_WAIT_DONE: begin
+                    // 读取状态寄存器，等待 IDLE=1（传输完成）
                     cdma_axilm_arvalid <= 1;
                     cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
                     cdma_axilm_rready  <= 1;
@@ -211,7 +226,9 @@
                 CDMA_WRITE_SRC_LSB_CLR,
                 CDMA_WRITE_DST_MSB_CLR,
                 CDMA_WRITE_DST_LSB_CLR,
-                CDMA_WRITE_LEN_CLR: begin
+                CDMA_WRITE_LEN_CLR,
+                CDMA_WAIT_START_CLR,
+                CDMA_WAIT_DONE_CLR: begin
                     cdma_axilm_awvalid <= 1'b0;
                     cdma_axilm_wvalid  <= 1'b0;
                     cdma_axilm_bready  <= 1'b0;

@@ -115,13 +115,22 @@ module tb_inst_decoder_core;
     wire        cdma_m_axi_rready;
     
     // =========================================================================
-    // AXI BRAM Controller <-> BRAM
+    // AXI BRAM Controller A <-> BRAM A (源数据)
     // =========================================================================
-    wire        bram_en;
-    wire [3:0]  bram_we;
-    wire [31:0] bram_addr;
-    wire [31:0] bram_wrdata;
-    wire [31:0] bram_rddata;
+    wire        bram_a_en;
+    wire [3:0]  bram_a_we;
+    wire [14:0] bram_a_addr;
+    wire [31:0] bram_a_wrdata;
+    wire [31:0] bram_a_rddata;
+    
+    // =========================================================================
+    // AXI BRAM Controller B <-> BRAM B (目标数据)
+    // =========================================================================
+    wire        bram_b_en;
+    wire [3:0]  bram_b_we;
+    wire [14:0] bram_b_addr;
+    wire [31:0] bram_b_wrdata;
+    wire [31:0] bram_b_rddata;
     
     // =========================================================================
     // 实例化 INST_Decoder
@@ -270,31 +279,30 @@ module tb_inst_decoder_core;
     );
     
     // =========================================================================
-    // 实例化 AXI BRAM Controller IP
-    // 使用 sim_axi_bram_ctrl
+    // 实例化 AXI BRAM Controller A (读取源)
     // =========================================================================
-    sim_axi_bram_ctrl u_bram_ctrl (
+    sim_axi_bram_ctrl u_bram_ctrl_a (
         .s_axi_aclk(clk),
         .s_axi_aresetn(rst_n),
         
-        .s_axi_awaddr(cdma_m_axi_awaddr),
-        .s_axi_awlen(cdma_m_axi_awlen),
-        .s_axi_awsize(cdma_m_axi_awsize),
-        .s_axi_awburst(cdma_m_axi_awburst),
+        .s_axi_awaddr(15'b0),
+        .s_axi_awlen(8'b0),
+        .s_axi_awsize(3'b0),
+        .s_axi_awburst(2'b0),
         .s_axi_awlock(1'b0),
-        .s_axi_awcache(cdma_m_axi_awcache),
-        .s_axi_awprot(cdma_m_axi_awprot),
-        .s_axi_awvalid(cdma_m_axi_awvalid),
-        .s_axi_awready(cdma_m_axi_awready),
-        .s_axi_wdata(cdma_m_axi_wdata),
-        .s_axi_wstrb(cdma_m_axi_wstrb),
-        .s_axi_wlast(cdma_m_axi_wlast),
-        .s_axi_wvalid(cdma_m_axi_wvalid),
-        .s_axi_wready(cdma_m_axi_wready),
-        .s_axi_bresp(cdma_m_axi_bresp),
-        .s_axi_bvalid(cdma_m_axi_bvalid),
-        .s_axi_bready(cdma_m_axi_bready),
-        .s_axi_araddr(cdma_m_axi_araddr),
+        .s_axi_awcache(4'b0),
+        .s_axi_awprot(3'b0),
+        .s_axi_awvalid(1'b0),
+        .s_axi_awready(),
+        .s_axi_wdata(32'b0),
+        .s_axi_wstrb(4'b0),
+        .s_axi_wlast(1'b0),
+        .s_axi_wvalid(1'b0),
+        .s_axi_wready(),
+        .s_axi_bresp(),
+        .s_axi_bvalid(),
+        .s_axi_bready(1'b0),
+        .s_axi_araddr(cdma_m_axi_araddr[14:0]),
         .s_axi_arlen(cdma_m_axi_arlen),
         .s_axi_arsize(cdma_m_axi_arsize),
         .s_axi_arburst(cdma_m_axi_arburst),
@@ -311,33 +319,146 @@ module tb_inst_decoder_core;
         
         .bram_rst_a(),
         .bram_clk_a(),
-        .bram_en_a(bram_en),
-        .bram_we_a(bram_we),
-        .bram_addr_a(bram_addr),
-        .bram_wrdata_a(bram_wrdata),
-        .bram_rddata_a(bram_rddata)
+        .bram_en_a(bram_a_en),
+        .bram_we_a(bram_a_we),
+        .bram_addr_a(bram_a_addr),
+        .bram_wrdata_a(bram_a_wrdata),
+        .bram_rddata_a(bram_a_rddata)
     );
     
     // =========================================================================
-    // BRAM 实例
-    // 使用 sim_blk_mem (双端口 RAM)
+    // 实例化 AXI BRAM Controller B (写入目标)
     // =========================================================================
-    sim_blk_mem u_bram (
+    sim_axi_bram_ctrl u_bram_ctrl_b (
+        .s_axi_aclk(clk),
+        .s_axi_aresetn(rst_n),
+        
+        .s_axi_awaddr(cdma_m_axi_awaddr[14:0]),
+        .s_axi_awlen(cdma_m_axi_awlen),
+        .s_axi_awsize(cdma_m_axi_awsize),
+        .s_axi_awburst(cdma_m_axi_awburst),
+        .s_axi_awlock(1'b0),
+        .s_axi_awcache(cdma_m_axi_awcache),
+        .s_axi_awprot(cdma_m_axi_awprot),
+        .s_axi_awvalid(cdma_m_axi_awvalid),
+        .s_axi_awready(cdma_m_axi_awready),
+        .s_axi_wdata(cdma_m_axi_wdata),
+        .s_axi_wstrb(cdma_m_axi_wstrb),
+        .s_axi_wlast(cdma_m_axi_wlast),
+        .s_axi_wvalid(cdma_m_axi_wvalid),
+        .s_axi_wready(cdma_m_axi_wready),
+        .s_axi_bresp(cdma_m_axi_bresp),
+        .s_axi_bvalid(cdma_m_axi_bvalid),
+        .s_axi_bready(cdma_m_axi_bready),
+        .s_axi_araddr(15'b0),
+        .s_axi_arlen(8'b0),
+        .s_axi_arsize(3'b0),
+        .s_axi_arburst(2'b0),
+        .s_axi_arlock(1'b0),
+        .s_axi_arcache(4'b0),
+        .s_axi_arprot(3'b0),
+        .s_axi_arvalid(1'b0),
+        .s_axi_arready(),
+        .s_axi_rdata(),
+        .s_axi_rresp(),
+        .s_axi_rlast(),
+        .s_axi_rvalid(),
+        .s_axi_rready(1'b0),
+        
+        .bram_rst_a(),
+        .bram_clk_a(),
+        .bram_en_a(bram_b_en),
+        .bram_we_a(bram_b_we),
+        .bram_addr_a(bram_b_addr),
+        .bram_wrdata_a(bram_b_wrdata),
+        .bram_rddata_a(bram_b_rddata)
+    );
+    
+    // =========================================================================
+    // BRAM A 实例 (源数据)
+    // Port A: AXI BRAM Controller A 使用
+    // Port B: Testbench 用于初始化
+    // =========================================================================
+    reg         tb_bram_a_we;
+    reg  [13:0] tb_bram_a_addr;
+    reg  [31:0] tb_bram_a_din;
+    wire [31:0] tb_bram_a_dout;
+    
+    sim_blk_mem u_bram_a (
         .clka(clk),
-        .wea(bram_we[0]),
-        .addra(bram_addr[15:2]),  // 14位字地址
-        .dina(bram_wrdata),
-        .douta(bram_rddata),
+        .wea(bram_a_we[0]),
+        .addra({1'b0, bram_a_addr[14:2]}),
+        .dina(bram_a_wrdata),
+        .douta(bram_a_rddata),
         .clkb(clk),
-        .web(1'b0),               // Port B 不使用
-        .addrb(14'b0),
-        .dinb(32'b0),
-        .doutb()
+        .web(tb_bram_a_we),
+        .addrb(tb_bram_a_addr),
+        .dinb(tb_bram_a_din),
+        .doutb(tb_bram_a_dout)
+    );
+    
+    // =========================================================================
+    // BRAM B 实例 (目标数据)
+    // Port A: AXI BRAM Controller B 使用
+    // Port B: Testbench 用于验证
+    // =========================================================================
+    reg         tb_bram_b_we;
+    reg  [13:0] tb_bram_b_addr;
+    reg  [31:0] tb_bram_b_din;
+    wire [31:0] tb_bram_b_dout;
+    
+    sim_blk_mem u_bram_b (
+        .clka(clk),
+        .wea(bram_b_we[0]),
+        .addra({1'b0, bram_b_addr[14:2]}),
+        .dina(bram_b_wrdata),
+        .douta(bram_b_rddata),
+        .clkb(clk),
+        .web(tb_bram_b_we),
+        .addrb(tb_bram_b_addr),
+        .dinb(tb_bram_b_din),
+        .doutb(tb_bram_b_dout)
     );
     
     // =========================================================================
     // 测试任务
     // =========================================================================
+    
+    // 通过 Port B 写入 BRAM A (源)
+    task automatic bram_a_write(input [13:0] addr, input [31:0] data);
+        begin
+            @(posedge clk);
+            tb_bram_a_we <= 1'b1;
+            tb_bram_a_addr <= addr;
+            tb_bram_a_din <= data;
+            @(posedge clk);
+            tb_bram_a_we <= 1'b0;
+        end
+    endtask
+    
+    // 通过 Port B 读取 BRAM A (源)
+    task automatic bram_a_read(input [13:0] addr, output [31:0] data);
+        begin
+            @(posedge clk);
+            tb_bram_a_we <= 1'b0;
+            tb_bram_a_addr <= addr;
+            @(posedge clk);
+            @(posedge clk);
+            data = tb_bram_a_dout;
+        end
+    endtask
+    
+    // 通过 Port B 读取 BRAM B (目标)
+    task automatic bram_b_read(input [13:0] addr, output [31:0] data);
+        begin
+            @(posedge clk);
+            tb_bram_b_we <= 1'b0;
+            tb_bram_b_addr <= addr;
+            @(posedge clk);
+            @(posedge clk);
+            data = tb_bram_b_dout;
+        end
+    endtask
     
     task automatic wait_decoder_done(input int timeout_cycles);
         int cnt;
@@ -382,10 +503,69 @@ module tb_inst_decoder_core;
             $display("[%0t] CDMA: cdma_start = 1", $time);
     end
     
+    // CDMA AXI-Lite 配置监控
+    always @(posedge clk) begin
+        if (cdma_axilm_awvalid && cdma_axilm_awready)
+            $display("[%0t] CDMA AXI-Lite Write: addr=0x%08X, data=0x%08X", 
+                     $time, cdma_axilm_awaddr, cdma_axilm_wdata);
+        if (cdma_axilm_arvalid && cdma_axilm_arready)
+            $display("[%0t] CDMA AXI-Lite Read Request: addr=0x%08X", $time, cdma_axilm_araddr);
+        if (cdma_axilm_rvalid && cdma_axilm_rready)
+            $display("[%0t] CDMA AXI-Lite Read Response: data=0x%08X", $time, cdma_axilm_rdata);
+    end
+    
+    // CDMA AXI Master 数据传输监控
+    always @(posedge clk) begin
+        if (cdma_m_axi_arvalid && cdma_m_axi_arready)
+            $display("[%0t] CDMA M_AXI AR: addr=0x%08X, len=%0d", 
+                     $time, cdma_m_axi_araddr, cdma_m_axi_arlen);
+        if (cdma_m_axi_awvalid && cdma_m_axi_awready)
+            $display("[%0t] CDMA M_AXI AW: addr=0x%08X, len=%0d", 
+                     $time, cdma_m_axi_awaddr, cdma_m_axi_awlen);
+        if (cdma_m_axi_awvalid && !cdma_m_axi_awready)
+            $display("[%0t] CDMA M_AXI AW WAIT: addr=0x%08X (awready=0)", 
+                     $time, cdma_m_axi_awaddr);
+        if (cdma_m_axi_wvalid && cdma_m_axi_wready)
+            $display("[%0t] CDMA M_AXI W: data=0x%08X, last=%b", 
+                     $time, cdma_m_axi_wdata, cdma_m_axi_wlast);
+        if (cdma_m_axi_rvalid && cdma_m_axi_rready)
+            $display("[%0t] CDMA M_AXI R: data=0x%08X, last=%b", 
+                     $time, cdma_m_axi_rdata, cdma_m_axi_rlast);
+        if (cdma_m_axi_bvalid && cdma_m_axi_bready)
+            $display("[%0t] CDMA M_AXI B: resp=%0d", $time, cdma_m_axi_bresp);
+    end
+    
+    // BRAM 访问监控
+    always @(posedge clk) begin
+        if (bram_a_en && |bram_a_we)
+            $display("[%0t] BRAM A Write: addr=0x%08X, data=0x%08X", $time, bram_a_addr, bram_a_wrdata);
+        if (bram_b_en && |bram_b_we)
+            $display("[%0t] BRAM B Write: addr=0x%08X, data=0x%08X", $time, bram_b_addr, bram_b_wrdata);
+    end
+    
+    // INST_Decoder 内部状态监控
+    always @(posedge clk) begin
+        if (cdma_config_valid)
+            $display("[%0t] INST_Decoder: cdma_config_valid=1, src=0x%08X, dst=0x%08X, len=%0d",
+                     $time, u_inst_decoder.cdma_src_addr_lsb, 
+                     u_inst_decoder.cdma_dst_addr_lsb, u_inst_decoder.cdma_length);
+    end
+    
+    // CDMA_Controller 状态监控
+    always @(posedge clk) begin
+        if (u_cdma_ctrl.c_state != u_cdma_ctrl.n_state)
+            $display("[%0t] CDMA_Controller: state %0d -> %0d", 
+                     $time, u_cdma_ctrl.c_state, u_cdma_ctrl.n_state);
+    end
+    
     initial begin
+        reg [31:0] read_data;
+        int error_count;
+        
         $display("========================================");
-        $display("核心模块仿真");
-        $display("INST_Decoder + CDMA_Controller + CDMA IP + BRAM");
+        $display("核心模块仿真 - 双 BRAM 测试");
+        $display("INST_Decoder + CDMA_Controller + CDMA IP");
+        $display("BRAM A (源) -> CDMA -> BRAM B (目标)");
         $display("========================================");
         
         // 初始化
@@ -393,6 +573,13 @@ module tb_inst_decoder_core;
         decoder_start = 0;
         inst_count = 0;
         test_pass = 1;
+        tb_bram_a_we = 0;
+        tb_bram_a_addr = 0;
+        tb_bram_a_din = 0;
+        tb_bram_b_we = 0;
+        tb_bram_b_addr = 0;
+        tb_bram_b_din = 0;
+        error_count = 0;
         
         // 清空指令内存
         for (i = 0; i < 256; i = i + 1) inst_mem[i] = 0;
@@ -403,34 +590,40 @@ module tb_inst_decoder_core;
         #50;
         
         // =====================================================================
-        // 测试 1: 单个 CDMA 搬运
+        // 测试 1: CDMA 从 BRAM A 搬运到 BRAM B
         // =====================================================================
         $display("\n========================================");
-        $display("测试 1: 单个 CDMA 搬运");
-        $display("源地址: 0x0000, 目标地址: 0x1000, 长度: 256 bytes");
+        $display("测试 1: CDMA 搬运 BRAM A -> BRAM B");
+        $display("源地址 (BRAM A): 0x0000, 目标地址 (BRAM B): 0x0000, 长度: 64 bytes (16 words)");
         $display("========================================");
         
-        // 初始化源数据（写入 BRAM 源地址区域）
-        $display("[%0t] 初始化源数据...", $time);
-        for (i = 0; i < 64; i = i + 1) begin
-            // 通过 BRAM 端口直接写入测试数据
-            // 注意：这里我们模拟数据已经在 BRAM 中
-            @(posedge clk);
+        // 初始化 BRAM A 源数据
+        $display("[%0t] 初始化 BRAM A 源数据...", $time);
+        for (i = 0; i < 16; i = i + 1) begin
+            bram_a_write(i, 32'hDEAD0000 + i);
+            $display("[%0t]   BRAM_A[%0d] = 0x%08X", $time, i, 32'hDEAD0000 + i);
         end
         
-        // 编码指令: CDMA_COPY src=0x0000, dst=0x1000, len=256
+        // 验证 BRAM A 源数据写入成功
+        $display("[%0t] 验证 BRAM A 源数据...", $time);
+        for (i = 0; i < 4; i = i + 1) begin
+            bram_a_read(i, read_data);
+            $display("[%0t]   BRAM_A[%0d] = 0x%08X (期望: 0x%08X)", $time, i, read_data, 32'hDEAD0000 + i);
+        end
+        
+        // 编码指令: CDMA_COPY src=0x0000, dst=0x0000, len=64 bytes
         $display("[%0t] 编码指令...", $time);
-        inst_mem[0] = 32'h1000000C; // CDMA opcode=1, body=12 bytes
-        inst_mem[1] = 32'h00000000; // src_lsb
-        inst_mem[2] = 32'h00001000; // dst_lsb
-        inst_mem[3] = 32'h00000100; // length = 256 bytes
+        inst_mem[0] = 32'h1000000C; // CDMA opcode=1, body=12 bytes (3 words)
+        inst_mem[1] = 32'h00000000; // src_lsb = 0x0000 (BRAM A 地址)
+        inst_mem[2] = 32'h00000000; // dst_lsb = 0x0000 (BRAM B 地址)
+        inst_mem[3] = 32'h00000040; // length = 64 bytes
         inst_mem[4] = 32'hF0000000; // END opcode=F
         
         inst_count = 5;
         $display("[%0t] inst_count = %0d", $time, inst_count);
         
         @(posedge clk);
-        #1;  // 确保在时钟上升沿之后
+        #1;
         decoder_start = 1;
         $display("[%0t] 设置 decoder_start = 1", $time);
         @(posedge clk);
@@ -439,16 +632,34 @@ module tb_inst_decoder_core;
         $display("[%0t] 清零 decoder_start = 0", $time);
         
         $display("[%0t] 等待解码器完成...", $time);
-        wait_decoder_done(100000);
+        wait_decoder_done(200000);
         
         // 验证数据传输
         if (decoder_done) begin
-            $display("\n[%0t] 验证数据传输结果...", $time);
-            // 由于我们使用的是简化的 testbench，
-            // CDMA 应该已经将数据从 0x0000 搬到 0x1000
-            // 这里可以通过监控 CDMA 的 AXI 事务来验证
-            $display("[%0t] CDMA 传输已完成", $time);
-            $display("[%0t] 注意：完整的数据验证需要在 BRAM 中读取数据", $time);
+            $display("\n[%0t] 验证 BRAM B 数据传输结果...", $time);
+            
+            // 等待一些周期确保写入完成
+            repeat(10) @(posedge clk);
+            
+            // 读取 BRAM B 目标地址
+            error_count = 0;
+            for (i = 0; i < 16; i = i + 1) begin
+                bram_b_read(i, read_data);
+                if (read_data == (32'hDEAD0000 + i)) begin
+                    $display("[%0t]   ✓ BRAM_B[%0d] = 0x%08X (正确)", $time, i, read_data);
+                end else begin
+                    $display("[%0t]   ✗ BRAM_B[%0d] = 0x%08X (期望: 0x%08X)", 
+                             $time, i, read_data, 32'hDEAD0000 + i);
+                    error_count = error_count + 1;
+                end
+            end
+            
+            if (error_count == 0) begin
+                $display("\n[%0t] ✓ CDMA 数据传输验证通过！所有 16 个字正确从 BRAM A 搬运到 BRAM B", $time);
+            end else begin
+                $display("\n[%0t] ✗ CDMA 数据传输验证失败！%0d 个错误", $time, error_count);
+                test_pass = 0;
+            end
         end else begin
             $display("\n[%0t] ✗ 解码器未完成", $time);
             test_pass = 0;
