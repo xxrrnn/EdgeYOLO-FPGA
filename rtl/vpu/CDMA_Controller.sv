@@ -198,7 +198,33 @@
                     cdma_axilm_arvalid <= 1;
                     cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
                     cdma_axilm_rready  <= 1;
-                                    end
+                end
+                CDMA_CHECK: begin
+                    // 保持读请求直到收到响应
+                    cdma_axilm_arvalid <= ~ar_handshake_cdma;  // 握手后清零
+                    cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
+                    cdma_axilm_rready  <= 1;
+                end
+                // _CLR 状态：清零所有 valid 信号
+                CDMA_ENABLE_IRQ_CLR,
+                CDMA_WRITE_SRC_MSB_CLR,
+                CDMA_WRITE_SRC_LSB_CLR,
+                CDMA_WRITE_DST_MSB_CLR,
+                CDMA_WRITE_DST_LSB_CLR,
+                CDMA_WRITE_LEN_CLR: begin
+                    cdma_axilm_awvalid <= 1'b0;
+                    cdma_axilm_wvalid  <= 1'b0;
+                    cdma_axilm_bready  <= 1'b0;
+                    cdma_axilm_arvalid <= 1'b0;
+                    cdma_axilm_rready  <= 1'b0;
+                end
+                IDLE: begin
+                    cdma_axilm_awvalid <= 1'b0;
+                    cdma_axilm_wvalid  <= 1'b0;
+                    cdma_axilm_bready  <= 1'b0;
+                    cdma_axilm_arvalid <= 1'b0;
+                    cdma_axilm_rready  <= 1'b0;
+                end
                 default: begin
                     cdma_axilm_awvalid <= 1'b0;
                     cdma_axilm_wvalid  <= 1'b0;
