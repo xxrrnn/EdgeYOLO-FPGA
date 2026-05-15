@@ -668,13 +668,127 @@ module tb_inst_decoder_core;
         #1000;
         
         // =====================================================================
+        // 测试 2: 多次 CDMA 搬运（3 次连续传输）
+        // =====================================================================
+        $display("\n========================================");
+        $display("测试 2: 多次 CDMA 搬运");
+        $display("3 次连续传输，每次 32 bytes (8 words)");
+        $display("========================================");
+        
+        // 初始化 BRAM A 新数据
+        $display("[%0t] 初始化 BRAM A 新数据 (0xBEEF0000~0xBEEF0017)...", $time);
+        for (i = 0; i < 24; i = i + 1) begin
+            bram_a_write(i, 32'hBEEF0000 + i);
+        end
+        
+        // 清空 BRAM B
+        $display("[%0t] 清空 BRAM B...", $time);
+        for (i = 0; i < 24; i = i + 1) begin
+            bram_b_read(i, read_data); // 读取以清空
+        end
+        
+        // 编码多条 CDMA 指令
+        $display("[%0t] 编码 3 条 CDMA 指令...", $time);
+        inst_mem[0] = 32'h1000000C; // CDMA #1: src=0x0000, dst=0x0000, len=32
+        inst_mem[1] = 32'h00000000;
+        inst_mem[2] = 32'h00000000;
+        inst_mem[3] = 32'h00000020;
+        
+        inst_mem[4] = 32'h1000000C; // CDMA #2: src=0x0020, dst=0x0020, len=32
+        inst_mem[5] = 32'h00000020;
+        inst_mem[6] = 32'h00000020;
+        inst_mem[7] = 32'h00000020;
+        
+        inst_mem[8] = 32'h1000000C; // CDMA #3: src=0x0040, dst=0x0040, len=32
+        inst_mem[9] = 32'h00000040;
+        inst_mem[10] = 32'h00000040;
+        inst_mem[11] = 32'h00000020;
+        
+        inst_mem[12] = 32'hF0000000; // END
+        
+        inst_count = 13;
+        $display("[%0t] inst_count = %0d", $time, inst_count);
+        
+        @(posedge clk);
+        #1;
+        decoder_start = 1;
+        $display("[%0t] 设置 decoder_start = 1", $time);
+        @(posedge clk);
+        #1;
+        decoder_start = 0;
+        $display("[%0t] 清零 decoder_start = 0", $time);
+        
+        $display("[%0t] 等待解码器完成 3 次 CDMA...", $time);
+        wait_decoder_done(500000);
+        
+        // 验证数据传输
+        if (decoder_done) begin
+            $display("\n[%0t] 验证 3 次传输结果...", $time);
+            repeat(10) @(posedge clk);
+            
+            error_count = 0;
+            // 验证第 1 次传输 (0x0000~0x0007)
+            $display("[%0t] 验证传输 #1 (地址 0~7):", $time);
+            for (i = 0; i < 8; i = i + 1) begin
+                bram_b_read(i, read_data);
+                if (read_data == (32'hBEEF0000 + i)) begin
+                    $display("[%0t]   ✓ BRAM_B[%0d] = 0x%08X", $time, i, read_data);
+                end else begin
+                    $display("[%0t]   ✗ BRAM_B[%0d] = 0x%08X (期望: 0x%08X)", 
+                             $time, i, read_data, 32'hBEEF0000 + i);
+                    error_count = error_count + 1;
+                end
+            end
+            
+            // 验证第 2 次传输 (0x0008~0x000F)
+            $display("[%0t] 验证传输 #2 (地址 8~15):", $time);
+            for (i = 8; i < 16; i = i + 1) begin
+                bram_b_read(i, read_data);
+                if (read_data == (32'hBEEF0000 + i)) begin
+                    $display("[%0t]   ✓ BRAM_B[%0d] = 0x%08X", $time, i, read_data);
+                end else begin
+                    $display("[%0t]   ✗ BRAM_B[%0d] = 0x%08X (期望: 0x%08X)", 
+                             $time, i, read_data, 32'hBEEF0000 + i);
+                    error_count = error_count + 1;
+                end
+            end
+            
+            // 验证第 3 次传输 (0x0010~0x0017)
+            $display("[%0t] 验证传输 #3 (地址 16~23):", $time);
+            for (i = 16; i < 24; i = i + 1) begin
+                bram_b_read(i, read_data);
+                if (read_data == (32'hBEEF0000 + i)) begin
+                    $display("[%0t]   ✓ BRAM_B[%0d] = 0x%08X", $time, i, read_data);
+                end else begin
+                    $display("[%0t]   ✗ BRAM_B[%0d] = 0x%08X (期望: 0x%08X)", 
+                             $time, i, read_data, 32'hBEEF0000 + i);
+                    error_count = error_count + 1;
+                end
+            end
+            
+            if (error_count == 0) begin
+                $display("\n[%0t] ✓ 多次 CDMA 传输验证通过！所有 24 个字正确传输", $time);
+            end else begin
+                $display("\n[%0t] ✗ 多次 CDMA 传输验证失败！%0d 个错误", $time, error_count);
+                test_pass = 0;
+            end
+        end else begin
+            $display("\n[%0t] ✗ 解码器未完成", $time);
+            test_pass = 0;
+        end
+        
+        #1000;
+        
+        // =====================================================================
         // 测试总结
         // =====================================================================
         $display("\n========================================");
         $display("测试总结");
         $display("========================================");
         if (test_pass) begin
-            $display("✓ 测试通过");
+            $display("✓ 所有测试通过");
+            $display("  - 测试 1: 单次 CDMA 传输 (16 words) ✓");
+            $display("  - 测试 2: 多次 CDMA 传输 (3x8 words) ✓");
         end else begin
             $display("✗ 测试失败");
         end
