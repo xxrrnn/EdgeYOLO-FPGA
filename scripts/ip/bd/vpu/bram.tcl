@@ -67,3 +67,6 @@ create_bd_cell -type module -reference INST_Decoder_wrapper inst_decoder
 # - 通过 AXI-Lite Master 控制 CDMA IP
 # ==============================================================================
 create_bd_cell -type module -reference CDMA_Controller_wrapper cdma_ctrl
+set_property -dict [list \
+  CONFIG.CDMA_BASE_ADDR {1151336448} \
+] [get_bd_cells cdma_ctrl]

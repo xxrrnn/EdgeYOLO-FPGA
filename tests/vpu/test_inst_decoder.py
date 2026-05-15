@@ -169,6 +169,8 @@ def decoder_start(inst_count: int):
 def decoder_wait(timeout: float = 5.0) -> int:
     """等待解码器完成，返回状态"""
     deadline = time.time() + timeout
+    seen_busy = False
+    
     while time.time() < deadline:
         status = read_reg(VPU_REGS_BASE, REG_DECODER_STATUS)
         busy = status & 0x01
@@ -177,7 +179,14 @@ def decoder_wait(timeout: float = 5.0) -> int:
         
         if error:
             raise RuntimeError(f"Decoder error: status=0x{status:08X}")
+        
+        if busy:
+            seen_busy = True
+        
+        # 完成条件：done=1 或 (seen_busy 且现在 idle)
         if done and not busy:
+            return status
+        if seen_busy and status == 0:  # 已经回到空闲状态
             return status
         
         time.sleep(0.001)
@@ -240,29 +249,29 @@ def test_decoder_status():
 
 
 def test_cdma_via_decoder():
-    """测试 4: 通过解码器执行 CDMA 搬运"""
-    print_sep("测试 4: 通过解码器执行 CDMA 搬运")
+    """测试 4: 通过解码器执行 CDMA 搬运（global_bram → VPU GB）"""
+    print_sep("测试 4: 通过解码器执行 CDMA 搬运（global_bram → VPU GB）")
     
-    src_off, dst_off, size = 0x0000, 0x1000, 256
+    size = 256
+    src_off, dst_base = 0x0000, VPU_GB_BASE
     
     # 准备测试数据
     src_data = np.arange(size, dtype=np.uint8)
     dst_fill = np.full(size, 0xFF, dtype=np.uint8)
     
     write_blob(GLOBAL_BRAM_BASE + src_off, src_data.tobytes())
-    write_blob(GLOBAL_BRAM_BASE + dst_off, dst_fill.tobytes())
+    write_blob(dst_base, dst_fill.tobytes())
     
-    # 构建指令序列
+    # 构建指令序列（不需要 WAIT_CDMA，解码器会自动等待）
     instructions = [
-        encode_cdma_copy(GLOBAL_BRAM_BASE + src_off, GLOBAL_BRAM_BASE + dst_off, size),
-        encode_wait_cdma(),
+        encode_cdma_copy(GLOBAL_BRAM_BASE + src_off, dst_base, size),
         encode_end(),
     ]
     inst_bytes = build_instruction_sequence(instructions)
     inst_count = len(inst_bytes) // 4
     
     print(f"指令序列: {inst_count} words ({len(inst_bytes)} bytes)")
-    print(f"CDMA: 0x{GLOBAL_BRAM_BASE+src_off:08X} → 0x{GLOBAL_BRAM_BASE+dst_off:08X} ({size}B)")
+    print(f"CDMA: 0x{GLOBAL_BRAM_BASE+src_off:08X} → 0x{dst_base:08X} ({size}B)")
     
     # 写入指令到 inst_bram
     write_blob(INST_BRAM_BASE, inst_bytes)
@@ -275,7 +284,7 @@ def test_cdma_via_decoder():
     print(f"Decoder completed: status=0x{status:08X}")
     
     # 验证结果
-    result = np.frombuffer(read_blob(GLOBAL_BRAM_BASE + dst_off, size), dtype=np.uint8)
+    result = np.frombuffer(read_blob(dst_base, size), dtype=np.uint8)
     assert np.array_equal(src_data, result), \
         f"Mismatch: expected {src_data[:16]}, got {result[:16]}"
     print(f"✓ CDMA 搬运成功, 前 16 字节: {result[:16]}")
