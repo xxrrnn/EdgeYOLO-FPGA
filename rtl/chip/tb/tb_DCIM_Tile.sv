@@ -22,7 +22,7 @@ module tb_DCIM_Tile;
     wire done, ready;
     reg [2:0] mode;
     reg [6:0] acc_depth;
-    reg [31:0] num_rows;
+    // num_rows 变量已移除：在 CNN 应用中 num_rows == acc_depth
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr, act_base_addr, out_base_addr;
     
     localparam IBUF_RD_LATENCY = 4;  // 与 DCIM_Array / ibuf NBPIPE=1 一致
@@ -59,7 +59,7 @@ module tb_DCIM_Tile;
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .start(start), .done(done), .ready(ready),
-        .mode(mode), .acc_depth(acc_depth), .num_rows(num_rows),
+        .mode(mode), .acc_depth(acc_depth),
         .wei_base_addr(wei_base_addr),
         .act_base_addr(act_base_addr),
         .out_base_addr(out_base_addr),
@@ -184,7 +184,7 @@ module tb_DCIM_Tile;
         begin
             @(posedge clk);
             obuf_ena <= 1'b1; obuf_wea <= 0; obuf_addra <= addr;
-            repeat(5) @(posedge clk);
+            repeat(8) @(posedge clk);  // 修改：与Group测试一致，增加到8个周期
             data = obuf_douta;
             obuf_ena <= 1'b0;
         end
@@ -469,7 +469,7 @@ module tb_DCIM_Tile;
             
             mode = (t_mode == 0) ? `MODE_INT8 : `MODE_INT16;
             acc_depth = t_acc;
-            num_rows = t_rows;
+            // num_rows 赋值已移除：在 CNN 应用中 num_rows == acc_depth
             wei_base_addr = wei_base;
             act_base_addr = act_base;
             out_base_addr = out_base;
@@ -521,7 +521,8 @@ module tb_DCIM_Tile;
     // ========================================================================
     initial begin
         rst_n = 0; start = 0;
-        mode = `MODE_INT8; acc_depth = 0; num_rows = 8;
+        mode = `MODE_INT8; acc_depth = 0;
+        // num_rows 初始化已移除
         wei_base_addr = 0; act_base_addr = CYCLE; out_base_addr = 0;
         ibuf_ena = 0; ibuf_wea = 0; ibuf_addra = 0; ibuf_dina = 0;
         obuf_ena = 0; obuf_wea = 0; obuf_addra = 0; obuf_dina = 0;
@@ -540,86 +541,96 @@ module tb_DCIM_Tile;
         $display("");
         $display("▶ SECTION 1: Basic Functionality Tests");
         
-        run_test("INT8 Basic (all-1 weights)", 0, 0, 8, 0, 0, 0, 8, 0);
-        run_test("INT16 Basic (all-1 weights)", 1, 0, 8, 0, 0, 0, 8, 0);
+        // 修改：ACC=8表示8行累加成1个输出（符合 num_rows==acc_depth 的约束）
+        run_test("INT8 Basic (all-1 weights)", 0, 8, 8, 0, 0, 0, 8, 0);
+        run_test("INT16 Basic (all-1 weights)", 1, 8, 8, 0, 0, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 2: Accumulation Tests");
         
-        run_test("INT8 ACC=2", 0, 2, 8, 4, 6, 0, 8, 0);
-        run_test("INT8 ACC=4", 0, 4, 8, 4, 6, 0, 8, 0);
+        // 修改：使rows=ACC以符合设计约束
+        run_test("INT8 ACC=2", 0, 2, 2, 4, 6, 0, 8, 0);
+        run_test("INT8 ACC=4", 0, 4, 4, 4, 6, 0, 8, 0);
         run_test("INT8 ACC=8", 0, 8, 8, 4, 6, 0, 8, 0);
-        run_test("INT16 ACC=2", 1, 2, 8, 4, 6, 0, 8, 0);
-        run_test("INT16 ACC=4", 1, 4, 8, 4, 6, 0, 8, 0);
+        run_test("INT16 ACC=2", 1, 2, 2, 4, 6, 0, 8, 0);
+        run_test("INT16 ACC=4", 1, 4, 4, 4, 6, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 3: Boundary Value Tests");
         
-        run_test("INT8 Max Weight (+7)", 0, 0, 8, 2, 0, 0, 8, 0);
-        run_test("INT8 Min Weight (-8)", 0, 0, 8, 3, 0, 0, 8, 0);
-        run_test("INT8 Max Activation (+127)", 0, 0, 8, 0, 3, 0, 8, 0);
-        run_test("INT8 Min Activation (-128)", 0, 0, 8, 0, 4, 0, 8, 0);
-        run_test("INT16 Max Activation (+32767)", 1, 0, 8, 0, 3, 0, 8, 0);
-        run_test("INT16 Min Activation (-32768)", 1, 0, 8, 0, 4, 0, 8, 0);
+        // 修改：使用 ACC=8
+        run_test("INT8 Max Weight (+7)", 0, 8, 8, 2, 0, 0, 8, 0);
+        run_test("INT8 Min Weight (-8)", 0, 8, 8, 3, 0, 0, 8, 0);
+        run_test("INT8 Max Activation (+127)", 0, 8, 8, 0, 3, 0, 8, 0);
+        run_test("INT8 Min Activation (-128)", 0, 8, 8, 0, 4, 0, 8, 0);
+        run_test("INT16 Max Activation (+32767)", 1, 8, 8, 0, 3, 0, 8, 0);
+        run_test("INT16 Min Activation (-32768)", 1, 8, 8, 0, 4, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 4: Special Pattern Tests");
         
-        run_test("INT8 Zero Weights", 0, 0, 8, 1, 6, 0, 8, 0);
-        run_test("INT8 Zero Activations", 0, 0, 8, 4, 2, 0, 8, 0);
-        run_test("INT8 Identity-like Weights", 0, 0, 8, 6, 0, 0, 8, 0);
-        run_test("INT8 Alternating Signs", 0, 0, 8, 4, 5, 0, 8, 0);
-        run_test("INT16 Alternating Signs", 1, 0, 8, 4, 5, 0, 8, 0);
+        // 修改：使用 ACC=8
+        run_test("INT8 Zero Weights", 0, 8, 8, 1, 6, 0, 8, 0);
+        run_test("INT8 Zero Activations", 0, 8, 8, 4, 2, 0, 8, 0);
+        run_test("INT8 Identity-like Weights", 0, 8, 8, 6, 0, 0, 8, 0);
+        run_test("INT8 Alternating Signs", 0, 8, 8, 4, 5, 0, 8, 0);
+        run_test("INT16 Alternating Signs", 1, 8, 8, 4, 5, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 5: Random Data Tests");
         
+        // 修改：使rows=ACC
         seed = 11111;
-        run_test("INT8 Random #1", 0, 0, 8, 7, 7, 0, 8, 0);
+        run_test("INT8 Random #1", 0, 8, 8, 7, 7, 0, 8, 0);
         seed = 22222;
-        run_test("INT8 Random #2", 0, 0, 8, 7, 7, 0, 8, 0);
+        run_test("INT8 Random #2", 0, 8, 8, 7, 7, 0, 8, 0);
         seed = 33333;
-        run_test("INT8 Random ACC=2", 0, 2, 8, 7, 7, 0, 8, 0);
+        run_test("INT8 Random ACC=2", 0, 2, 2, 7, 7, 0, 8, 0);
         seed = 44444;
-        run_test("INT16 Random #1", 1, 0, 8, 7, 7, 0, 8, 0);
+        run_test("INT16 Random #1", 1, 8, 8, 7, 7, 0, 8, 0);
         seed = 55555;
-        run_test("INT16 Random ACC=2", 1, 2, 8, 7, 7, 0, 8, 0);
+        run_test("INT16 Random ACC=2", 1, 2, 2, 7, 7, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 6: Variable Row Count Tests");
         
-        run_test("INT8 4 Rows", 0, 0, 4, 4, 6, 0, 8, 0);
-        run_test("INT8 16 Rows", 0, 0, 16, 4, 6, 0, 8, 0);
-        run_test("INT8 16 Rows ACC=8", 0, 8, 16, 4, 6, 0, 8, 0);
-        run_test("INT16 4 Rows", 1, 0, 4, 4, 6, 0, 8, 0);
+        // 修改：使rows=ACC
+        run_test("INT8 4 Rows", 0, 4, 4, 4, 6, 0, 8, 0);
+        run_test("INT8 16 Rows", 0, 16, 16, 4, 6, 0, 8, 0);
+        run_test("INT8 16 Rows ACC=8", 0, 8, 8, 4, 6, 0, 8, 0);
+        run_test("INT16 4 Rows", 1, 4, 4, 4, 6, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 7: Different Base Address Tests");
         
-        run_test("INT8 Wei@100 Act@200 Out@300", 0, 0, 8, 4, 6, 100, 200, 300);
-        run_test("INT16 Wei@50 Act@100 Out@200", 1, 0, 8, 4, 6, 50, 100, 200);
+        // 修改：使用ACC=8
+        run_test("INT8 Wei@100 Act@200 Out@300", 0, 8, 8, 4, 6, 100, 200, 300);
+        run_test("INT16 Wei@50 Act@100 Out@200", 1, 8, 8, 4, 6, 50, 100, 200);
         
         $display("");
         $display("▶ SECTION 8: Consecutive Computation Tests");
         
-        run_test("INT8 Consecutive #1", 0, 0, 8, 4, 6, 0, 8, 0);
-        run_test("INT8 Consecutive #2", 0, 0, 8, 5, 7, 0, 8, 100);
-        run_test("INT8 Consecutive #3", 0, 2, 8, 7, 7, 0, 8, 200);
+        // 修改：使rows=ACC
+        run_test("INT8 Consecutive #1", 0, 8, 8, 4, 6, 0, 8, 0);
+        run_test("INT8 Consecutive #2", 0, 8, 8, 5, 7, 0, 8, 100);
+        run_test("INT8 Consecutive #3", 0, 2, 2, 7, 7, 0, 8, 200);
         
         $display("");
         $display("▶ SECTION 9: Extreme Value Combination Tests");
         
-        run_test("INT8 Max*Max (+7*+127)", 0, 0, 8, 2, 3, 0, 8, 0);
-        run_test("INT8 Min*Min (-8*-128)", 0, 0, 8, 3, 4, 0, 8, 0);
-        run_test("INT8 Max*Min (+7*-128)", 0, 0, 8, 2, 4, 0, 8, 0);
-        run_test("INT8 Min*Max (-8*+127)", 0, 0, 8, 3, 3, 0, 8, 0);
-        run_test("INT16 Max*Max", 1, 0, 8, 2, 3, 0, 8, 0);
-        run_test("INT16 Min*Min", 1, 0, 8, 3, 4, 0, 8, 0);
+        // 修改：使用ACC=8
+        run_test("INT8 Max*Max (+7*+127)", 0, 8, 8, 2, 3, 0, 8, 0);
+        run_test("INT8 Min*Min (-8*-128)", 0, 8, 8, 3, 4, 0, 8, 0);
+        run_test("INT8 Max*Min (+7*-128)", 0, 8, 8, 2, 4, 0, 8, 0);
+        run_test("INT8 Min*Max (-8*+127)", 0, 8, 8, 3, 3, 0, 8, 0);
+        run_test("INT16 Max*Max", 1, 8, 8, 2, 3, 0, 8, 0);
+        run_test("INT16 Min*Min", 1, 8, 8, 3, 4, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 10: Accumulation Depth Boundary Tests");
         
-        run_test("INT8 ACC=1 (8 rows)", 0, 1, 8, 4, 6, 0, 8, 0);
+        // 修改：使rows=ACC
+        run_test("INT8 ACC=1 (1 row)", 0, 1, 1, 4, 6, 0, 8, 0);
         run_test("INT8 ACC=16 (16 rows)", 0, 16, 16, 4, 6, 0, 8, 0);
         run_test("INT16 ACC=8 (8 rows)", 1, 8, 8, 4, 6, 0, 8, 0);
         
@@ -627,39 +638,40 @@ module tb_DCIM_Tile;
         $display("▶ SECTION 11: Additional Random Tests");
         
         seed = 66666;
-        run_test("INT8 Random #3", 0, 0, 8, 7, 7, 0, 8, 0);
+        run_test("INT8 Random #3", 0, 8, 8, 7, 7, 0, 8, 0);
         seed = 77777;
-        run_test("INT8 Random ACC=4", 0, 4, 8, 7, 7, 0, 8, 0);
+        run_test("INT8 Random ACC=4", 0, 4, 4, 7, 7, 0, 8, 0);
         seed = 88888;
-        run_test("INT16 Random #2", 1, 0, 8, 7, 7, 0, 8, 0);
+        run_test("INT16 Random #2", 1, 8, 8, 7, 7, 0, 8, 0);
         seed = 99999;
-        run_test("INT16 Random ACC=4", 1, 4, 8, 7, 7, 0, 8, 0);
+        run_test("INT16 Random ACC=4", 1, 4, 4, 7, 7, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 12: Mixed Mode Tests");
         
-        run_test("INT8 after INT16", 0, 0, 8, 4, 6, 0, 8, 0);
-        run_test("INT16 after INT8", 1, 0, 8, 4, 6, 0, 8, 0);
-        run_test("INT8 ACC after INT16", 0, 2, 8, 4, 6, 0, 8, 0);
-        run_test("INT16 ACC after INT8", 1, 2, 8, 4, 6, 0, 8, 0);
+        // 修改：使rows=ACC
+        run_test("INT8 after INT16", 0, 8, 8, 4, 6, 0, 8, 0);
+        run_test("INT16 after INT8", 1, 8, 8, 4, 6, 0, 8, 0);
+        run_test("INT8 ACC after INT16", 0, 2, 2, 4, 6, 0, 8, 0);
+        run_test("INT16 ACC after INT8", 1, 2, 2, 4, 6, 0, 8, 0);
         
         $display("");
         $display("▶ SECTION 13: Large ACC Tests (im2col simulation)");
         
         seed = 11111;
-        run_test("INT8 ACC=18 (K=288 sim)", 0, 18, 72, 7, 7, 0, 8, 0);
+        run_test("INT8 ACC=18 (18 rows)", 0, 18, 18, 7, 7, 0, 8, 0);
         
         seed = 22222;
-        run_test("INT8 ACC=36 (K=576 sim)", 0, 36, 72, 7, 7, 0, 80, 0);
+        run_test("INT8 ACC=36 (36 rows)", 0, 36, 36, 7, 7, 0, 80, 0);
         
         seed = 33333;
-        run_test("INT8 ACC=72 (K=1152 sim)", 0, 72, 72, 7, 7, 0, 80, 0);
+        run_test("INT8 ACC=72 (72 rows)", 0, 72, 72, 7, 7, 0, 80, 0);
         
         seed = 44444;
-        run_test("INT16 ACC=18 (K=288 sim)", 1, 18, 72, 7, 7, 0, 150, 0);
+        run_test("INT16 ACC=18 (18 rows)", 1, 18, 18, 7, 7, 0, 150, 0);
         
         seed = 55555;
-        run_test("INT16 ACC=36 (K=576 sim)", 1, 36, 72, 7, 7, 0, 220, 0);
+        run_test("INT16 ACC=36 (36 rows)", 1, 36, 36, 7, 7, 0, 220, 0);
         
         $display("");
         $display("═══════════════════════════════════════════════════════════════");
