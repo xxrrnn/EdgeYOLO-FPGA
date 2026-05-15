@@ -18,6 +18,10 @@
 //   0x2C: ADDR_BREAK
 //   0x30: ADDR_S
 //   0x34: ADDR_T
+//   --- INST_Decoder 控制寄存器 ---
+//   0x38: DECODER_CTRL   - [0] start (写 1 启动解码器)
+//   0x3C: INST_COUNT     - 指令总数（32位字数）
+//   0x40: DECODER_STATUS - [0] busy, [1] done, [31] error
 //==============================================================================
 
 module VPU_AXI_Regs #(
@@ -69,7 +73,14 @@ module VPU_AXI_Regs #(
     output reg  [ADDR_WIDTH-1:0]         addr_t,
 
     // VPU 状态输入
-    input  wire                          ready
+    input  wire                          ready,
+    
+    // INST_Decoder 控制接口
+    output reg                           decoder_start,      // 启动解码器
+    output reg  [ADDR_WIDTH-1:0]         inst_count,         // 指令总数（32位字数）
+    input  wire                          decoder_busy,       // 解码器忙
+    input  wire                          decoder_done,       // 解码完成
+    input  wire [ADDR_WIDTH-1:0]         decoder_status      // 解码器状态
 );
 
     // 寄存器地址（字节地址）
@@ -87,6 +98,10 @@ module VPU_AXI_Regs #(
     localparam [7:0] ADDR_ADDR_BREAK  = 8'h2C;
     localparam [7:0] ADDR_ADDR_S      = 8'h30;
     localparam [7:0] ADDR_ADDR_T      = 8'h34;
+    // INST_Decoder 控制寄存器
+    localparam [7:0] ADDR_DECODER_CTRL   = 8'h38;
+    localparam [7:0] ADDR_INST_COUNT     = 8'h3C;
+    localparam [7:0] ADDR_DECODER_STATUS = 8'h40;
 
     // AXI-Lite 写通道
     reg [AXI_ADDR_WIDTH-1:0] aw_addr_reg;
@@ -128,6 +143,10 @@ module VPU_AXI_Regs #(
     
     reg ctrl_start_reg;     // CTRL[0] 寄存器：保存 host 写入的 start 电平
     reg ctrl_start_reg_d1;  // 上升沿检测：保存上一拍的 start 电平
+    
+    // INST_Decoder 控制寄存器
+    reg decoder_start_reg;
+    reg decoder_start_reg_d1;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -146,10 +165,19 @@ module VPU_AXI_Regs #(
             addr_break  <= 0;
             addr_s      <= 0;
             addr_t      <= 0;
+            // INST_Decoder
+            decoder_start_reg    <= 1'b0;
+            decoder_start_reg_d1 <= 1'b0;
+            decoder_start        <= 1'b0;
+            inst_count           <= 0;
         end else begin
-            // 上升沿检测：当前拍为 1 且上一拍为 0 时产生脉冲
+            // VPU 上升沿检测
             ctrl_start_reg_d1 <= ctrl_start_reg;
             vpu_start <= ctrl_start_reg && ~ctrl_start_reg_d1;
+            
+            // INST_Decoder 上升沿检测
+            decoder_start_reg_d1 <= decoder_start_reg;
+            decoder_start <= decoder_start_reg && ~decoder_start_reg_d1;
 
             if (wr_en) begin
                 case (aw_addr_reg[7:0])
@@ -169,6 +197,12 @@ module VPU_AXI_Regs #(
                     ADDR_ADDR_BREAK:  addr_break  <= s_axi_wdata[ADDR_WIDTH-1:0];
                     ADDR_ADDR_S:      addr_s      <= s_axi_wdata[ADDR_WIDTH-1:0];
                     ADDR_ADDR_T:      addr_t      <= s_axi_wdata[ADDR_WIDTH-1:0];
+                    // INST_Decoder 寄存器
+                    ADDR_DECODER_CTRL: begin
+                        if (s_axi_wstrb[0])
+                            decoder_start_reg <= s_axi_wdata[0];
+                    end
+                    ADDR_INST_COUNT:  inst_count  <= s_axi_wdata[ADDR_WIDTH-1:0];
                     default: ;
                 endcase
             end
@@ -232,6 +266,10 @@ module VPU_AXI_Regs #(
                     ADDR_ADDR_BREAK:  s_axi_rdata <= addr_break;
                     ADDR_ADDR_S:      s_axi_rdata <= addr_s;
                     ADDR_ADDR_T:      s_axi_rdata <= addr_t;
+                    // INST_Decoder 寄存器
+                    ADDR_DECODER_CTRL:   s_axi_rdata <= {31'b0, decoder_start_reg};
+                    ADDR_INST_COUNT:     s_axi_rdata <= inst_count;
+                    ADDR_DECODER_STATUS: s_axi_rdata <= decoder_status;
                     default:          s_axi_rdata <= 32'h0;
                 endcase
             end else if (s_axi_rvalid && s_axi_rready) begin

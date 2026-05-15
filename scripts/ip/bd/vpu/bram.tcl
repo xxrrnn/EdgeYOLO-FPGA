@@ -19,5 +19,26 @@ set_property -dict [list \
   CONFIG.Use_Byte_Write_Enable {true} \
 ] [get_bd_cells global_bram]
 
-# VPU_AXI_Regs：配置/状态寄存器
+# VPU_AXI_Regs：配置/状态寄存器 + INST_Decoder 控制
 create_bd_cell -type module -reference VPU_AXI_Regs vpu_regs
+
+# ==============================================================================
+# INST_BRAM：指令存储区
+# - Port A: AXI4-Lite Slave (供 XDMA 写入指令)
+# - Port B: 直接 wire 读取 (供 INST_Decoder 读取指令)
+# ==============================================================================
+create_bd_cell -type module -reference INST_BRAM inst_bram
+
+# ==============================================================================
+# INST_Decoder：硬件指令解码器
+# - 从 inst_bram 读取指令
+# - 控制 CDMA_Controller 和 VPU
+# ==============================================================================
+create_bd_cell -type module -reference INST_Decoder inst_decoder
+
+# ==============================================================================
+# CDMA_Controller：CDMA 控制器
+# - 接收 INST_Decoder 的命令
+# - 通过 AXI-Lite Master 控制 CDMA IP
+# ==============================================================================
+create_bd_cell -type module -reference CDMA_Controller cdma_ctrl

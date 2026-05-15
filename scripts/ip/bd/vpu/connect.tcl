@@ -34,36 +34,72 @@ set_property -dict [list \
 connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI]     [get_bd_intf_pins axi_mem_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S01_AXI]
 
-# M00: staging global_bram (通过 axi_bram_ctrl)
+# M00: staging global_bram (通过 axi_bram_ctrl) - 数据区
 # M01: VPU GB (直接连接 vpu_0/gb_axis AXI 接口)
 # M02: VPU WB (直接连接 vpu_0/wb_axis AXI 接口)
-# M03: CDMA regs
-# M04: VPU_AXI_Regs (配置 + 状态)
+# M03: inst_bram (指令区，供 XDMA 写入指令)
+# M04: VPU_AXI_Regs (配置 + 状态 + 解码器控制)
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M00_AXI] [get_bd_intf_pins global_bram_ctrl/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins vpu_0/gb_axis]
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins vpu_0/wb_axis]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins axi_cdma_0/S_AXI_LITE]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins inst_bram/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M04_AXI] [get_bd_intf_pins vpu_regs/s_axi]
 
 connect_bd_intf_net [get_bd_intf_pins global_bram/BRAM_PORTA] [get_bd_intf_pins global_bram_ctrl/BRAM_PORTA]
 
 # ==============================================================================
-# VPU_AXI_Regs -> Global_VPU_top 配置/状态
+# CDMA_Controller -> CDMA IP (AXI-Lite Master -> S_AXI_LITE)
+# 注意：软件不再直接访问 CDMA 寄存器，由 INST_Decoder 通过 CDMA_Controller 控制
 # ==============================================================================
-connect_bd_net [get_bd_pins vpu_regs/vpu_start]   [get_bd_pins vpu_0/vpu_start]
-connect_bd_net [get_bd_pins vpu_regs/unit_choose] [get_bd_pins vpu_0/unit_choose]
-connect_bd_net [get_bd_pins vpu_regs/src_addr]    [get_bd_pins vpu_0/src_addr]
-connect_bd_net [get_bd_pins vpu_regs/src2_addr]   [get_bd_pins vpu_0/src2_addr]
-connect_bd_net [get_bd_pins vpu_regs/src_c]       [get_bd_pins vpu_0/src_c]
-connect_bd_net [get_bd_pins vpu_regs/src_h]       [get_bd_pins vpu_0/src_h]
-connect_bd_net [get_bd_pins vpu_regs/src_w]       [get_bd_pins vpu_0/src_w]
-connect_bd_net [get_bd_pins vpu_regs/bias_addr]   [get_bd_pins vpu_0/bias_addr]
-connect_bd_net [get_bd_pins vpu_regs/scale_addr]  [get_bd_pins vpu_0/scale_addr]
-connect_bd_net [get_bd_pins vpu_regs/dst_addr]    [get_bd_pins vpu_0/dst_addr]
-connect_bd_net [get_bd_pins vpu_regs/addr_break]  [get_bd_pins vpu_0/addr_break]
-connect_bd_net [get_bd_pins vpu_regs/addr_s]      [get_bd_pins vpu_0/addr_s]
-connect_bd_net [get_bd_pins vpu_regs/addr_t]      [get_bd_pins vpu_0/addr_t]
-connect_bd_net [get_bd_pins vpu_0/ready]          [get_bd_pins vpu_regs/ready]
+connect_bd_intf_net [get_bd_intf_pins cdma_ctrl/cdma_axilm] [get_bd_intf_pins axi_cdma_0/S_AXI_LITE]
+
+# ==============================================================================
+# INST_Decoder -> CDMA_Controller (直接 wire 连接)
+# ==============================================================================
+connect_bd_net [get_bd_pins inst_decoder/cdma_start]         [get_bd_pins cdma_ctrl/cdma_start]
+connect_bd_net [get_bd_pins inst_decoder/cdma_config_valid]  [get_bd_pins cdma_ctrl/cdma_config_valid]
+connect_bd_net [get_bd_pins cdma_ctrl/cdma_config_ready]     [get_bd_pins inst_decoder/cdma_config_ready]
+connect_bd_net [get_bd_pins inst_decoder/cdma_src_addr_msb]  [get_bd_pins cdma_ctrl/cdma_src_addr_msb]
+connect_bd_net [get_bd_pins inst_decoder/cdma_src_addr_lsb]  [get_bd_pins cdma_ctrl/cdma_src_addr_lsb]
+connect_bd_net [get_bd_pins inst_decoder/cdma_dst_addr_msb]  [get_bd_pins cdma_ctrl/cdma_dst_addr_msb]
+connect_bd_net [get_bd_pins inst_decoder/cdma_dst_addr_lsb]  [get_bd_pins cdma_ctrl/cdma_dst_addr_lsb]
+connect_bd_net [get_bd_pins inst_decoder/cdma_length]        [get_bd_pins cdma_ctrl/cdma_length]
+
+# ==============================================================================
+# INST_Decoder -> inst_bram (直接 wire 读取)
+# ==============================================================================
+connect_bd_net [get_bd_pins inst_decoder/inst_rd_addr] [get_bd_pins inst_bram/inst_rd_addr]
+connect_bd_net [get_bd_pins inst_bram/inst_rd_data]    [get_bd_pins inst_decoder/inst_rd_data]
+
+# ==============================================================================
+# VPU_AXI_Regs -> INST_Decoder (控制接口)
+# ==============================================================================
+connect_bd_net [get_bd_pins vpu_regs/decoder_start]   [get_bd_pins inst_decoder/decoder_start]
+connect_bd_net [get_bd_pins vpu_regs/inst_count]      [get_bd_pins inst_decoder/inst_count]
+connect_bd_net [get_bd_pins inst_decoder/decoder_busy]   [get_bd_pins vpu_regs/decoder_busy]
+connect_bd_net [get_bd_pins inst_decoder/decoder_done]   [get_bd_pins vpu_regs/decoder_done]
+connect_bd_net [get_bd_pins inst_decoder/decoder_status] [get_bd_pins vpu_regs/decoder_status]
+
+# ==============================================================================
+# INST_Decoder -> VPU (直接 wire 连接，优先级高于 VPU_AXI_Regs)
+# 注意：需要添加 MUX 来选择 VPU 配置来源（VPU_AXI_Regs 或 INST_Decoder）
+# 简化方案：当 decoder_busy=1 时，使用 INST_Decoder 的输出
+# ==============================================================================
+# VPU 配置信号由 INST_Decoder 直接控制（当解码器运行时）
+connect_bd_net [get_bd_pins inst_decoder/vpu_start]      [get_bd_pins vpu_0/vpu_start]
+connect_bd_net [get_bd_pins inst_decoder/vpu_unit_choose] [get_bd_pins vpu_0/unit_choose]
+connect_bd_net [get_bd_pins inst_decoder/vpu_src_addr]   [get_bd_pins vpu_0/src_addr]
+connect_bd_net [get_bd_pins inst_decoder/vpu_src2_addr]  [get_bd_pins vpu_0/src2_addr]
+connect_bd_net [get_bd_pins inst_decoder/vpu_src_c]      [get_bd_pins vpu_0/src_c]
+connect_bd_net [get_bd_pins inst_decoder/vpu_src_h]      [get_bd_pins vpu_0/src_h]
+connect_bd_net [get_bd_pins inst_decoder/vpu_src_w]      [get_bd_pins vpu_0/src_w]
+connect_bd_net [get_bd_pins inst_decoder/vpu_bias_addr]  [get_bd_pins vpu_0/bias_addr]
+connect_bd_net [get_bd_pins inst_decoder/vpu_scale_addr] [get_bd_pins vpu_0/scale_addr]
+connect_bd_net [get_bd_pins inst_decoder/vpu_dst_addr]   [get_bd_pins vpu_0/dst_addr]
+connect_bd_net [get_bd_pins inst_decoder/vpu_addr_break] [get_bd_pins vpu_0/addr_break]
+connect_bd_net [get_bd_pins inst_decoder/vpu_addr_s]     [get_bd_pins vpu_0/addr_s]
+connect_bd_net [get_bd_pins inst_decoder/vpu_addr_t]     [get_bd_pins vpu_0/addr_t]
+connect_bd_net [get_bd_pins vpu_0/ready]                 [get_bd_pins inst_decoder/vpu_ready]
 
 # ==============================================================================
 # 时钟/复位
@@ -86,3 +122,12 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_regs/rst_n]
 
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins vpu_0/clk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_0/rst_n]
+
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins inst_bram/clk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins inst_bram/rst_n]
+
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins inst_decoder/clk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins inst_decoder/rst_n]
+
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins cdma_ctrl/clk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins cdma_ctrl/rst_n]

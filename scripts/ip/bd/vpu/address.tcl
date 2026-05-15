@@ -1,10 +1,12 @@
 # VPU + XDMA/CDMA 地址映射
 #
-# 0x1000_0000  staging global_bram (64KB)
-# 0x1001_0000  VPU GB (vpu_0/gb_axis, 64KB)
-# 0x1002_0000  VPU WB (vpu_0/wb_axis, 64KB)
-# 0x1003_0000  CDMA 寄存器 (64KB)
-# 0x1004_0000  VPU_AXI_Regs (4KB)
+# 0x1000_0000  staging global_bram (128KB) - 数据区
+# 0x1002_0000  VPU GB (vpu_0/gb_axis, 64KB)
+# 0x1003_0000  VPU WB (vpu_0/wb_axis, 64KB)
+# 0x1004_0000  inst_bram (4KB) - 指令区
+# 0x1005_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+#
+# 注意：软件不再直接访问 CDMA 寄存器，由 INST_Decoder 通过 CDMA_Controller 控制
 
 assign_bd_address
 
@@ -61,9 +63,9 @@ set_addr_seg_flex {
 } 0x10030000 64K "XDMA VPU WB"
 
 set_addr_seg_flex {
-  {xdma_0/M_AXI/SEG_axi_cdma_0_Reg}
-  {xdma_0/M_AXI/*axi_cdma_0*}
-} 0x10040000 64K "XDMA CDMA registers"
+  {xdma_0/M_AXI/SEG_inst_bram_reg0}
+  {xdma_0/M_AXI/*inst_bram*}
+} 0x10040000 4K "XDMA inst_bram"
 
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_vpu_regs_reg0}
