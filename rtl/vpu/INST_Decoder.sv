@@ -25,8 +25,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_Decoder #(
-    parameter INST_BRAM_DEPTH = 1024,   // inst_bram 深度（32位字数）
-    parameter INST_ADDR_WIDTH = 10      // log2(INST_BRAM_DEPTH)
+    parameter INST_BRAM_DEPTH = 262144,  // inst_bram 深度（32位字数）= 1MB
+    parameter INST_ADDR_WIDTH = 18       // log2(INST_BRAM_DEPTH)
 ) (
     input  wire        clk,
     input  wire        rst_n,

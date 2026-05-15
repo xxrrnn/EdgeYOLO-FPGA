@@ -12,7 +12,7 @@ set_property -dict [list \
   CONFIG.use_bram_block {BRAM_Controller} \
   CONFIG.EN_SAFETY_CKT {false} \
   CONFIG.Memory_Type {Single_Port_RAM} \
-  CONFIG.Write_Depth_A {4096} \
+  CONFIG.Write_Depth_A {32768} \
   CONFIG.Write_Width_A {256} \
   CONFIG.Read_Width_A {256} \
   CONFIG.Byte_Size {8} \
@@ -30,15 +30,15 @@ create_bd_cell -type module -reference VPU_AXI_Regs vpu_regs
 create_bd_cell -type module -reference INST_BRAM inst_bram
 
 # ==============================================================================
-# INST_Decoder：硬件指令解码器
+# INST_Decoder：硬件指令解码器（使用 Verilog wrapper）
 # - 从 inst_bram 读取指令
 # - 控制 CDMA_Controller 和 VPU
 # ==============================================================================
-create_bd_cell -type module -reference INST_Decoder inst_decoder
+create_bd_cell -type module -reference INST_Decoder_wrapper inst_decoder
 
 # ==============================================================================
-# CDMA_Controller：CDMA 控制器
+# CDMA_Controller：CDMA 控制器（使用 Verilog wrapper）
 # - 接收 INST_Decoder 的命令
 # - 通过 AXI-Lite Master 控制 CDMA IP
 # ==============================================================================
-create_bd_cell -type module -reference CDMA_Controller cdma_ctrl
+create_bd_cell -type module -reference CDMA_Controller_wrapper cdma_ctrl

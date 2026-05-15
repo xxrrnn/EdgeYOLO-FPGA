@@ -6,11 +6,11 @@ XDMA 读写辅助模块 - 基于 xdma_rw.exe
 使用 xdma_rw.exe 进行 PCIe XDMA 读写操作。
 
 地址映射（参考 scripts/ip/bd/vpu/address.tcl）：
-  0x1000_0000  staging global_bram (128KB) - 数据区
-  0x1002_0000  VPU GB (vpu_0/gb_axis, 64KB)
-  0x1003_0000  VPU WB (vpu_0/wb_axis, 64KB)
-  0x1004_0000  inst_bram (4KB) - 指令区
-  0x1005_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+  0x1000_0000  staging global_bram (1MB) - 数据区
+  0x1020_0000  inst_bram (1MB) - 指令区
+  0x1040_0000  VPU GB (128KB)
+  0x1042_0000  VPU WB (128KB)
+  0x1044_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ from pathlib import Path
 from dataclasses import dataclass
 
 # 地址映射（与 scripts/ip/bd/vpu/address.tcl 一致）
-GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (128KB) - 数据区
-VPU_GB_BASE = 0x10020000        # VPU Global Buffer (64KB)
-VPU_WB_BASE = 0x10030000        # VPU Weight Buffer (64KB)
-INST_BRAM_BASE = 0x10040000     # inst_bram (4KB) - 指令区
-VPU_REGS_BASE = 0x10050000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
+GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (1MB) - 数据区
+INST_BRAM_BASE = 0x10200000     # inst_bram (1MB) - 指令区
+VPU_GB_BASE = 0x10400000        # VPU Global Buffer (128KB)
+VPU_WB_BASE = 0x10420000        # VPU Weight Buffer (128KB)
+VPU_REGS_BASE = 0x10440000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
 
 # 兼容旧代码：CDMA_BASE 已移除（软件不再直接访问 CDMA 寄存器）
 CDMA_BASE = None  # 已废弃，由 INST_Decoder 通过 CDMA_Controller 控制

@@ -13,9 +13,9 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_BRAM #(
-    parameter DEPTH = 1024,              // BRAM 深度（32位字数）= 4KB
-    parameter ADDR_WIDTH = 10,           // log2(DEPTH)
-    parameter AXI_ADDR_WIDTH = 12,       // AXI 地址宽度（字节地址）
+    parameter DEPTH = 262144,            // BRAM 深度（32位字数）= 1MB
+    parameter ADDR_WIDTH = 18,           // log2(DEPTH)
+    parameter AXI_ADDR_WIDTH = 20,       // AXI 地址宽度（字节地址）
     parameter AXI_DATA_WIDTH = 32
 ) (
     input  wire                          clk,

@@ -8,11 +8,11 @@
 5. 从 global_bram 读取结果并验证
 
 地址映射（新）：
-  0x1000_0000  global_bram (128KB) - 数据区
-  0x1002_0000  VPU GB (64KB)
-  0x1003_0000  VPU WB (64KB)
-  0x1004_0000  inst_bram (4KB) - 指令区
-  0x1005_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+  0x1000_0000  global_bram (1MB) - 数据区
+  0x1020_0000  inst_bram (1MB) - 指令区
+  0x1040_0000  VPU GB (128KB)
+  0x1042_0000  VPU WB (128KB)
+  0x1044_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
 """
 
 import sys
@@ -30,11 +30,11 @@ from xdma_helpers import write_blob, read_blob, write_reg, read_reg
 # ==============================================================================
 # 地址映射（新）
 # ==============================================================================
-GLOBAL_BRAM_BASE = 0x10000000
-VPU_GB_BASE      = 0x10020000
-VPU_WB_BASE      = 0x10030000
-INST_BRAM_BASE   = 0x10040000
-VPU_REGS_BASE    = 0x10050000
+GLOBAL_BRAM_BASE = 0x10000000  # 1MB
+INST_BRAM_BASE   = 0x10200000  # 1MB
+VPU_GB_BASE      = 0x10400000  # 128KB
+VPU_WB_BASE      = 0x10420000  # 128KB
+VPU_REGS_BASE    = 0x10440000  # 4KB
 
 # ==============================================================================
 # VPU_AXI_Regs 寄存器偏移
