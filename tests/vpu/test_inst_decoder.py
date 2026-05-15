@@ -156,8 +156,13 @@ def build_instruction_sequence(instructions: list) -> bytes:
 # 解码器控制函数
 # ==============================================================================
 def decoder_start(inst_count: int):
-    """启动解码器执行指令序列"""
+    """启动解码器执行指令序列，产生正确的上升沿脉冲"""
+    # 先清零确保从低电平开始
+    write_reg(VPU_REGS_BASE, REG_DECODER_CTRL, 0x00)
+    time.sleep(0.001)  # 等待至少一个时钟周期
+    # 写入指令数量
     write_reg(VPU_REGS_BASE, REG_INST_COUNT, inst_count)
+    # 产生上升沿
     write_reg(VPU_REGS_BASE, REG_DECODER_CTRL, 0x01)
 
 
