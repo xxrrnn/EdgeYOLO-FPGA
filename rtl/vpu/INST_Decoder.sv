@@ -123,15 +123,23 @@ module INST_Decoder #(
     reg [3:0]  body_word_count;     // 需要读取的字数
     reg [3:0]  body_word_idx;       // 当前读取的字索引
     
-    // 启动边沿检测
+    // 启动边沿检测（修复：使用寄存器锁存pulse）
     reg decoder_start_d;
-    wire decoder_start_pulse = decoder_start && !decoder_start_d;
+    reg decoder_start_pulse_reg;
     
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
+        if (!rst_n) begin
             decoder_start_d <= 1'b0;
-        else
+            decoder_start_pulse_reg <= 1'b0;
+        end else begin
             decoder_start_d <= decoder_start;
+            // 检测上升沿并锁存pulse，直到状态机离开IDLE状态
+            if (decoder_start && !decoder_start_d) begin
+                decoder_start_pulse_reg <= 1'b1;
+            end else if (state != S_IDLE) begin
+                decoder_start_pulse_reg <= 1'b0;
+            end
+        end
     end
     
     // 状态机：状态转移
@@ -148,7 +156,7 @@ module INST_Decoder #(
         
         case (state)
             S_IDLE: begin
-                if (decoder_start_pulse && inst_count > 0)
+                if (decoder_start_pulse_reg && inst_count > 0)
                     next_state = S_FETCH_HEADER;
             end
             
@@ -318,7 +326,7 @@ module INST_Decoder #(
                     decoder_status <= STATUS_IDLE;
                     cdma_config_valid <= 1'b0;
                     
-                    if (decoder_start_pulse && inst_count > 0) begin
+                    if (decoder_start_pulse_reg && inst_count > 0) begin
                         decoder_busy <= 1'b1;
                         decoder_status <= STATUS_BUSY;
                         current_word_idx <= '0;

@@ -35,17 +35,24 @@ connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI]     [get_bd_intf_pins axi_me
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S01_AXI]
 
 # M00: staging global_bram (通过 axi_bram_ctrl) - 数据区
-# M01: VPU GB (直接连接 vpu_0/gb_axis AXI 接口)
-# M02: VPU WB (直接连接 vpu_0/wb_axis AXI 接口)
+# M01: VPU GB (通过 vpu_gb_ctrl AXI BRAM Controller)
+# M02: VPU WB (通过 vpu_wb_ctrl AXI BRAM Controller)
 # M03: inst_bram (指令区，供 XDMA 写入指令)
 # M04: VPU_AXI_Regs (配置 + 状态 + 解码器控制)
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M00_AXI] [get_bd_intf_pins global_bram_ctrl/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins vpu_0/gb_axis]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins vpu_0/wb_axis]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins vpu_gb_ctrl/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins vpu_wb_ctrl/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins inst_bram/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M04_AXI] [get_bd_intf_pins vpu_regs/s_axi]
 
+# Global BRAM 连接
 connect_bd_intf_net [get_bd_intf_pins global_bram/BRAM_PORTA] [get_bd_intf_pins global_bram_ctrl/BRAM_PORTA]
+
+# ==============================================================================
+# VPU GB/WB BRAM Controller -> VPU 内部 TDP RAM
+# ==============================================================================
+connect_bd_intf_net [get_bd_intf_pins vpu_gb_ctrl/BRAM_PORTA] [get_bd_intf_pins vpu_0/gb_bram]
+connect_bd_intf_net [get_bd_intf_pins vpu_wb_ctrl/BRAM_PORTA] [get_bd_intf_pins vpu_0/wb_bram]
 
 # ==============================================================================
 # CDMA_Controller -> CDMA IP (AXI-Lite Master -> S_AXI_LITE)
@@ -81,11 +88,8 @@ connect_bd_net [get_bd_pins inst_decoder/decoder_done]   [get_bd_pins vpu_regs/d
 connect_bd_net [get_bd_pins inst_decoder/decoder_status] [get_bd_pins vpu_regs/decoder_status]
 
 # ==============================================================================
-# INST_Decoder -> VPU (直接 wire 连接，优先级高于 VPU_AXI_Regs)
-# 注意：需要添加 MUX 来选择 VPU 配置来源（VPU_AXI_Regs 或 INST_Decoder）
-# 简化方案：当 decoder_busy=1 时，使用 INST_Decoder 的输出
+# INST_Decoder -> VPU (直接 wire 连接)
 # ==============================================================================
-# VPU 配置信号由 INST_Decoder 直接控制（当解码器运行时）
 connect_bd_net [get_bd_pins inst_decoder/vpu_start]      [get_bd_pins vpu_0/vpu_start]
 connect_bd_net [get_bd_pins inst_decoder/vpu_unit_choose] [get_bd_pins vpu_0/unit_choose]
 connect_bd_net [get_bd_pins inst_decoder/vpu_src_addr]   [get_bd_pins vpu_0/src_addr]
@@ -100,6 +104,7 @@ connect_bd_net [get_bd_pins inst_decoder/vpu_addr_break] [get_bd_pins vpu_0/addr
 connect_bd_net [get_bd_pins inst_decoder/vpu_addr_s]     [get_bd_pins vpu_0/addr_s]
 connect_bd_net [get_bd_pins inst_decoder/vpu_addr_t]     [get_bd_pins vpu_0/addr_t]
 connect_bd_net [get_bd_pins vpu_0/ready]                 [get_bd_pins inst_decoder/vpu_ready]
+connect_bd_net [get_bd_pins vpu_0/ready]                 [get_bd_pins vpu_regs/ready]
 
 # ==============================================================================
 # 时钟/复位
@@ -109,6 +114,12 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_mem_smc/aresetn
 
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins global_bram_ctrl/s_axi_aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins global_bram_ctrl/s_axi_aresetn]
+
+# VPU GB/WB BRAM Controller 时钟
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins vpu_gb_ctrl/s_axi_aclk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_gb_ctrl/s_axi_aresetn]
+connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins vpu_wb_ctrl/s_axi_aclk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_wb_ctrl/s_axi_aresetn]
 
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins axi_cdma_0/m_axi_aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]    [get_bd_pins axi_cdma_0/s_axi_lite_aclk]

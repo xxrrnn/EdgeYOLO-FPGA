@@ -1,6 +1,9 @@
 # Staging BRAM：由 axi_bram_ctrl 驱动
-# VPU GB/WB：Global_VPU_top 内部有 AXI 从设备接口 (gb_axis, wb_axis)，直接连接
+# VPU GB/WB：通过 AXI BRAM Controller 连接到 VPU 内部的 True Dual Port RAM
 
+# ==============================================================================
+# Global BRAM (数据暂存区) - 1MB
+# ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 global_bram_ctrl
 set_property -dict [list \
   CONFIG.DATA_WIDTH {256} \
@@ -19,7 +22,29 @@ set_property -dict [list \
   CONFIG.Use_Byte_Write_Enable {true} \
 ] [get_bd_cells global_bram]
 
+# ==============================================================================
+# VPU GB (Global Buffer) AXI BRAM Controller - 128KB
+# 连接到 VPU 内部的 True Dual Port RAM 的 Port A
+# ==============================================================================
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_gb_ctrl
+set_property -dict [list \
+  CONFIG.DATA_WIDTH {256} \
+  CONFIG.SINGLE_PORT_BRAM {1} \
+] [get_bd_cells vpu_gb_ctrl]
+
+# ==============================================================================
+# VPU WB (Weight Buffer) AXI BRAM Controller - 128KB
+# 连接到 VPU 内部的 True Dual Port RAM 的 Port A
+# ==============================================================================
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_wb_ctrl
+set_property -dict [list \
+  CONFIG.DATA_WIDTH {256} \
+  CONFIG.SINGLE_PORT_BRAM {1} \
+] [get_bd_cells vpu_wb_ctrl]
+
+# ==============================================================================
 # VPU_AXI_Regs：配置/状态寄存器 + INST_Decoder 控制
+# ==============================================================================
 create_bd_cell -type module -reference VPU_AXI_Regs vpu_regs
 
 # ==============================================================================
