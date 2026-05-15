@@ -89,3 +89,14 @@ set_addr_seg_flex {
   {axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0}
   {axi_cdma_0/Data/*vpu_wb_ctrl*}
 } 0x10420000 128K "CDMA VPU WB"
+
+# ==============================================================================
+# cdma_ctrl 的 AXI-Lite Master 地址空间
+# Vivado 默认将 CDMA S_AXI_LITE 分配到 0x44A00000，
+# 但我们的 CDMA_Controller RTL 使用 CDMA_BASE_ADDR=0，
+# 所以必须将该映射改为 offset=0
+# ==============================================================================
+set_addr_seg_flex {
+  {cdma_ctrl/cdma_axilm/SEG_axi_cdma_0_Reg}
+  {cdma_ctrl/cdma_axilm/*}
+} 0x00000000 64K "CDMA_Controller -> CDMA S_AXI_LITE"

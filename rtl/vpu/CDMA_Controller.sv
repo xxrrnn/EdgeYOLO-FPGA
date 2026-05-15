@@ -15,9 +15,6 @@
         input wire [31:0] cdma_dst_addr_lsb,
         input wire [31:0] cdma_length,
 
-        // cdma axil part
-		// output  logic clk,
-        // output  logic rst_n,
         output logic [C_CDMA_AXILM_ADDR_WIDTH-1 : 0] cdma_axilm_awaddr,
         output logic [2 : 0] cdma_axilm_awprot,
         output logic cdma_axilm_awvalid,
@@ -39,8 +36,6 @@
         output logic cdma_axilm_rready
     );
 
-///////////////////////////////// Ö¸ÁîÒëÂëÆ÷×´Ì¬»ú /////////////////////////////////
-    //// AXI Lite CDMA handshakes (unchanged variables)
     wire aw_handshake_cdma = cdma_axilm_awready && cdma_axilm_awvalid;
     wire w_handshake_cdma  = cdma_axilm_wready  && cdma_axilm_wvalid;
     wire ar_handshake_cdma = cdma_axilm_arready && cdma_axilm_arvalid;
@@ -51,15 +46,15 @@
     reg [31:0] cdma_dst_addr_msb_reg;
     reg [31:0] cdma_dst_addr_lsb_reg;
     reg [31:0] cdma_length_reg;
-
+    reg        sr_idle_flag;  // 锁存 SR 读取结果的 IDLE 位
 
     assign cdma_axilm_awprot = '0;
     assign cdma_axilm_arprot = '0;
 
     typedef enum logic [7:0] {
         IDLE                = 8'd0,
-        CDMA_CONFIG         = 8'd1,
-        CDMA_CHECK          = 8'd2,
+        CDMA_CONFIG         = 8'd1,   // 发起 SR 读请求
+        CDMA_CHECK          = 8'd2,   // 等待 SR 响应，确认 CDMA IDLE
         CDMA_ENABLE_IRQ     = 8'd3,
         CDMA_ENABLE_IRQ_CLR = 8'd4,
         CDMA_WRITE_SRC_MSB  = 8'd5,
@@ -72,10 +67,9 @@
         CDMA_WRITE_DST_LSB_CLR = 8'd12,
         CDMA_WRITE_LEN      = 8'd13,
         CDMA_WRITE_LEN_CLR  = 8'd14,
-        CDMA_WAIT_START     = 8'd15,  // 等待传输开始（IDLE=0）
-        CDMA_WAIT_START_CLR = 8'd16,
-        CDMA_WAIT_DONE      = 8'd17,  // 等待传输完成（IDLE=1）
-        CDMA_WAIT_DONE_CLR  = 8'd18
+        CDMA_POLL_ISSUE     = 8'd15,  // 发起 SR 读请求（轮询传输完成）
+        CDMA_POLL_WAIT      = 8'd16,  // 等待 SR 响应
+        CDMA_POLL_CHECK     = 8'd17   // 检查 IDLE 位，决定结束或重试
     } state_t;
     (* fsm_encoding = "one_hot" *) state_t n_state, c_state;
 
@@ -88,15 +82,13 @@
             c_state <= n_state;
     end
 
-    
     always_comb begin
         n_state = c_state;
         case (c_state)
             IDLE:             if (cdma_start) n_state = CDMA_CONFIG;
             CDMA_CONFIG:      n_state = CDMA_CHECK;
+            CDMA_CHECK:       if (r_handshake_cdma && cdma_axilm_rdata[1]) n_state = CDMA_ENABLE_IRQ;
 
-            //// CDMA ²¿·Ö (Ê¹ÓÃ _CLR ÖÐ¼äÌ¬À´Çå³ý valid)
-            CDMA_CHECK:             if (r_handshake_cdma && cdma_axilm_rdata[1]) n_state = CDMA_ENABLE_IRQ;
             CDMA_ENABLE_IRQ:        if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_ENABLE_IRQ_CLR;
             CDMA_ENABLE_IRQ_CLR:    n_state = CDMA_WRITE_SRC_MSB;
             CDMA_WRITE_SRC_MSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_SRC_MSB_CLR;
@@ -108,18 +100,17 @@
             CDMA_WRITE_DST_LSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_DST_LSB_CLR;
             CDMA_WRITE_DST_LSB_CLR: n_state = CDMA_WRITE_LEN;
             CDMA_WRITE_LEN:         if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_LEN_CLR;
-            CDMA_WRITE_LEN_CLR:     n_state = CDMA_WAIT_START;
-            // 等待传输开始：IDLE 位变为 0
-            CDMA_WAIT_START:        if (r_handshake_cdma && !cdma_axilm_rdata[1]) n_state = CDMA_WAIT_START_CLR;
-            CDMA_WAIT_START_CLR:    n_state = CDMA_WAIT_DONE;
-            // 等待传输完成：IDLE 位变为 1
-            CDMA_WAIT_DONE:         if (r_handshake_cdma && cdma_axilm_rdata[1]) n_state = CDMA_WAIT_DONE_CLR;
-            CDMA_WAIT_DONE_CLR:     n_state = IDLE;
+            CDMA_WRITE_LEN_CLR:     n_state = CDMA_POLL_ISSUE;
+
+            // 轮询 CDMA SR 直到 IDLE=1（传输完成）
+            CDMA_POLL_ISSUE:  n_state = CDMA_POLL_WAIT;
+            CDMA_POLL_WAIT:   if (r_handshake_cdma) n_state = CDMA_POLL_CHECK;
+            CDMA_POLL_CHECK:  if (sr_idle_flag) n_state = IDLE;
+                              else              n_state = CDMA_POLL_ISSUE;
 
             default: n_state = IDLE;
         endcase
     end
-
 
     // Register offsets within CDMA peripheral
     localparam logic [31:0] CDMA_CR_OFFSET             = 32'h00000000;
@@ -132,10 +123,15 @@
     localparam int          IOC_IRQ_EN_BIT             = 12;
     localparam int          ERR_IRQ_EN_BIT             = 14;
 
+    // 锁存 SR 读取结果
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            sr_idle_flag <= 1'b0;
+        else if (r_handshake_cdma)
+            sr_idle_flag <= cdma_axilm_rdata[1];
+    end
 
-
-
-        // CDMA IO
+    // AXI-Lite 输出信号
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             cdma_axilm_awvalid <= 1'b0;
@@ -147,13 +143,17 @@
             cdma_axilm_wdata   <= '0;
             cdma_axilm_wstrb   <= '0;
         end else begin
-
             case (c_state)
                 CDMA_CONFIG: begin
                     cdma_axilm_arvalid <= 1;
                     cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
                     cdma_axilm_rready  <= 1;
-                                    end
+                end
+                CDMA_CHECK: begin
+                    cdma_axilm_arvalid <= ~ar_handshake_cdma;
+                    cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
+                    cdma_axilm_rready  <= 1;
+                end
                 CDMA_ENABLE_IRQ: begin
                     cdma_axilm_awvalid <= 1;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_CR_OFFSET;
@@ -202,23 +202,25 @@
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
-                CDMA_WAIT_START: begin
-                    // 读取状态寄存器，等待 IDLE=0（传输开始）
+                CDMA_POLL_ISSUE: begin
+                    // 发起读 SR 请求
                     cdma_axilm_arvalid <= 1;
                     cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
                     cdma_axilm_rready  <= 1;
                 end
-                CDMA_WAIT_DONE: begin
-                    // 读取状态寄存器，等待 IDLE=1（传输完成）
-                    cdma_axilm_arvalid <= 1;
+                CDMA_POLL_WAIT: begin
+                    // 等待读响应，ar握手后清 arvalid
+                    cdma_axilm_arvalid <= ~ar_handshake_cdma;
                     cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
                     cdma_axilm_rready  <= 1;
                 end
-                CDMA_CHECK: begin
-                    // 保持读请求直到收到响应
-                    cdma_axilm_arvalid <= ~ar_handshake_cdma;  // 握手后清零
-                    cdma_axilm_araddr  <= CDMA_BASE_ADDR + CDMA_SR_OFFSET;
-                    cdma_axilm_rready  <= 1;
+                CDMA_POLL_CHECK: begin
+                    // 清零所有信号，检查结果
+                    cdma_axilm_awvalid <= 1'b0;
+                    cdma_axilm_wvalid  <= 1'b0;
+                    cdma_axilm_bready  <= 1'b0;
+                    cdma_axilm_arvalid <= 1'b0;
+                    cdma_axilm_rready  <= 1'b0;
                 end
                 // _CLR 状态：清零所有 valid 信号
                 CDMA_ENABLE_IRQ_CLR,
@@ -226,9 +228,7 @@
                 CDMA_WRITE_SRC_LSB_CLR,
                 CDMA_WRITE_DST_MSB_CLR,
                 CDMA_WRITE_DST_LSB_CLR,
-                CDMA_WRITE_LEN_CLR,
-                CDMA_WAIT_START_CLR,
-                CDMA_WAIT_DONE_CLR: begin
+                CDMA_WRITE_LEN_CLR: begin
                     cdma_axilm_awvalid <= 1'b0;
                     cdma_axilm_wvalid  <= 1'b0;
                     cdma_axilm_bready  <= 1'b0;
@@ -253,6 +253,7 @@
         end
     end
 
+    // 锁存配置参数
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             cdma_src_addr_msb_reg       <= '0;
@@ -266,11 +267,9 @@
                 cdma_src_addr_lsb_reg       <= cdma_src_addr_lsb;
                 cdma_dst_addr_msb_reg       <= cdma_dst_addr_msb;
                 cdma_dst_addr_lsb_reg       <= cdma_dst_addr_lsb;
-                cdma_length_reg             <= cdma_length  ;
+                cdma_length_reg             <= cdma_length;
             end
         end
     end
-
-
 
 endmodule
