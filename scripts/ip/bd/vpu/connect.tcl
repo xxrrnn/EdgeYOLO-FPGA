@@ -26,7 +26,10 @@ connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 # Smartconnect：S00=XDMA, S01=CDMA; M00-M04 见下
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_mem_smc
-set_property CONFIG.NUM_MI {5} [get_bd_cells axi_mem_smc]
+set_property -dict [list \
+  CONFIG.NUM_SI {2} \
+  CONFIG.NUM_MI {5} \
+] [get_bd_cells axi_mem_smc]
 
 connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI]     [get_bd_intf_pins axi_mem_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S01_AXI]
