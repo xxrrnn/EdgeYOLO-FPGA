@@ -127,10 +127,18 @@ module ad_unit #(
         end else begin
             case (c_state)
                 AD_WAIT_X: begin
-                    ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH  - 1 : GB_BANDWIDTH]};
+                    // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
+                    if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
+                        ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                    else
+                        ad_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                 end
                 AD_WAIT_X_2: begin
-                    ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH  - 1 : GB_BANDWIDTH]};
+                    // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
+                    if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
+                        ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                    else
+                        ad_fp_in2_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                 end
                 AD_SAVE: begin
                     ad_save_cnt <= ad_save_cnt + 1;

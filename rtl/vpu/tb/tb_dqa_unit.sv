@@ -152,7 +152,7 @@ module tb_dqa_unit;
     .FP_WIDTH(FP_WIDTH),
     .WB_BANDWIDTH(WB_BANDWIDTH),
     .WB_DEPTH(WB_DEPTH),
-    .MAX_CHANNEL_NUM(FP_CORE_NUM)
+    .MAX_CHANNEL_NUM(512)
   ) dqa_inst (
     .clk(clk),
     .rst_n(rst_n),

@@ -17,12 +17,12 @@ module Global_VPU_top #(
     parameter C_INT_WIDTH_IN = 32,
     parameter BANDWIDTH = 256,       // BRAM 数据位宽 = NB_COL * COL_WIDTH = 32*8 = 256 bits
 
-    parameter FP_CORE_NUM = 8,
+    parameter FP_CORE_NUM = 4,
     parameter FP_TRAN_NUM = 4,
     parameter FP_WIDTH    = 32,
     
     parameter WB_ADDR_WIDTH = 20,
-    parameter MAX_CHANNEL_NUM = 256,
+    parameter MAX_CHANNEL_NUM = 1024,
 
     parameter INTERVAL_NUM = 16,
     parameter RAM_DEPTH_GB    = 4096,  // 128KB / 32B per word = 4096 words

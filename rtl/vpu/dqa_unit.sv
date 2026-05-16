@@ -253,10 +253,16 @@ module dqa_unit #(
         else begin
             if(c_state == DQA_WAIT_SCALE) begin
                 dqa_scale_load_cnt <= dqa_scale_load_cnt + 1'b1;
-                dqa_scale_reg <= {wb_doutb, dqa_scale_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
+                if (MAX_CHANNEL_LENGTH > WB_BANDWIDTH)
+                    dqa_scale_reg <= {wb_doutb, dqa_scale_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
+                else
+                    dqa_scale_reg <= wb_doutb[MAX_CHANNEL_LENGTH - 1 : 0];
             end else if(c_state == DQA_WAIT_BIAS) begin
                 dqa_bias_load_cnt  <= dqa_bias_load_cnt  + 1'b1;
-                dqa_bias_reg  <= {wb_doutb, dqa_bias_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
+                if (MAX_CHANNEL_LENGTH > WB_BANDWIDTH)
+                    dqa_bias_reg  <= {wb_doutb, dqa_bias_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
+                else
+                    dqa_bias_reg  <= wb_doutb[MAX_CHANNEL_LENGTH - 1 : 0];
             end else if(c_state == IDLE) begin
                 dqa_scale_load_cnt <= '0;
                 dqa_bias_load_cnt  <= '0;
@@ -274,7 +280,10 @@ module dqa_unit #(
         end else begin
             case (c_state)
                 DQA_WAIT_X: begin
-                    dqa_int_in_reg <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN  - 1 : GB_BANDWIDTH]};
+                    if (FP_CORE_NUM * C_INT_WIDTH_IN > GB_BANDWIDTH)
+                        dqa_int_in_reg <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : GB_BANDWIDTH]};
+                    else
+                        dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
                 end
                 DQA_SAVE: begin
                     dqa_save_cnt <= dqa_save_cnt + 1;

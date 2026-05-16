@@ -7,12 +7,12 @@ module Global_VPU #(
     parameter C_INT_WIDTH_IN = 32,
     parameter BANDWIDTH = 256,       // 256 bits = 32 bytes per BRAM word
 
-    parameter FP_CORE_NUM = 8,
+    parameter FP_CORE_NUM = 4,
     parameter FP_TRAN_NUM = 8,
     parameter FP_WIDTH    = 32,
     
     parameter WB_ADDR_WIDTH = 20,
-    parameter MAX_CHANNEL_NUM = 256,
+    parameter MAX_CHANNEL_NUM = 1024,
 
     parameter INTERVAL_NUM = 16,
     parameter RAM_DEPTH_GB    = 4096,
@@ -374,7 +374,7 @@ nn_lut_unit #(
       .FP_WIDTH(FP_WIDTH),
       .WB_BANDWIDTH(WB_BANDWIDTH),
       .WB_ADDR_WIDTH(WB_ADDR_WIDTH),
-      .MAX_CHANNEL_NUM(FP_CORE_NUM)
+      .MAX_CHANNEL_NUM(MAX_CHANNEL_NUM)
     ) dqa_inst (
         .clk(clk),
         .rst_n(rst_n_local),

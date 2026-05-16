@@ -169,7 +169,12 @@ module qa_unit #(
         end else begin
             case (c_state)
                 QA_WAIT_X: begin
-                    qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH  - 1 : GB_BANDWIDTH]};
+                    // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
+                    // 当 FP_CORE_NUM*FP_WIDTH > GB_BANDWIDTH 时，拼接并右移
+                    if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
+                        qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                    else
+                        qa_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                 end
                 QA_SAVE: begin
                     qa_save_cnt <= qa_save_cnt + 1;
