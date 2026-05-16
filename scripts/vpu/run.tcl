@@ -27,4 +27,4 @@ if {$stopAt eq "bd" || $stopAt eq "validate"} {
     return
 }
 
-source [file normalize "$thisScriptDir/2_synth.tcl"]
+source [file normalize "$thisScriptDir/3_synth.tcl"]

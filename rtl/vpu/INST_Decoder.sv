@@ -323,7 +323,6 @@ module INST_Decoder #(
             case (state)
                 S_IDLE: begin
                     decoder_busy <= 1'b0;
-                    decoder_status <= STATUS_IDLE;
                     cdma_config_valid <= 1'b0;
                     
                     if (decoder_start_pulse_reg && inst_count > 0) begin
@@ -333,6 +332,8 @@ module INST_Decoder #(
                         words_remaining <= inst_count;
                         body_word_idx <= '0;
                     end
+                    // 注意：不在这里清除 decoder_status，以保持 DONE/ERROR 状态
+                    // decoder_status 只在启动时被设置为 BUSY，或在 DONE/ERROR 时被设置
                 end
                 
                 S_FETCH_HEADER: begin

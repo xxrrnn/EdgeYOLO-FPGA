@@ -36,6 +36,9 @@ if {[llength $bdFile] == 0} {
     exit 1
 }
 
+puts "\n注意: global_bram使用AXI BRAM Controller模式，无法通过COE文件初始化"
+puts "      如需验证CDMA数据传输，请在GUI波形中手动检查AXI信号"
+
 # 使用简单的END指令测试
 set tbFile [file normalize "$vpuRtlDir/tb/tb_vpu_simple.sv"]
 if {![file exists $tbFile]} {
@@ -43,7 +46,7 @@ if {![file exists $tbFile]} {
     exit 1
 }
 
-puts "使用 testbench: $tbFile"
+puts "\n使用 testbench: $tbFile"
 
 # 添加testbench到仿真
 add_files -fileset sim_1 -norecurse $tbFile -force
@@ -77,5 +80,7 @@ puts "
     1. vivado build/vpu/vpu.xpr
     2. Run Simulation
     3. 添加需要的信号到Wave窗口
+  
+  注意: global_bram已配置初始化数据，可在波形中验证CDMA传输
 "
 puts "================================================================"
