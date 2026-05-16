@@ -36,12 +36,14 @@ if {[llength $bdFile] == 0} {
     exit 1
 }
 
-# 确保仿真文件存在
-set tbFile [file normalize "$vpuRtlDir/tb/tb_vpu_bd_cdma.sv"]
+# 使用简单的END指令测试
+set tbFile [file normalize "$vpuRtlDir/tb/tb_vpu_simple.sv"]
 if {![file exists $tbFile]} {
-    puts "ERROR: Testbench 不存在: $tbFile"
+    puts "ERROR: testbench不存在: $tbFile"
     exit 1
 }
+
+puts "使用 testbench: $tbFile"
 
 # 添加testbench到仿真
 add_files -fileset sim_1 -norecurse $tbFile -force
@@ -51,7 +53,7 @@ update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
 
 # 设置仿真顶层
-set_property top tb_vpu_bd_cdma [get_filesets sim_1]
+set_property top tb_vpu_simple [get_filesets sim_1]
 
 # 仿真设置
 set_property -name {xsim.simulate.runtime} -value {200us} -objects [get_filesets sim_1]
