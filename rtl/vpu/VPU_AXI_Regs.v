@@ -146,7 +146,6 @@ module VPU_AXI_Regs #(
     
     // INST_Decoder 控制寄存器
     reg decoder_start_reg;
-    reg decoder_start_reg_d1;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -167,7 +166,6 @@ module VPU_AXI_Regs #(
             addr_t      <= 0;
             // INST_Decoder
             decoder_start_reg    <= 1'b0;
-            decoder_start_reg_d1 <= 1'b0;
             decoder_start        <= 1'b0;
             inst_count           <= 0;
         end else begin
@@ -175,9 +173,8 @@ module VPU_AXI_Regs #(
             ctrl_start_reg_d1 <= ctrl_start_reg;
             vpu_start <= ctrl_start_reg && ~ctrl_start_reg_d1;
             
-            // INST_Decoder 上升沿检测
-            decoder_start_reg_d1 <= decoder_start_reg;
-            decoder_start <= decoder_start_reg && ~decoder_start_reg_d1;
+            // INST_Decoder：直接输出电平，由 INST_Decoder 内部做上升沿检测
+            decoder_start <= decoder_start_reg;
 
             if (wr_en) begin
                 case (aw_addr_reg[7:0])
