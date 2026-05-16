@@ -15,7 +15,7 @@ module Global_VPU_top #(
     
     parameter GB_ADDR_WIDTH = 22,
     parameter C_INT_WIDTH_IN = 32,
-    parameter BANDWIDTH = 32,
+    parameter BANDWIDTH = 256,       // BRAM 数据位宽 = NB_COL * COL_WIDTH = 32*8 = 256 bits
 
     parameter FP_CORE_NUM = 8,
     parameter FP_TRAN_NUM = 4,
@@ -25,8 +25,8 @@ module Global_VPU_top #(
     parameter MAX_CHANNEL_NUM = 256,
 
     parameter INTERVAL_NUM = 16,
-    parameter RAM_DEPTH_GB    = 1024,
-    parameter RAM_DEPTH_WB    = 1024,
+    parameter RAM_DEPTH_GB    = 4096,  // 128KB / 32B per word = 4096 words
+    parameter RAM_DEPTH_WB    = 4096,
     parameter Q_INT_WIDTH_OUT = 8
 )(
     // 时钟和复位

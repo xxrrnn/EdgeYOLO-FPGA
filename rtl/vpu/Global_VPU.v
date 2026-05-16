@@ -3,11 +3,11 @@
 module Global_VPU #(
     parameter ADDR_WIDTH = 32,
     
-    parameter GB_ADDR_WIDTH = 20,
+    parameter GB_ADDR_WIDTH = 22,
     parameter C_INT_WIDTH_IN = 32,
-    parameter BANDWIDTH = 32,
+    parameter BANDWIDTH = 256,       // 256 bits = 32 bytes per BRAM word
 
-    parameter FP_CORE_NUM = 32,
+    parameter FP_CORE_NUM = 8,
     parameter FP_TRAN_NUM = 8,
     parameter FP_WIDTH    = 32,
     
@@ -15,8 +15,8 @@ module Global_VPU #(
     parameter MAX_CHANNEL_NUM = 256,
 
     parameter INTERVAL_NUM = 16,
-    parameter RAM_DEPTH_GB    = 1024,
-    parameter RAM_DEPTH_WB    = 1024,
+    parameter RAM_DEPTH_GB    = 4096,
+    parameter RAM_DEPTH_WB    = 4096,
     parameter Q_INT_WIDTH_OUT = 8,
 
     parameter NB_COL = 32,
@@ -172,12 +172,12 @@ module Global_VPU #(
 
 
 
-    mp_unit #(
+    // mp_unit_fixed: 硬编码 5×5 MaxPooling (C=128, H=10, W=10, HWC, 256-bit BRAM)
+    mp_unit_fixed #(
       .ADDR_WIDTH         (ADDR_WIDTH),
       .GB_BANDWIDTH       (GB_BANDWIDTH),
       .GB_ADDR_WIDTH      (GB_ADDR_WIDTH),
-      .FP_WIDTH      (FP_WIDTH),
-      .MAX_CHANNEL_NUM (MAX_CHANNEL_NUM)
+      .FP_WIDTH           (FP_WIDTH)
   ) i_mp_unit (
       .clk                (clk),
       .rst_n              (rst_n_local),
@@ -185,26 +185,22 @@ module Global_VPU #(
       .mp_unit_ready      (mp_unit_ready),
       
       .mp_src_addr        (src_addr_reg),
-      .mp_src_h           (src_h_reg),
-      .mp_src_w           (src_w_reg),
-      .mp_src_c           (src_c_reg),
       .mp_dst_addr        (dst_addr_reg),
       
-      // GB 接口输出 (需要 MUX 到顶层 top_gb_* 信号)
       .gb_addrb           (mp_gb_addrb), 
       .gb_dinb            (mp_gb_dinb), 
       .gb_web             (mp_gb_web),
       .gb_enb             (mp_gb_enb),
-      .gb_doutb           (gb_doutb)   // 连接顶层 GB BRAM 的输出
+      .gb_doutb           (gb_doutb)
   );
 
 
-    us_unit #(
+    // us_unit_fixed: Nearest Neighbor Upsample ×2
+    us_unit_fixed #(
       .ADDR_WIDTH         (ADDR_WIDTH),
       .GB_BANDWIDTH       (GB_BANDWIDTH),
       .GB_ADDR_WIDTH      (GB_ADDR_WIDTH),
-      .FP_WIDTH      (FP_WIDTH),
-      .MAX_MP_CHANNEL_NUM (MAX_CHANNEL_NUM)
+      .FP_WIDTH           (FP_WIDTH)
   ) i_us_unit (
       .clk                (clk),
       .rst_n              (rst_n_local),
@@ -217,12 +213,11 @@ module Global_VPU #(
       .us_src_c           (src_c_reg),
       .us_dst_addr        (dst_addr_reg),
       
-      // GB 接口输出 (需要 MUX 到顶层 top_gb_* 信号)
       .gb_addrb           (us_gb_addrb), 
       .gb_dinb            (us_gb_dinb), 
       .gb_web             (us_gb_web),
       .gb_enb             (us_gb_enb),
-      .gb_doutb           (gb_doutb)   // 连接顶层 GB BRAM 的输出
+      .gb_doutb           (gb_doutb)
   );
 
 nn_lut_unit #(

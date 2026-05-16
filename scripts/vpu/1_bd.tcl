@@ -32,8 +32,8 @@ create_bd_design -dir $bdDir $bdName
 set vpuRtlFiles {}
 foreach pattern {*.v *.sv */*.v */*.sv} {
     foreach f [glob -nocomplain [file normalize "$vpuRtlDir/$pattern"]] {
-        # 排除 testbench 文件和备份文件
-        if {![regexp {(tb_.*|.*_v2)\.(v|sv)$} [file tail $f]]} {
+        # 排除 testbench 文件、备份文件和旧版本模块
+        if {![regexp {(tb_.*|.*_v2|.*\.bak)\.(v|sv)$} [file tail $f]] && ![regexp {\.bak$} $f]} {
             lappend vpuRtlFiles $f
         }
     }
