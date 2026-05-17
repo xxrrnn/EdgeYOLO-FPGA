@@ -5,12 +5,12 @@ module dqa_unit #(
     parameter GB_BANDWIDTH = 256,
     parameter GB_ADDR_WIDTH = 16,
     parameter C_INT_WIDTH_IN = 32,
-    parameter FP_CORE_NUM = 32,
-    parameter FP_TRAN_NUM = 32,
-    parameter FP_WIDTH    = 0,  // For example, if using FP16
+    parameter FP_CORE_NUM = 8,
+    parameter FP_TRAN_NUM = 8,
+    parameter FP_WIDTH    = 32,
     parameter WB_BANDWIDTH = 256,
     parameter WB_ADDR_WIDTH = 32,
-    parameter MAX_CHANNEL_NUM = 1024
+    parameter MAX_CHANNEL_NUM = 64
 
 )(
     input   wire                                clk,
@@ -79,6 +79,15 @@ module dqa_unit #(
     reg     [FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0]          dqa_int_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_fp_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_out_reg;
+
+    // Latched input parameters
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_src_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_dst_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_scale_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_bias_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_src_c_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_src_h_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                            dqa_src_w_reg;
     // wire    [ADDR_WIDTH - 1 : 0]                            dqa_w_parallel  = FP_CORE_NUM / dqa_src_c;
 
     /* DQA ADDR GENERATE*/
@@ -108,13 +117,13 @@ module dqa_unit #(
     localparam DQA_SINGLE_COMPUTE_BLOCKS        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3) >> 5;
     localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM << $clog2(FP_WIDTH)) >> 3) >> 5;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
-    assign dqa_w_load_stride = (dqa_src_c * C_INT_WIDTH_IN) >> (3 + 5);
+    assign dqa_w_load_stride = (dqa_src_c_reg * C_INT_WIDTH_IN) >> (3 + 5);
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
-    assign dqa_w_save_stride = (dqa_src_c << $clog2(FP_WIDTH)) >> (3 + 5);;
+    assign dqa_w_save_stride = (dqa_src_c_reg << $clog2(FP_WIDTH)) >> (3 + 5);;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_load_stride;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_save_stride;
-    assign dqa_h_load_stride = (dqa_src_w * dqa_src_c << $clog2(C_INT_WIDTH_IN)) >> (3 + 5);;
-    assign dqa_h_save_stride = (dqa_src_w * dqa_src_c << $clog2(FP_WIDTH)) >> (3 + 5);;
+    assign dqa_h_load_stride = (dqa_src_w_reg * dqa_src_c_reg << $clog2(C_INT_WIDTH_IN)) >> (3 + 5);;
+    assign dqa_h_save_stride = (dqa_src_w_reg * dqa_src_c_reg << $clog2(FP_WIDTH)) >> (3 + 5);;
 
 
     reg [ADDR_WIDTH - 1 : 0]                       dqa_save_addr, dqa_save_cnt;
@@ -136,13 +145,13 @@ module dqa_unit #(
     wire                                             dqa_x_tran_done;
     wire                                             dqa_done;
     localparam TRAN_NUM = (FP_CORE_NUM / FP_TRAN_NUM);
-    assign  dqa_scale_load_done                      = (dqa_scale_load_cnt   == ((dqa_src_c << $clog2(FP_WIDTH)) >> $clog2(WB_BANDWIDTH)) - 1);
-    assign  dqa_bias_load_done                       = (dqa_bias_load_cnt    == ((dqa_src_c << $clog2(FP_WIDTH)) >> $clog2(WB_BANDWIDTH)) - 1);
+    assign  dqa_scale_load_done                      = (dqa_scale_load_cnt   == ((dqa_src_c_reg << $clog2(FP_WIDTH)) >> $clog2(WB_BANDWIDTH)) - 1);
+    assign  dqa_bias_load_done                       = (dqa_bias_load_cnt    == ((dqa_src_c_reg << $clog2(FP_WIDTH)) >> $clog2(WB_BANDWIDTH)) - 1);
     assign  dqa_save_done                            = (dqa_save_cnt         == (DQA_SINGLE_COMPUTE_SAVE_BLOCKS - 1));
     assign  dqa_x_load_block_done                    = (dqa_x_load_block_cnt == DQA_SINGLE_COMPUTE_BLOCKS - 1);
-    assign  dqa_x_load_c_done                        = (dqa_x_load_c_cnt     == ((dqa_src_c >> $clog2(FP_CORE_NUM)) - 1));
-    assign  dqa_x_load_w_done                        = (dqa_x_load_w_cnt     == (dqa_src_w - 1));
-    assign  dqa_x_load_h_done                        = (dqa_x_load_h_cnt     == (dqa_src_h - 1));
+    assign  dqa_x_load_c_done                        = (dqa_x_load_c_cnt     == ((dqa_src_c_reg >> $clog2(FP_CORE_NUM)) - 1));
+    assign  dqa_x_load_w_done                        = (dqa_x_load_w_cnt     == (dqa_src_w_reg - 1));
+    assign  dqa_x_load_h_done                        = (dqa_x_load_h_cnt     == (dqa_src_h_reg - 1));
     assign  dqa_x_tran_done                          = (dqa_x_tran_cnt       == TRAN_NUM- 1);
 
     assign  dqa_done                                 = dqa_x_load_block_done && dqa_x_load_c_done && dqa_x_load_w_done &&dqa_x_load_h_done;
@@ -238,7 +247,7 @@ module dqa_unit #(
     
 
 
-    assign wb_addrb = (c_state == DQA_LOAD_SCALE) ? (dqa_scale_addr  >> 5) + dqa_scale_load_cnt :(c_state == DQA_LOAD_BIAS) ?  (dqa_bias_addr  >> 5) + dqa_bias_load_cnt :'0;
+    assign wb_addrb = (c_state == DQA_LOAD_SCALE) ? (dqa_scale_addr_reg  >> 5) + dqa_scale_load_cnt :(c_state == DQA_LOAD_BIAS) ?  (dqa_bias_addr_reg  >> 5) + dqa_bias_load_cnt :'0;
     assign wb_enb   = ((c_state == DQA_LOAD_SCALE) || (c_state == DQA_LOAD_BIAS)) ? 1'b1 :1'b0;
     assign wb_web   = 1'b0;
     assign wb_dinb  = '0;
@@ -290,7 +299,7 @@ module dqa_unit #(
                 end
                 DQA_SAVE_ADDR_1: begin
                     dqa_save_cnt <= dqa_save_cnt;
-                    dqa_save_addr <= (dqa_dst_addr >> 5) + dqa_x_load_addr_add;
+                    dqa_save_addr <= (dqa_dst_addr_reg >> 5) + dqa_x_load_addr_add;
                 end 
                 DQA_SAVE_ADDR_2: begin
                     dqa_save_cnt <= dqa_save_cnt;
@@ -309,7 +318,7 @@ module dqa_unit #(
         gb_web   = '0;
         gb_dinb  = '0;
         if(c_state == DQA_LOAD_X ) begin
-            gb_addrb = (dqa_src_addr >> 5) + dqa_x_load_addr_add;
+            gb_addrb = (dqa_src_addr_reg >> 5) + dqa_x_load_addr_add;
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
@@ -392,6 +401,27 @@ module dqa_unit #(
             c_state <= IDLE;   // 复位时清零
         end else begin
             c_state <= n_state; // 正常运行时更新
+        end
+    end
+
+    // Latch input parameters when start is asserted
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dqa_src_addr_reg   <= '0;
+            dqa_dst_addr_reg   <= '0;
+            dqa_scale_addr_reg <= '0;
+            dqa_bias_addr_reg  <= '0;
+            dqa_src_c_reg      <= '0;
+            dqa_src_h_reg      <= '0;
+            dqa_src_w_reg      <= '0;
+        end else if (dqa_unit_start && dqa_unit_ready) begin
+            dqa_src_addr_reg   <= dqa_src_addr;
+            dqa_dst_addr_reg   <= dqa_dst_addr;
+            dqa_scale_addr_reg <= dqa_scale_addr;
+            dqa_bias_addr_reg  <= dqa_bias_addr;
+            dqa_src_c_reg      <= dqa_src_c;
+            dqa_src_h_reg      <= dqa_src_h;
+            dqa_src_w_reg      <= dqa_src_w;
         end
     end
 

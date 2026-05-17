@@ -206,7 +206,7 @@ module ad_unit #(
 
 
     
-    // 实例化 fp16_add_array
+    // 实例化 fp_add_array (FP32)
     fp_add_array #(
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_WIDTH(FP_WIDTH)

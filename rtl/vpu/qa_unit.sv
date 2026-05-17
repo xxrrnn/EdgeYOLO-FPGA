@@ -7,9 +7,9 @@ module qa_unit #(
     parameter WB_BANDWIDTH =    256,
     parameter WB_ADDR_WIDTH =   512,
 
-    parameter FP_CORE_NUM =     32,
+    parameter FP_CORE_NUM =     8,
     parameter FP_TRAN_NUM =     8,
-    parameter FP_WIDTH    =     0,  // For example, if using FP16
+    parameter FP_WIDTH    =     32,
     parameter Q_INT_WIDTH_OUT =   8,
 
     parameter MAX_CHANNEL_NUM = 1024
@@ -49,7 +49,7 @@ module qa_unit #(
 );
 
     localparam  qa_single_compute_blocks      = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH) ;
-    localparam  qa_single_compute_save_blocks = (FP_CORE_NUM * Q_INT_WIDTH_OUT / GB_BANDWIDTH);
+    localparam  qa_single_compute_save_blocks = (FP_CORE_NUM * Q_INT_WIDTH_OUT + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
 
 
     typedef enum logic [5:0] {
@@ -74,6 +74,14 @@ module qa_unit #(
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_fp_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_out_q_reg;
     reg     [FP_CORE_NUM * Q_INT_WIDTH_OUT - 1 : 0]       qa_out_int_reg;
+    
+    // Latched input parameters
+    reg     [ADDR_WIDTH - 1 : 0]                          qa_src_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          qa_dst_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          qa_scale_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          qa_src_c_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          qa_src_h_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          qa_src_w_reg;
     /* QA ADDR GENERATE*/
     /*
 
@@ -129,9 +137,12 @@ module qa_unit #(
             qa_x_load_block_cnt    <= '0;
             qa_x_load_cnt        <= '0;
             qa_x_total_blocks_reg  <= '0;
-        end else if (c_state == QA_LOAD_SCALE) begin
-            // 在开始计算时计算总块数
+        end else if (c_state == IDLE && qa_unit_start) begin
+            qa_x_load_block_cnt    <= '0;
+            qa_x_load_cnt          <= '0;
             qa_x_total_blocks_reg  <= (qa_src_w * qa_src_h * qa_src_c * FP_WIDTH) / GB_BANDWIDTH;
+        end else if (c_state == QA_LOAD_SCALE) begin
+            qa_x_total_blocks_reg  <= qa_x_total_blocks_reg;
         end else if (c_state == QA_UPDATE) begin
             qa_x_load_block_cnt    <= n_qa_x_load_block_cnt;
             qa_x_load_cnt         <= n_qa_x_load_cnt;
@@ -139,13 +150,13 @@ module qa_unit #(
     end
 
 
-    assign qa_x_load_addr    = (qa_src_addr >> 5) + qa_x_load_block_cnt + qa_x_load_cnt;
-    assign qa_save_addr      = (qa_dst_addr >> 5) + qa_save_cnt + qa_x_load_cnt / qa_single_compute_blocks * qa_single_compute_save_blocks;
+    assign qa_x_load_addr    = (qa_src_addr_reg >> 5) + qa_x_load_block_cnt + qa_x_load_cnt;
+    assign qa_save_addr      = (qa_dst_addr_reg >> 5) + qa_save_cnt + qa_x_load_cnt / qa_single_compute_blocks * qa_single_compute_save_blocks;
 
     wire [ADDR_WIDTH - 1 : 0]            qa_scale_block_addr, qa_scale_block_index;
-    assign qa_scale_block_addr           = (qa_scale_addr >> 5);
-    assign qa_scale_block_index          = qa_scale_addr[4:0];
-    assign wb_addrb = (c_state == QA_LOAD_SCALE) ? (qa_scale_addr >> 5) :'0;
+    assign qa_scale_block_addr           = (qa_scale_addr_reg >> 5);
+    assign qa_scale_block_index          = qa_scale_addr_reg[4:0];
+    assign wb_addrb = (c_state == QA_LOAD_SCALE) ? (qa_scale_addr_reg >> 5) :'0;
     assign wb_enb   = (c_state == QA_LOAD_SCALE) ? 1'b1 :1'b0;
     assign wb_web   = 1'b0;
     assign wb_dinb  = '0;
@@ -216,11 +227,11 @@ module qa_unit #(
     wire [FP_TRAN_NUM*FP_WIDTH-1:0]     s_axis_tdata;
     wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]         m_axis_int_tdata;
     assign  s_axis_tvalid = (c_state == QA_INT); 
-    assign  s_axis_tdata  = qa_fp_in_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH];
+    assign  s_axis_tdata  = qa_out_q_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH];
 
-    fp16_2_int8_array # (
+    fp32_2_int8_array # (
     .FP_TRAN_NUM(FP_TRAN_NUM)
-    )fp16_2_int8_array_inst(
+    )fp32_2_int8_array_inst(
         .clk(clk),
         .s_axis_a_tvalid(s_axis_tvalid),
         .s_axis_a_tdata(s_axis_tdata),
@@ -256,6 +267,25 @@ module qa_unit #(
         end
     end
 
+    // Latch input parameters when start is asserted
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            qa_src_addr_reg   <= '0;
+            qa_dst_addr_reg   <= '0;
+            qa_scale_addr_reg <= '0;
+            qa_src_c_reg      <= '0;
+            qa_src_h_reg      <= '0;
+            qa_src_w_reg      <= '0;
+        end else if (qa_unit_start && qa_unit_ready) begin
+            qa_src_addr_reg   <= qa_src_addr;
+            qa_dst_addr_reg   <= qa_dst_addr;
+            qa_scale_addr_reg <= qa_scale_addr;
+            qa_src_c_reg      <= qa_src_c;
+            qa_src_h_reg      <= qa_src_h;
+            qa_src_w_reg      <= qa_src_w;
+        end
+    end
+
     always@(*) begin
         n_state = c_state;
         unique case(c_state)
@@ -269,7 +299,7 @@ module qa_unit #(
             QA_UPDATE       : n_state  = QA_LOAD_X;
             QA_LOAD_X       : n_state  = QA_WAIT_X;
             QA_WAIT_X       : n_state  = qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE;
-            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE:QA_COMPUTE_WAIT;
+            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state = QA_INT_WAIT;
             QA_INT_WAIT     : begin
