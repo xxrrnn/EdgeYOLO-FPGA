@@ -58,7 +58,9 @@ module us_unit_fixed #(
     // 固定参数
     // =========================================================================
     localparam SCALE      = 2;
+    localparam SCALE_BITS = 1;  // log2(SCALE) = log2(2) = 1
     localparam LANES      = GB_BANDWIDTH / FP_WIDTH;  // 8 FP32 per word
+    localparam LANES_BITS = 3;  // log2(LANES) = log2(8) = 3
 
     // =========================================================================
     // 状态机
@@ -85,9 +87,12 @@ module us_unit_fixed #(
     // 运行时计算的参数（锁存输入配置）
     // =========================================================================
     reg [ADDR_WIDTH-1:0] in_h, in_w, c_blocks;
-    reg [ADDR_WIDTH-1:0] out_w;  // = in_w * 2
     reg [GB_ADDR_WIDTH-1:0] src_base_word;
     reg [GB_ADDR_WIDTH-1:0] dst_base_word;
+    
+    // 预计算的步长（避免重复乘法）
+    reg [GB_ADDR_WIDTH-1:0] src_row_stride;  // in_w * c_blocks
+    reg [GB_ADDR_WIDTH-1:0] dst_row_stride;  // out_w * c_blocks = (in_w << 1) * c_blocks
 
     // =========================================================================
     // 循环计数器
@@ -100,24 +105,26 @@ module us_unit_fixed #(
     reg [GB_BANDWIDTH-1:0] pixel_buf;
 
     // =========================================================================
-    // 地址计算
+    // 地址寄存器（基址 + 偏移分离，避免S_NEXT中的乘法）
     // =========================================================================
-    // 输入地址: src_base + (ih * in_w + iw) * c_blocks + cb
-    wire [GB_ADDR_WIDTH-1:0] load_addr = src_base_word
-        + (ih_cnt * in_w + iw_cnt) * c_blocks
-        + cb_cnt;
+    // 行基址（每换行时更新）
+    reg [GB_ADDR_WIDTH-1:0] src_row_base;        // ih * in_w * c_blocks
+    reg [GB_ADDR_WIDTH-1:0] dst_row_base_even;   // (2*ih) * out_w * c_blocks
+    reg [GB_ADDR_WIDTH-1:0] dst_row_base_odd;    // (2*ih+1) * out_w * c_blocks
+    
+    // 列偏移（每换列时更新，每换cb时微调）
+    reg [GB_ADDR_WIDTH-1:0] src_col_base;        // iw * c_blocks
+    reg [GB_ADDR_WIDTH-1:0] dst_col_base_even;   // (2*iw) * c_blocks
+    reg [GB_ADDR_WIDTH-1:0] dst_col_base_odd;    // (2*iw+1) * c_blocks
 
-    // 输出地址: dst_base + (oh * out_w + ow) * c_blocks + cb
-    // 4 个输出位置
-    wire [ADDR_WIDTH-1:0] oh_0 = ih_cnt * SCALE;      // 2*ih
-    wire [ADDR_WIDTH-1:0] oh_1 = ih_cnt * SCALE + 1;  // 2*ih + 1
-    wire [ADDR_WIDTH-1:0] ow_0 = iw_cnt * SCALE;      // 2*iw
-    wire [ADDR_WIDTH-1:0] ow_1 = iw_cnt * SCALE + 1;  // 2*iw + 1
-
-    wire [GB_ADDR_WIDTH-1:0] save_addr_0 = dst_base_word + (oh_0 * out_w + ow_0) * c_blocks + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_1 = dst_base_word + (oh_0 * out_w + ow_1) * c_blocks + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_2 = dst_base_word + (oh_1 * out_w + ow_0) * c_blocks + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_3 = dst_base_word + (oh_1 * out_w + ow_1) * c_blocks + cb_cnt;
+    // =========================================================================
+    // 地址计算（基址 + 偏移 + cb）
+    // =========================================================================
+    wire [GB_ADDR_WIDTH-1:0] load_addr   = src_row_base + src_col_base + cb_cnt;
+    wire [GB_ADDR_WIDTH-1:0] save_addr_0 = dst_row_base_even + dst_col_base_even + cb_cnt;
+    wire [GB_ADDR_WIDTH-1:0] save_addr_1 = dst_row_base_even + dst_col_base_odd + cb_cnt;
+    wire [GB_ADDR_WIDTH-1:0] save_addr_2 = dst_row_base_odd + dst_col_base_even + cb_cnt;
+    wire [GB_ADDR_WIDTH-1:0] save_addr_3 = dst_row_base_odd + dst_col_base_odd + cb_cnt;
 
     // =========================================================================
     // 状态机主逻辑
@@ -130,7 +137,6 @@ module us_unit_fixed #(
             cb_cnt      <= '0;
             in_h        <= '0;
             in_w        <= '0;
-            out_w       <= '0;
             c_blocks    <= '0;
             src_base_word <= '0;
             dst_base_word <= '0;
@@ -139,6 +145,15 @@ module us_unit_fixed #(
             gb_dinb     <= '0;
             gb_web      <= '0;
             gb_enb      <= 1'b0;
+            // 初始化步长和地址寄存器
+            src_row_stride      <= '0;
+            dst_row_stride      <= '0;
+            src_row_base        <= '0;
+            dst_row_base_even   <= '0;
+            dst_row_base_odd    <= '0;
+            src_col_base        <= '0;
+            dst_col_base_even   <= '0;
+            dst_col_base_odd    <= '0;
         end else begin
             // 默认清除 BRAM 控制信号
             gb_enb  <= 1'b0;
@@ -148,16 +163,32 @@ module us_unit_fixed #(
                 // ---------------------------------------------------------
                 S_IDLE: begin
                     if (us_unit_start) begin
+                        // 锁存配置参数
                         in_h          <= us_src_h;
                         in_w          <= us_src_w;
-                        out_w         <= us_src_w * SCALE;
-                        c_blocks      <= us_src_c / LANES;
+                        c_blocks      <= us_src_c >> LANES_BITS;  // 除以8用移位
                         src_base_word <= us_src_addr[ADDR_WIDTH-1:5];
                         dst_base_word <= us_dst_addr[ADDR_WIDTH-1:5];
-                        ih_cnt        <= '0;
-                        iw_cnt        <= '0;
-                        cb_cnt        <= '0;
-                        state         <= S_LOAD_REQ;
+                        
+                        // 预计算步长（只做一次乘法，后续全部增量更新）
+                        src_row_stride <= us_src_w * (us_src_c >> LANES_BITS);
+                        dst_row_stride <= (us_src_w << SCALE_BITS) * (us_src_c >> LANES_BITS);
+                        
+                        // 初始化循环计数器
+                        ih_cnt <= '0;
+                        iw_cnt <= '0;
+                        cb_cnt <= '0;
+                        
+                        // 初始化基址（位置 (0,0)）
+                        src_row_base      <= us_src_addr[ADDR_WIDTH-1:5];
+                        dst_row_base_even <= us_dst_addr[ADDR_WIDTH-1:5];
+                        dst_row_base_odd  <= us_dst_addr[ADDR_WIDTH-1:5] + (us_src_w << SCALE_BITS) * (us_src_c >> LANES_BITS);
+                        
+                        src_col_base      <= '0;
+                        dst_col_base_even <= '0;
+                        dst_col_base_odd  <= us_src_c >> LANES_BITS;  // c_blocks
+                        
+                        state <= S_LOAD_REQ;
                     end
                 end
 
@@ -218,20 +249,45 @@ module us_unit_fixed #(
                 // ---------------------------------------------------------
                 S_NEXT: begin
                     if (cb_cnt == c_blocks - 1) begin
+                        // 完成了当前像素的所有channel blocks
                         cb_cnt <= '0;
+                        
                         if (iw_cnt == in_w - 1) begin
+                            // 完成了当前行
                             iw_cnt <= '0;
+                            
                             if (ih_cnt == in_h - 1) begin
+                                // 完成了所有行
                                 state <= S_DONE;
                             end else begin
+                                // 移动到下一行：ih++
                                 ih_cnt <= ih_cnt + 1;
-                                state  <= S_LOAD_REQ;
+                                
+                                // 行基址增量更新
+                                src_row_base      <= src_row_base + src_row_stride;
+                                dst_row_base_even <= dst_row_base_even + (dst_row_stride << SCALE_BITS);  // +2行
+                                dst_row_base_odd  <= dst_row_base_odd + (dst_row_stride << SCALE_BITS);
+                                
+                                // 列偏移回到0
+                                src_col_base      <= '0;
+                                dst_col_base_even <= '0;
+                                dst_col_base_odd  <= c_blocks;
+                                
+                                state <= S_LOAD_REQ;
                             end
                         end else begin
+                            // 移动到下一列：iw++
                             iw_cnt <= iw_cnt + 1;
-                            state  <= S_LOAD_REQ;
+                            
+                            // 列偏移增量更新
+                            src_col_base      <= src_col_base + c_blocks;
+                            dst_col_base_even <= dst_col_base_even + (c_blocks << SCALE_BITS);  // +2列
+                            dst_col_base_odd  <= dst_col_base_odd + (c_blocks << SCALE_BITS);
+                            
+                            state <= S_LOAD_REQ;
                         end
                     end else begin
+                        // 下一个channel block：cb++
                         cb_cnt <= cb_cnt + 1;
                         state  <= S_LOAD_REQ;
                     end

@@ -89,23 +89,25 @@ module INST_Decoder #(
         S_IDLE           = 5'd0,
         S_FETCH_HEADER   = 5'd1,
         S_WAIT_HEADER    = 5'd2,
-        S_PARSE_HEADER   = 5'd3,
-        S_FETCH_BODY     = 5'd4,
-        S_WAIT_BODY      = 5'd5,
-        S_STORE_BODY     = 5'd6,
-        S_EXEC_NOP       = 5'd7,
-        S_EXEC_CDMA      = 5'd8,
-        S_WAIT_CDMA_CFG  = 5'd9,
-        S_WAIT_CDMA_DONE = 5'd10,
-        S_EXEC_VPU       = 5'd11,
-        S_WAIT_VPU_START = 5'd12,
-        S_WAIT_VPU_DONE  = 5'd13,
-        S_EXEC_WAIT_CDMA = 5'd14,
-        S_EXEC_WAIT_VPU  = 5'd15,
-        S_EXEC_SYNC      = 5'd16,
-        S_NEXT_INST      = 5'd17,
-        S_DONE           = 5'd18,
-        S_ERROR          = 5'd19
+        S_WAIT_HEADER_PIPE = 5'd3,  // 新增：流水线等待周期
+        S_PARSE_HEADER   = 5'd4,
+        S_FETCH_BODY     = 5'd5,
+        S_WAIT_BODY      = 5'd6,
+        S_WAIT_BODY_PIPE = 5'd7,    // 新增：流水线等待周期
+        S_STORE_BODY     = 5'd8,
+        S_EXEC_NOP       = 5'd9,
+        S_EXEC_CDMA      = 5'd10,
+        S_WAIT_CDMA_CFG  = 5'd11,
+        S_WAIT_CDMA_DONE = 5'd12,
+        S_EXEC_VPU       = 5'd13,
+        S_WAIT_VPU_START = 5'd14,
+        S_WAIT_VPU_DONE  = 5'd15,
+        S_EXEC_WAIT_CDMA = 5'd16,
+        S_EXEC_WAIT_VPU  = 5'd17,
+        S_EXEC_SYNC      = 5'd18,
+        S_NEXT_INST      = 5'd19,
+        S_DONE           = 5'd20,
+        S_ERROR          = 5'd21
     } state_t;
     
     state_t state, next_state;
@@ -123,9 +125,21 @@ module INST_Decoder #(
     reg [3:0]  body_word_count;     // 需要读取的字数
     reg [3:0]  body_word_idx;       // 当前读取的字索引
     
+    // 流水线寄存器（用于打断 BRAM → 状态机的关键路径）
+    reg [31:0] inst_rd_data_pipe;
+    
     // 启动边沿检测（修复：使用寄存器锁存pulse）
     reg decoder_start_d;
     reg decoder_start_pulse_reg;
+    
+    // 流水线寄存器：打断 BRAM → 状态机的关键路径
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            inst_rd_data_pipe <= '0;
+        end else begin
+            inst_rd_data_pipe <= inst_rd_data;
+        end
+    end
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -167,15 +181,20 @@ module INST_Decoder #(
             
             S_WAIT_HEADER: begin
                 // BRAM 读取延迟 1 周期
+                next_state = S_WAIT_HEADER_PIPE;
+            end
+            
+            S_WAIT_HEADER_PIPE: begin
+                // 流水线寄存器延迟 1 周期
                 next_state = S_PARSE_HEADER;
             end
             
             S_PARSE_HEADER: begin
-                // 直接使用 inst_rd_data 解析，避免使用未更新的寄存器
-                case (inst_rd_data[31:28])  // 使用 inst_rd_data 而不是 current_opcode
+                // 使用流水线寄存器数据
+                case (inst_rd_data_pipe[31:28])
                     OP_NOP:       next_state = S_EXEC_NOP;
-                    OP_CDMA_COPY: next_state = (inst_rd_data[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
-                    OP_VPU_EXEC:  next_state = (inst_rd_data[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
+                    OP_CDMA_COPY: next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
+                    OP_VPU_EXEC:  next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
                     OP_WAIT_CDMA: next_state = S_EXEC_WAIT_CDMA;
                     OP_WAIT_VPU:  next_state = S_EXEC_WAIT_VPU;
                     OP_SYNC:      next_state = S_EXEC_SYNC;
@@ -191,6 +210,11 @@ module INST_Decoder #(
             
             S_WAIT_BODY: begin
                 // BRAM 读取延迟 1 周期
+                next_state = S_WAIT_BODY_PIPE;
+            end
+            
+            S_WAIT_BODY_PIPE: begin
+                // 流水线寄存器延迟 1 周期
                 next_state = S_STORE_BODY;
             end
             
@@ -345,13 +369,17 @@ module INST_Decoder #(
                     // 等待 BRAM 读取（1 周期延迟）
                 end
                 
+                S_WAIT_HEADER_PIPE: begin
+                    // 等待流水线寄存器（1 周期延迟）
+                end
+                
                 S_PARSE_HEADER: begin
-                    // 读取数据已就绪
-                    inst_header <= inst_rd_data;
-                    current_opcode <= inst_rd_data[31:28];
-                    current_flags <= inst_rd_data[27:24];
-                    body_length <= inst_rd_data[23:0];
-                    body_word_count <= (inst_rd_data[23:0] + 3) >> 2;  // 向上取整到字数
+                    // 读取数据已就绪（使用流水线寄存器）
+                    inst_header <= inst_rd_data_pipe;
+                    current_opcode <= inst_rd_data_pipe[31:28];
+                    current_flags <= inst_rd_data_pipe[27:24];
+                    body_length <= inst_rd_data_pipe[23:0];
+                    body_word_count <= (inst_rd_data_pipe[23:0] + 3) >> 2;  // 向上取整到字数
                     body_word_idx <= '0;
                     current_word_idx <= current_word_idx + 1;
                     words_remaining <= words_remaining - 1;
@@ -366,9 +394,13 @@ module INST_Decoder #(
                     // 等待 BRAM 读取
                 end
                 
+                S_WAIT_BODY_PIPE: begin
+                    // 等待流水线寄存器
+                end
+                
                 S_STORE_BODY: begin
-                    // 存储读取的数据
-                    body_buffer[body_word_idx] <= inst_rd_data;
+                    // 存储读取的数据（使用流水线寄存器）
+                    body_buffer[body_word_idx] <= inst_rd_data_pipe;
                     body_word_idx <= body_word_idx + 1;
                     current_word_idx <= current_word_idx + 1;
                     words_remaining <= words_remaining - 1;
