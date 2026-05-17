@@ -17,8 +17,8 @@ module Global_VPU_top #(
     parameter C_INT_WIDTH_IN = 32,
     parameter BANDWIDTH = 256,       // BRAM 数据位宽 = NB_COL * COL_WIDTH = 32*8 = 256 bits
 
-    parameter FP_CORE_NUM = 4,
-    parameter FP_TRAN_NUM = 4,
+    parameter FP_CORE_NUM = 8,       // 每次并行处理的 FP32 数量（8 * 32 = 256 bits）
+    parameter FP_TRAN_NUM = 8,
     parameter FP_WIDTH    = 32,
     
     parameter WB_ADDR_WIDTH = 20,

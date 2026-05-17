@@ -7,7 +7,7 @@ module Global_VPU #(
     parameter C_INT_WIDTH_IN = 32,
     parameter BANDWIDTH = 256,       // 256 bits = 32 bytes per BRAM word
 
-    parameter FP_CORE_NUM = 4,
+    parameter FP_CORE_NUM = 8,       // 每次并行处理的 FP32 数量（8 * 32 = 256 bits）
     parameter FP_TRAN_NUM = 8,
     parameter FP_WIDTH    = 32,
     
