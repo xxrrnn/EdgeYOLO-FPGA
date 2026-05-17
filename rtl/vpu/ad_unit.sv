@@ -53,6 +53,14 @@ module ad_unit #(
     wire     [FP_CORE_NUM * FP_WIDTH - 1 : 0]             fp_a_tdata;
     wire     [FP_CORE_NUM * FP_WIDTH - 1 : 0]             fp_b_tdata;
     wire     [FP_CORE_NUM * FP_WIDTH - 1 : 0]             res;
+    
+    // Latched input parameters
+    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          ad_src2_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          ad_dst_addr_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_c_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_h_reg;
+    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_w_reg;
 
     /* QA ADDR GENERATE*/
     /*
@@ -68,8 +76,9 @@ module ad_unit #(
 
     */
     wire [ADDR_WIDTH - 1 : 0]                       ad_x_load_addr;
+    wire [ADDR_WIDTH - 1 : 0]                       ad_x2_load_addr;
     wire [ADDR_WIDTH - 1 : 0]                       ad_x_total_blocks;
-    assign      ad_x_total_blocks               = (ad_src_c * ad_src_h * ad_src_w * FP_WIDTH + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
+    assign      ad_x_total_blocks               = (ad_src_c_reg * ad_src_h_reg * ad_src_w_reg * FP_WIDTH + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
 
     
 
@@ -106,6 +115,10 @@ module ad_unit #(
         if(!rst_n) begin
             ad_x_load_block_cnt    <= '0;
             ad_x_load_cnt        <= '0;
+        end else if (c_state == IDLE && ad_unit_start) begin
+            // Reset counters when starting a new operation
+            ad_x_load_block_cnt    <= '0;
+            ad_x_load_cnt         <= '0;
         end else if (c_state == AD_UPDATE) begin
             ad_x_load_block_cnt    <= n_ad_x_load_block_cnt;
             ad_x_load_cnt         <= n_ad_x_load_cnt;
@@ -113,9 +126,9 @@ module ad_unit #(
     end
 
 
-    assign ad_x_load_addr    = (ad_src_addr >> 5)   + ad_x_load_block_cnt + ad_x_load_cnt;
-    assign ad_x2_load_addr   = (ad_src2_addr >> 5)  + ad_x_load_block_cnt + ad_x_load_cnt;
-    assign ad_save_addr      = (ad_dst_addr >> 5)   + ad_save_cnt + ad_x_load_cnt / ad_single_compute_blocks * ad_single_compute_save_blocks;
+    assign ad_x_load_addr    = (ad_src_addr_reg >> 5)   + ad_x_load_block_cnt + ad_x_load_cnt;
+    assign ad_x2_load_addr   = (ad_src2_addr_reg >> 5)  + ad_x_load_block_cnt + ad_x_load_cnt;
+    assign ad_save_addr      = (ad_dst_addr_reg >> 5)   + ad_save_cnt + ad_x_load_cnt / ad_single_compute_blocks * ad_single_compute_save_blocks;
 
 
     /*  X LOAD   */
@@ -126,6 +139,10 @@ module ad_unit #(
             ad_save_cnt <= '0;
         end else begin
             case (c_state)
+                IDLE: begin
+                    // 重置 ad_save_cnt，为下一次运算准备
+                    ad_save_cnt <= '0;
+                end
                 AD_WAIT_X: begin
                     // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
                     if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
@@ -140,11 +157,12 @@ module ad_unit #(
                     else
                         ad_fp_in2_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                 end
+                AD_UPDATE: begin
+                    // 在 AD_UPDATE 状态重置 ad_save_cnt，为本次迭代准备
+                    ad_save_cnt <= '0;
+                end
                 AD_SAVE: begin
                     ad_save_cnt <= ad_save_cnt + 1;
-                end
-                default: begin
-                    ad_save_cnt <= '0;
                 end
             endcase
         end
@@ -204,6 +222,25 @@ module ad_unit #(
 
 
 
+    // Latch input parameters when transitioning out of IDLE
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ad_src_addr_reg  <= '0;
+            ad_src2_addr_reg <= '0;
+            ad_dst_addr_reg  <= '0;
+            ad_src_c_reg     <= '0;
+            ad_src_h_reg     <= '0;
+            ad_src_w_reg     <= '0;
+        end else if (ad_unit_start && ad_unit_ready) begin
+            // Latch all input parameters when start is asserted and module is ready
+            ad_src_addr_reg  <= ad_src_addr;
+            ad_src2_addr_reg <= ad_src2_addr;
+            ad_dst_addr_reg  <= ad_dst_addr;
+            ad_src_c_reg     <= ad_src_c;
+            ad_src_h_reg     <= ad_src_h;
+            ad_src_w_reg     <= ad_src_w;
+        end
+    end
 
     always @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
