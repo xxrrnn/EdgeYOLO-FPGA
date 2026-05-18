@@ -47,6 +47,7 @@
     reg [31:0] cdma_dst_addr_lsb_reg;
     reg [31:0] cdma_length_reg;
     reg        sr_idle_flag;  // 锁存 SR 读取结果的 IDLE 位
+    reg [$clog2(`CDMA_COOLDOWN_CYCLES+1)-1:0] cooldown_cnt;
 
     assign cdma_axilm_awprot = '0;
     assign cdma_axilm_arprot = '0;
@@ -69,7 +70,8 @@
         CDMA_WRITE_LEN_CLR  = 8'd14,
         CDMA_POLL_ISSUE     = 8'd15,  // 发起 SR 读请求（轮询传输完成）
         CDMA_POLL_WAIT      = 8'd16,  // 等待 SR 响应
-        CDMA_POLL_CHECK     = 8'd17   // 检查 IDLE 位，决定结束或重试
+        CDMA_POLL_CHECK     = 8'd17,  // 检查 IDLE 位，决定结束或重试
+        CDMA_COOLDOWN       = 8'd18   // 等待 AXI 写路径完全 flush
     } state_t;
     (* fsm_encoding = "one_hot" *) state_t n_state, c_state;
 
@@ -105,8 +107,11 @@
             // 轮询 CDMA SR 直到 IDLE=1（传输完成）
             CDMA_POLL_ISSUE:  n_state = CDMA_POLL_WAIT;
             CDMA_POLL_WAIT:   if (r_handshake_cdma) n_state = CDMA_POLL_CHECK;
-            CDMA_POLL_CHECK:  if (sr_idle_flag) n_state = IDLE;
+            CDMA_POLL_CHECK:  if (sr_idle_flag) n_state = CDMA_COOLDOWN;
                               else              n_state = CDMA_POLL_ISSUE;
+
+            // 等待 AXI 互连写路径完全 flush 到目标 BRAM
+            CDMA_COOLDOWN:    if (cooldown_cnt == `CDMA_COOLDOWN_CYCLES) n_state = IDLE;
 
             default: n_state = IDLE;
         endcase
@@ -129,6 +134,16 @@
             sr_idle_flag <= 1'b0;
         else if (r_handshake_cdma)
             sr_idle_flag <= cdma_axilm_rdata[1];
+    end
+
+    // Cooldown 计数器：CDMA 完成后等待写路径 flush
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            cooldown_cnt <= '0;
+        else if (c_state == CDMA_COOLDOWN)
+            cooldown_cnt <= cooldown_cnt + 1;
+        else
+            cooldown_cnt <= '0;
     end
 
     // AXI-Lite 输出信号
