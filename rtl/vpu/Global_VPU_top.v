@@ -104,6 +104,12 @@ module Global_VPU_top #(
     localparam NB_COL = 32;
     localparam COL_WIDTH = 8;
 
+    // AXI BRAM Controller 输出字节地址，需要右移 log2(BANDWIDTH/8) = 5 位
+    // 转换为 BRAM word 索引（每个 word = 256 bits = 32 bytes）
+    localparam BYTE_ADDR_SHIFT = $clog2(BANDWIDTH / 8);  // = 5 for 256-bit
+    wire [GB_ADDR_WIDTH-1:0] gb_bram_word_addr = gb_bram_addr >> BYTE_ADDR_SHIFT;
+    wire [WB_ADDR_WIDTH-1:0] wb_bram_word_addr = wb_bram_addr >> BYTE_ADDR_SHIFT;
+
     // =========================================================================
     // Global_VPU 核心模块实例化
     // 直接将外部 BRAM 接口连接到 Global_VPU 的 Port A 接口
@@ -141,13 +147,13 @@ module Global_VPU_top #(
         .addr_s(addr_s),
         .addr_t(addr_t),
         // GB 接口 - 外部 BRAM Controller 通过 Port A 访问
-        .gb_addra(gb_bram_addr[GB_ADDR_WIDTH-1:0]),
+        .gb_addra(gb_bram_word_addr[GB_ADDR_WIDTH-1:0]),
         .gb_dina(gb_bram_din),
         .gb_wea(gb_bram_we),
         .gb_ena(gb_bram_en),
         .gb_douta(gb_bram_dout),
         // WB 接口 - 外部 BRAM Controller 通过 Port A 访问
-        .wb_addra(wb_bram_addr[WB_ADDR_WIDTH-1:0]),
+        .wb_addra(wb_bram_word_addr[WB_ADDR_WIDTH-1:0]),
         .wb_dina(wb_bram_din),
         .wb_wea(wb_bram_we),
         .wb_ena(wb_bram_en),
