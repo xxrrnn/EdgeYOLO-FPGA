@@ -7,7 +7,7 @@ XDMA 读写辅助模块 - 基于 xdma_rw.exe
 
 地址映射（参考 scripts/ip/bd/vpu/address.tcl）：
   0x1000_0000  staging global_bram (1MB) - 数据区
-  0x1020_0000  inst_bram (1MB) - 指令区
+  0x1020_0000  inst_bram (128KB) - 指令区
   0x1040_0000  VPU GB (128KB)
   0x1042_0000  VPU WB (128KB)
   0x1044_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 # 地址映射（与 scripts/ip/bd/vpu/address.tcl 一致）
 GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (1MB) - 数据区
-INST_BRAM_BASE = 0x10200000     # inst_bram (1MB) - 指令区
+INST_BRAM_BASE = 0x10200000     # inst_bram (128KB) - 指令区 [优化: 1MB→128KB]
 VPU_GB_BASE = 0x10400000        # VPU Global Buffer (128KB)
 VPU_WB_BASE = 0x10420000        # VPU Weight Buffer (128KB)
 VPU_REGS_BASE = 0x10440000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
