@@ -101,8 +101,22 @@ if {[llength [get_bd_pins -quiet axi_cdma_0/m_axi_aresetn]] != 0} {
   connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_cdma_0/m_axi_aresetn]
 }
 
+# ==============================================================================
+# VPU 核心模块使用独立的外部板级复位（通过 Processor System Reset 同步）
+# 原因：避免依赖 XDMA AXI 复位的不确定时序
+# ==============================================================================
+# 创建 Processor System Reset IP 用于生成同步复位
+create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 vpu_reset_sync
+set_property -dict [list CONFIG.C_AUX_RESET_HIGH {0}] [get_bd_cells vpu_reset_sync]
+
+# 将 cpu_reset (板级复位) 连接到 vpu_reset_sync
+# 注意：cpu_reset 是 ACTIVE_HIGH，vpu_reset_sync/ext_reset_in 也是 ACTIVE_HIGH
+connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins vpu_reset_sync/ext_reset_in]
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_reset_sync/slowest_sync_clk]
+
+# VPU 相关模块使用外部板级复位（同步后的 ACTIVE_LOW 信号）
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_axi_regs_0/aclk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_axi_regs_0/aresetn]
+connect_bd_net [get_bd_pins vpu_reset_sync/peripheral_aresetn] [get_bd_pins vpu_axi_regs_0/aresetn]
 
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_0/clk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_0/rst_n]
+connect_bd_net [get_bd_pins vpu_reset_sync/peripheral_aresetn] [get_bd_pins vpu_0/rst_n]
