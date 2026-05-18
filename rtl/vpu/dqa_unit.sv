@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 module dqa_unit #(
     parameter ADDR_WIDTH = 32,
@@ -9,7 +10,7 @@ module dqa_unit #(
     parameter FP_TRAN_NUM = 8,
     parameter FP_WIDTH    = 32,
     parameter WB_BANDWIDTH = 256,
-    parameter WB_ADDR_WIDTH = 32,
+    parameter WB_ADDR_WIDTH = 15,   // 字节地址位宽
     parameter MAX_CHANNEL_NUM = 64
 
 )(
@@ -110,12 +111,13 @@ module dqa_unit #(
     */
     localparam  MAX_CHANNEL_LENGTH = MAX_CHANNEL_NUM * FP_WIDTH;
     localparam  FP_CORE_LENGTH = FP_CORE_NUM* FP_WIDTH;
+    localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
     logic [ADDR_WIDTH - 1 : 0]                      dqa_x_load_addr_add, n_dqa_x_load_addr_add;
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_BYTES,DQA_SINGLE_COMPUTE_BLOCKS ;
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_SAVE_BLOCKS ;
     // localparam DQA_SINGLE_COMPUTE_BYTES        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3);
-    localparam DQA_SINGLE_COMPUTE_BLOCKS        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3) >> 5;
-    localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM << $clog2(FP_WIDTH)) >> 3) >> 5;
+    localparam DQA_SINGLE_COMPUTE_BLOCKS        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3) >> BYTE_ADDR_SHIFT;
+    localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM << $clog2(FP_WIDTH)) >> 3) >> BYTE_ADDR_SHIFT;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_load_stride;
@@ -254,7 +256,7 @@ module dqa_unit #(
     
 
 
-    assign wb_addrb = (c_state == DQA_LOAD_SCALE) ? (dqa_scale_addr_reg  >> 5) + dqa_scale_load_cnt :(c_state == DQA_LOAD_BIAS) ?  (dqa_bias_addr_reg  >> 5) + dqa_bias_load_cnt :'0;
+    assign wb_addrb = (c_state == DQA_LOAD_SCALE) ? (dqa_scale_addr_reg  >> BYTE_ADDR_SHIFT) + dqa_scale_load_cnt :(c_state == DQA_LOAD_BIAS) ?  (dqa_bias_addr_reg  >> BYTE_ADDR_SHIFT) + dqa_bias_load_cnt :'0;
     assign wb_enb   = ((c_state == DQA_LOAD_SCALE) || (c_state == DQA_LOAD_BIAS)) ? 1'b1 :1'b0;
     assign wb_web   = 1'b0;
     assign wb_dinb  = '0;
@@ -306,7 +308,7 @@ module dqa_unit #(
                 end
                 DQA_SAVE_ADDR_1: begin
                     dqa_save_cnt <= dqa_save_cnt;
-                    dqa_save_addr <= (dqa_dst_addr_reg >> 5) + dqa_x_load_addr_add;
+                    dqa_save_addr <= (dqa_dst_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add;
                 end 
                 DQA_SAVE_ADDR_2: begin
                     dqa_save_cnt <= dqa_save_cnt;
@@ -325,7 +327,7 @@ module dqa_unit #(
         gb_web   = '0;
         gb_dinb  = '0;
         if(c_state == DQA_LOAD_X ) begin
-            gb_addrb = (dqa_src_addr_reg >> 5) + dqa_x_load_addr_add;
+            gb_addrb = (dqa_src_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add;
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;

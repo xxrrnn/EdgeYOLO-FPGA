@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
 //==============================================================================
 // us_unit_fixed - 硬编码 Nearest Neighbor Upsample ×2 单元
 //==============================================================================
@@ -61,6 +62,7 @@ module us_unit_fixed #(
     localparam SCALE_BITS = 1;  // log2(SCALE) = log2(2) = 1
     localparam LANES      = GB_BANDWIDTH / FP_WIDTH;  // 8 FP32 per word
     localparam LANES_BITS = 3;  // log2(LANES) = log2(8) = 3
+    localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
     // =========================================================================
     // 状态机
@@ -167,8 +169,8 @@ module us_unit_fixed #(
                         in_h          <= us_src_h;
                         in_w          <= us_src_w;
                         c_blocks      <= us_src_c >> LANES_BITS;  // 除以8用移位
-                        src_base_word <= us_src_addr[ADDR_WIDTH-1:5];
-                        dst_base_word <= us_dst_addr[ADDR_WIDTH-1:5];
+                        src_base_word <= us_src_addr >> BYTE_ADDR_SHIFT;
+                        dst_base_word <= us_dst_addr >> BYTE_ADDR_SHIFT;
                         
                         // 预计算步长（只做一次乘法，后续全部增量更新）
                         src_row_stride <= us_src_w * (us_src_c >> LANES_BITS);
@@ -180,9 +182,9 @@ module us_unit_fixed #(
                         cb_cnt <= '0;
                         
                         // 初始化基址（位置 (0,0)）
-                        src_row_base      <= us_src_addr[ADDR_WIDTH-1:5];
-                        dst_row_base_even <= us_dst_addr[ADDR_WIDTH-1:5];
-                        dst_row_base_odd  <= us_dst_addr[ADDR_WIDTH-1:5] + (us_src_w << SCALE_BITS) * (us_src_c >> LANES_BITS);
+                        src_row_base      <= us_src_addr >> BYTE_ADDR_SHIFT;
+                        dst_row_base_even <= us_dst_addr >> BYTE_ADDR_SHIFT;
+                        dst_row_base_odd  <= (us_dst_addr >> BYTE_ADDR_SHIFT) + (us_src_w << SCALE_BITS) * (us_src_c >> LANES_BITS);
                         
                         src_col_base      <= '0;
                         dst_col_base_even <= '0;

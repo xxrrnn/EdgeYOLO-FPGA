@@ -1,26 +1,27 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 module Global_VPU #(
-    parameter ADDR_WIDTH = 32,
+    parameter ADDR_WIDTH = `VPU_DATA_WIDTH,
     
-    parameter GB_ADDR_WIDTH = 22,
-    parameter C_INT_WIDTH_IN = 32,
-    parameter BANDWIDTH = 256,       // 256 bits = 32 bytes per BRAM word
+    parameter GB_ADDR_WIDTH = `GB_ADDR_WIDTH,
+    parameter C_INT_WIDTH_IN = `C_INT_WIDTH_IN,
+    parameter BANDWIDTH = `VPU_BANDWIDTH,
 
-    parameter FP_CORE_NUM = 8,       // 每次并行处理的 FP32 数量（8 * 32 = 256 bits）
-    parameter FP_TRAN_NUM = 8,
-    parameter FP_WIDTH    = 32,
+    parameter FP_CORE_NUM = `FP_CORE_NUM,
+    parameter FP_TRAN_NUM = `FP_TRAN_NUM,
+    parameter FP_WIDTH    = `FP_WIDTH,
     
-    parameter WB_ADDR_WIDTH = 20,
-    parameter MAX_CHANNEL_NUM = 1024,
+    parameter WB_ADDR_WIDTH = `WB_ADDR_WIDTH,
+    parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM,
 
-    parameter INTERVAL_NUM = 16,
-    parameter RAM_DEPTH_GB    = 4096,
-    parameter RAM_DEPTH_WB    = 4096,
-    parameter Q_INT_WIDTH_OUT = 8,
+    parameter INTERVAL_NUM = `INTERVAL_NUM,
+    parameter RAM_DEPTH_GB    = `RAM_DEPTH_GB,
+    parameter RAM_DEPTH_WB    = `RAM_DEPTH_WB,
+    parameter Q_INT_WIDTH_OUT = `Q_INT_WIDTH_OUT,
 
-    parameter NB_COL = 32,
-    parameter COL_WIDTH = 8
+    parameter NB_COL = `NB_COL,
+    parameter COL_WIDTH = `COL_WIDTH
 
 
 )(

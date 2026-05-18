@@ -1,4 +1,6 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
+
 module nn_lut_unit#(
     parameter ADDR_WIDTH = 32,
     parameter INTERVAL_NUM = 16,
@@ -72,6 +74,7 @@ module nn_lut_unit#(
     localparam WB_ADDR_WIDTH = $clog2(RAM_DEPTH_WB);
     localparam FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
     localparam GB_BW_SHIFT = $clog2(GB_BANDWIDTH);
+    localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
     // Precomputed: total X beats (registered, not combinational)
     reg [ADDR_WIDTH - 1 : 0] x_beats_reg;
@@ -103,16 +106,16 @@ module nn_lut_unit#(
     // addr generate part
     wire [GB_ADDR_WIDTH-1:0]                 nn_src_addr_block;
     wire [GB_ADDR_WIDTH-1:0]                 nn_src_save_addr_block;
-    assign nn_src_addr_block = nn_src_addr >> 5;   
-    assign nn_src_save_addr_block = nn_dst_addr >> 5;   
+    assign nn_src_addr_block = nn_src_addr >> BYTE_ADDR_SHIFT;   
+    assign nn_src_save_addr_block = nn_dst_addr >> BYTE_ADDR_SHIFT;   
 
     wire [WB_ADDR_WIDTH-1:0]               nn_addr_break_block;
     wire [WB_ADDR_WIDTH-1:0]               nn_addr_s_block;
     wire [WB_ADDR_WIDTH-1:0]               nn_addr_t_block; 
 
-    assign     nn_addr_break_block  = nn_addr_break >> 5;
-    assign     nn_addr_s_block      = nn_addr_s >> 5;
-    assign     nn_addr_t_block      = nn_addr_t >> 5;
+    assign     nn_addr_break_block  = nn_addr_break >> BYTE_ADDR_SHIFT;
+    assign     nn_addr_s_block      = nn_addr_s >> BYTE_ADDR_SHIFT;
+    assign     nn_addr_t_block      = nn_addr_t >> BYTE_ADDR_SHIFT;
 
 
     reg [W_BEATS-1:0]       nn_w_cnt;   //write counter

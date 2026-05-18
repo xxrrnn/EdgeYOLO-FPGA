@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 module ad_unit #(
     parameter ADDR_WIDTH =      32,
@@ -31,6 +32,7 @@ module ad_unit #(
     localparam  ad_single_compute_save_blocks = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH);
     localparam  GB_BW_SHIFT = $clog2(GB_BANDWIDTH);
     localparam  FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
+    localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
 
     typedef enum logic [5:0] {
@@ -152,9 +154,9 @@ module ad_unit #(
     end
 
 
-    assign ad_x_load_addr    = (ad_src_addr_reg >> 5)   + ad_x_load_block_cnt + ad_x_load_cnt;
-    assign ad_x2_load_addr   = (ad_src2_addr_reg >> 5)  + ad_x_load_block_cnt + ad_x_load_cnt;
-    assign ad_save_addr      = (ad_dst_addr_reg >> 5)   + ad_save_cnt + ad_x_load_cnt / ad_single_compute_blocks * ad_single_compute_save_blocks;
+    assign ad_x_load_addr    = (ad_src_addr_reg >> BYTE_ADDR_SHIFT)   + ad_x_load_block_cnt + ad_x_load_cnt;
+    assign ad_x2_load_addr   = (ad_src2_addr_reg >> BYTE_ADDR_SHIFT)  + ad_x_load_block_cnt + ad_x_load_cnt;
+    assign ad_save_addr      = (ad_dst_addr_reg >> BYTE_ADDR_SHIFT)   + ad_save_cnt + ad_x_load_cnt / ad_single_compute_blocks * ad_single_compute_save_blocks;
 
 
     /*  X LOAD   */

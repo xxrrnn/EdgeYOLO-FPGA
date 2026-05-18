@@ -1,4 +1,6 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
+
 //////////////////////////////////////////////////////////////////////////////////
 // INST_BRAM - 指令存储 BRAM（双端口）
 // 
@@ -13,10 +15,10 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_BRAM #(
-    parameter DEPTH = 32768,             // BRAM 深度（32位字数）= 128KB
-    parameter ADDR_WIDTH = 15,           // log2(DEPTH)
-    parameter AXI_ADDR_WIDTH = 17,       // AXI 地址宽度（字节地址）
-    parameter AXI_DATA_WIDTH = 32,
+    parameter DEPTH = `INST_DEPTH,
+    parameter ADDR_WIDTH = `INST_ADDR_WIDTH,
+    parameter AXI_ADDR_WIDTH = `INST_AXI_ADDR_WIDTH,
+    parameter AXI_DATA_WIDTH = `INST_DATA_WIDTH,
     parameter ENABLE_PIPELINE = 1        // 启用内部流水线优化（默认开启）
 ) (
     input  wire                          clk,

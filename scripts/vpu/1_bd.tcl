@@ -49,6 +49,16 @@ foreach f $vpuRtlFiles {
 }
 
 add_files -norecurse $vpuRtlFiles
+
+# 添加头文件到项目
+set vpuHeaderFile [file normalize "$vpuRtlDir/vpu_defines.vh"]
+if {[file exists $vpuHeaderFile]} {
+    add_files -norecurse $vpuHeaderFile
+    puts "Info: Added header file: [file tail $vpuHeaderFile]"
+} else {
+    puts "WARNING: Header file not found: $vpuHeaderFile"
+}
+
 set_property include_dirs [list $vpuRtlDir "$vpuRtlDir/fp array"] [current_fileset]
 update_compile_order -fileset sources_1
 

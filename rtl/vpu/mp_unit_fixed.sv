@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
 //==============================================================================
 // mp_unit_fixed - 硬编码 5×5 MaxPooling 单元
 //==============================================================================
@@ -59,6 +60,7 @@ module mp_unit_fixed #(
 
     localparam LANES      = GB_BANDWIDTH / FP_WIDTH;  // 8 FP32 per word
     localparam C_BLOCKS   = C / LANES;                // 16
+    localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
     // FP32 负无穷 (用于 padding 区域)
     localparam [FP_WIDTH-1:0] FP32_NEG_INF = 32'hFF80_0000;
@@ -180,8 +182,8 @@ module mp_unit_fixed #(
                 // ---------------------------------------------------------
                 S_IDLE: begin
                     if (mp_unit_start) begin
-                        src_base_word <= mp_src_addr[ADDR_WIDTH-1:5]; // byte_addr >> 5 = word_addr
-                        dst_base_word <= mp_dst_addr[ADDR_WIDTH-1:5];
+                        src_base_word <= mp_src_addr >> BYTE_ADDR_SHIFT; // byte_addr >> BYTE_ADDR_SHIFT = word_addr
+                        dst_base_word <= mp_dst_addr >> BYTE_ADDR_SHIFT;
                         oh_cnt      <= '0;
                         ow_cnt      <= '0;
                         cb_cnt      <= '0;

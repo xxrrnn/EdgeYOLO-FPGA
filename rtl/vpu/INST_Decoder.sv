@@ -1,4 +1,6 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
+
 //////////////////////////////////////////////////////////////////////////////////
 // INST_Decoder - 硬件指令解码器
 // 
@@ -25,8 +27,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_Decoder #(
-    parameter INST_BRAM_DEPTH = 32768,   // inst_bram 深度（32位字数）= 128KB
-    parameter INST_ADDR_WIDTH = 15       // log2(INST_BRAM_DEPTH)
+    parameter INST_BRAM_DEPTH = `INST_DEPTH,
+    parameter INST_ADDR_WIDTH = `INST_ADDR_WIDTH
 ) (
     input  wire        clk,
     input  wire        rst_n,

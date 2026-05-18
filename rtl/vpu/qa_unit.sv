@@ -1,11 +1,12 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 module qa_unit #(
     parameter ADDR_WIDTH =      32,
     parameter GB_BANDWIDTH =    256,
     parameter GB_ADDR_WIDTH =   16,
     parameter WB_BANDWIDTH =    256,
-    parameter WB_ADDR_WIDTH =   512,
+    parameter WB_ADDR_WIDTH =   15,   // 字节地址位宽
 
     parameter FP_CORE_NUM =     8,
     parameter FP_TRAN_NUM =     8,
@@ -52,6 +53,7 @@ module qa_unit #(
     localparam  qa_single_compute_save_blocks = (FP_CORE_NUM * Q_INT_WIDTH_OUT + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
     localparam  FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
     localparam  GB_BW_SHIFT    = $clog2(GB_BANDWIDTH);
+    localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
 
     typedef enum logic [5:0] {
@@ -166,13 +168,13 @@ module qa_unit #(
     end
 
 
-    assign qa_x_load_addr    = (qa_src_addr_reg >> 5) + qa_x_load_block_cnt + qa_x_load_cnt;
-    assign qa_save_addr      = (qa_dst_addr_reg >> 5) + qa_save_cnt + qa_x_load_cnt / qa_single_compute_blocks * qa_single_compute_save_blocks;
+    assign qa_x_load_addr    = (qa_src_addr_reg >> BYTE_ADDR_SHIFT) + qa_x_load_block_cnt + qa_x_load_cnt;
+    assign qa_save_addr      = (qa_dst_addr_reg >> BYTE_ADDR_SHIFT) + qa_save_cnt + qa_x_load_cnt / qa_single_compute_blocks * qa_single_compute_save_blocks;
 
     wire [ADDR_WIDTH - 1 : 0]            qa_scale_block_addr, qa_scale_block_index;
-    assign qa_scale_block_addr           = (qa_scale_addr_reg >> 5);
-    assign qa_scale_block_index          = qa_scale_addr_reg[4:0];
-    assign wb_addrb = (c_state == QA_LOAD_SCALE) ? (qa_scale_addr_reg >> 5) :'0;
+    assign qa_scale_block_addr           = (qa_scale_addr_reg >> BYTE_ADDR_SHIFT);
+    assign qa_scale_block_index          = qa_scale_addr_reg[BYTE_ADDR_SHIFT-1:0];
+    assign wb_addrb = (c_state == QA_LOAD_SCALE) ? (qa_scale_addr_reg >> BYTE_ADDR_SHIFT) :'0;
     assign wb_enb   = (c_state == QA_LOAD_SCALE) ? 1'b1 :1'b0;
     assign wb_web   = 1'b0;
     assign wb_dinb  = '0;
@@ -371,7 +373,7 @@ module qa_unit #(
         .rst_n(rst_n),
         .pack_valid(c_state == QA_SAVE),
         .pack_data(qa_out_int_reg),
-        .pack_base_addr(qa_dst_addr_reg >> 5),
+        .pack_base_addr(qa_dst_addr_reg >> BYTE_ADDR_SHIFT),
         .pack_last(qa_done),
         .pack_reset(c_state == IDLE),
         .bram_addr(pack_wr_addr),

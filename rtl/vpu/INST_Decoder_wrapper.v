@@ -1,4 +1,6 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
+
 //////////////////////////////////////////////////////////////////////////////////
 // INST_Decoder_wrapper - Verilog wrapper for SystemVerilog INST_Decoder
 //
@@ -6,8 +8,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_Decoder_wrapper #(
-    parameter INST_BRAM_DEPTH = 262144,
-    parameter INST_ADDR_WIDTH = 18
+    parameter INST_BRAM_DEPTH = `INST_DEPTH,
+    parameter INST_ADDR_WIDTH = `INST_ADDR_WIDTH
 ) (
     input  wire        clk,
     input  wire        rst_n,

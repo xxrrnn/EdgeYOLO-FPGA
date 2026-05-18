@@ -1,12 +1,41 @@
 # VPU + XDMA/CDMA 地址映射
 #
-# 0x1000_0000  staging global_bram (1MB) - 数据区
-# 0x1020_0000  inst_bram (1MB) - 指令区
-# 0x1040_0000  VPU GB (128KB) - 通过 vpu_gb_ctrl
-# 0x1042_0000  VPU WB (128KB) - 通过 vpu_wb_ctrl
-# 0x1044_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+# 地址映射由 vpu_defines.vh 定义，通过 parse_vpu_defines.tcl 解析
+#
+# 默认映射（从 vpu_defines.vh 读取）：
+# 0x1000_0000  hbm_bram (1MB) - 暂时替代HBM的外部数据暂存区
+# 0x1010_0000  inst_bram (128KB) - 指令区
+# 0x1012_0000  VPU GB (128KB) - 通过 vpu_gb_ctrl
+# 0x1014_0000  VPU WB (32KB) - 通过 vpu_wb_ctrl
+# 0x1014_8000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
 #
 # 注意：软件不再直接访问 CDMA 寄存器，由 INST_Decoder 通过 CDMA_Controller 控制
+
+# ==============================================================================
+# 加载 VPU 参数
+# ==============================================================================
+set script_dir [file dirname [info script]]
+source [file join $script_dir "../../../common/parse_vpu_defines.tcl"]
+parse_vpu_defines [file join $script_dir "../../../../rtl/vpu/vpu_defines.vh"]
+
+# 从解析的参数中获取地址和大小
+set addr_hbm_bram   [format "0x%08X" [get_vpu_param ADDR_HBM_BRAM 0x10000000]]
+set addr_inst       [format "0x%08X" [get_vpu_param ADDR_INST_BRAM 0x10200000]]
+set addr_vpu_gb     [format "0x%08X" [get_vpu_param ADDR_VPU_GB 0x10400000]]
+set addr_vpu_wb     [format "0x%08X" [get_vpu_param ADDR_VPU_WB 0x10420000]]
+set addr_vpu_regs   [format "0x%08X" [get_vpu_param ADDR_VPU_REGS 0x10440000]]
+
+set hbm_bram_size   [bytes_to_range [get_vpu_param HBM_BRAM_SIZE_BYTES 1048576]]
+set inst_size       [bytes_to_range [get_vpu_param INST_SIZE_BYTES 1048576]]
+set gb_size         [bytes_to_range [get_vpu_param GB_SIZE_BYTES 131072]]
+set wb_size         [bytes_to_range [get_vpu_param WB_SIZE_BYTES 131072]]
+
+puts "INFO: VPU Address Map:"
+puts "  HBM_BRAM      @ $addr_hbm_bram ($hbm_bram_size)"
+puts "  INST_BRAM     @ $addr_inst ($inst_size)"
+puts "  VPU_GB        @ $addr_vpu_gb ($gb_size)"
+puts "  VPU_WB        @ $addr_vpu_wb ($wb_size)"
+puts "  VPU_REGS      @ $addr_vpu_regs (4K)"
 
 assign_bd_address
 
@@ -50,27 +79,27 @@ proc set_addr_seg_flex {patterns offset range_bytes label} {
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_global_bram_ctrl_Mem0}
   {xdma_0/M_AXI/*global_bram_ctrl*}
-} 0x10000000 1M "XDMA global_bram"
+} $addr_hbm_bram $hbm_bram_size "XDMA hbm_bram"
 
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_inst_bram_reg0}
   {xdma_0/M_AXI/*inst_bram*}
-} 0x10200000 1M "XDMA inst_bram"
+} $addr_inst $inst_size "XDMA inst_bram"
 
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_vpu_gb_ctrl_Mem0}
   {xdma_0/M_AXI/*vpu_gb_ctrl*}
-} 0x10400000 128K "XDMA VPU GB"
+} $addr_vpu_gb $gb_size "XDMA VPU GB"
 
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0}
   {xdma_0/M_AXI/*vpu_wb_ctrl*}
-} 0x10420000 128K "XDMA VPU WB"
+} $addr_vpu_wb $wb_size "XDMA VPU WB"
 
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_vpu_regs_reg0}
   {xdma_0/M_AXI/*vpu_regs*}
-} 0x10440000 4K "XDMA VPU regs"
+} $addr_vpu_regs 4K "XDMA VPU regs"
 
 # ==============================================================================
 # CDMA address space (axi_cdma_0/Data)
@@ -78,17 +107,17 @@ set_addr_seg_flex {
 set_addr_seg_flex {
   {axi_cdma_0/Data/SEG_global_bram_ctrl_Mem0}
   {axi_cdma_0/Data/*global_bram_ctrl*}
-} 0x10000000 1M "CDMA global_bram"
+} $addr_hbm_bram $hbm_bram_size "CDMA hbm_bram"
 
 set_addr_seg_flex {
   {axi_cdma_0/Data/SEG_vpu_gb_ctrl_Mem0}
   {axi_cdma_0/Data/*vpu_gb_ctrl*}
-} 0x10400000 128K "CDMA VPU GB"
+} $addr_vpu_gb $gb_size "CDMA VPU GB"
 
 set_addr_seg_flex {
   {axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0}
   {axi_cdma_0/Data/*vpu_wb_ctrl*}
-} 0x10420000 128K "CDMA VPU WB"
+} $addr_vpu_wb $wb_size "CDMA VPU WB"
 
 # ==============================================================================
 # cdma_ctrl 的 AXI-Lite Master 地址空间

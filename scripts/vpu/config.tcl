@@ -1,4 +1,4 @@
-# Global_VPU（rtl/vpu/Global_VPU_top）+ XDMA + CDMA + staging BRAM。
+# Global_VPU（rtl/vpu/Global_VPU_top）+ XDMA + CDMA + HBM BRAM（暂时替代HBM）。
 # BD：scripts/ip/bd/vpu；比特流 build/vpu/ImplOutputDir/top.bit
 
 set projName "vpu"
@@ -29,4 +29,6 @@ set placeDirective Default
 set physOptDirectiveAp Default
 set routeDirective Default
 set physOptDirectiveAr Default
+# IP综合和Block Design使用32线程（Vivado某些操作有限制）
+# 主综合和实现阶段会自动使用所有可用核心
 set_param general.maxThreads 32

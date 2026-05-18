@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 // Global_VPU_top - VPU 顶层模块
 // 修改：移除内部占位符 AXI Controller，改为暴露 BRAM 原生端口
@@ -11,23 +12,23 @@
 // - 本模块将 Port A 接口暴露为标准 BRAM 接口
 
 module Global_VPU_top #(
-    parameter ADDR_WIDTH = 32,
+    parameter ADDR_WIDTH = `VPU_DATA_WIDTH,
     
-    parameter GB_ADDR_WIDTH = 22,
-    parameter C_INT_WIDTH_IN = 32,
-    parameter BANDWIDTH = 256,       // BRAM 数据位宽 = NB_COL * COL_WIDTH = 32*8 = 256 bits
+    parameter GB_ADDR_WIDTH = `GB_ADDR_WIDTH,
+    parameter C_INT_WIDTH_IN = `C_INT_WIDTH_IN,
+    parameter BANDWIDTH = `VPU_BANDWIDTH,
 
-    parameter FP_CORE_NUM = 8,       // 每次并行处理的 FP32 数量（8 * 32 = 256 bits）
-    parameter FP_TRAN_NUM = 8,
-    parameter FP_WIDTH    = 32,
+    parameter FP_CORE_NUM = `FP_CORE_NUM,
+    parameter FP_TRAN_NUM = `FP_TRAN_NUM,
+    parameter FP_WIDTH    = `FP_WIDTH,
     
-    parameter WB_ADDR_WIDTH = 20,
-    parameter MAX_CHANNEL_NUM = 1024,
+    parameter WB_ADDR_WIDTH = `WB_ADDR_WIDTH,
+    parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM,
 
-    parameter INTERVAL_NUM = 16,
-    parameter RAM_DEPTH_GB    = 4096,  // 128KB / 32B per word = 4096 words
-    parameter RAM_DEPTH_WB    = 4096,
-    parameter Q_INT_WIDTH_OUT = 8
+    parameter INTERVAL_NUM = `INTERVAL_NUM,
+    parameter RAM_DEPTH_GB    = `RAM_DEPTH_GB,
+    parameter RAM_DEPTH_WB    = `RAM_DEPTH_WB,
+    parameter Q_INT_WIDTH_OUT = `Q_INT_WIDTH_OUT
 )(
     // 时钟和复位
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 CLK.CLK CLK" *)
@@ -58,6 +59,9 @@ module Global_VPU_top #(
     // =========================================================================
     // Global Buffer (GB) BRAM 接口 - 由外部 AXI BRAM Controller 驱动
     // 连接到 Global_VPU 内部 global_buffer_bram 的 Port A
+    // 
+    // ⚠️  注意：MEM_SIZE 必须与 vpu_defines.vh 中的 GB_SIZE_BYTES 一致
+    //     X_INTERFACE_PARAMETER 不支持参数，必须硬编码为字面常量
     // =========================================================================
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 gb_bram CLK" *)
     (* X_INTERFACE_MODE = "Slave" *)
@@ -79,10 +83,13 @@ module Global_VPU_top #(
     // =========================================================================
     // Weight Buffer (WB) BRAM 接口 - 由外部 AXI BRAM Controller 驱动
     // 连接到 Global_VPU 内部 weight_buffer_bram 的 Port A
+    // 
+    // ⚠️  注意：MEM_SIZE 必须与 vpu_defines.vh 中的 WB_SIZE_BYTES 一致
+    //     X_INTERFACE_PARAMETER 不支持参数，必须硬编码为字面常量
     // =========================================================================
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 wb_bram CLK" *)
     (* X_INTERFACE_MODE = "Slave" *)
-    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME wb_bram, MEM_SIZE 131072, MEM_WIDTH 256, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 1, READ_WRITE_MODE READ_WRITE" *)
+    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME wb_bram, MEM_SIZE 32768, MEM_WIDTH 256, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 1, READ_WRITE_MODE READ_WRITE" *)
     input  wire                      wb_bram_clk,
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 wb_bram RST" *)
     input  wire                      wb_bram_rst,
@@ -101,12 +108,12 @@ module Global_VPU_top #(
     // =========================================================================
     // 内部信号
     // =========================================================================
-    localparam NB_COL = 32;
-    localparam COL_WIDTH = 8;
+    localparam NB_COL = `NB_COL;
+    localparam COL_WIDTH = `COL_WIDTH;
 
-    // AXI BRAM Controller 输出字节地址，需要右移 log2(BANDWIDTH/8) = 5 位
+    // AXI BRAM Controller 输出字节地址，需要右移 log2(BANDWIDTH/8) 位
     // 转换为 BRAM word 索引（每个 word = 256 bits = 32 bytes）
-    localparam BYTE_ADDR_SHIFT = $clog2(BANDWIDTH / 8);  // = 5 for 256-bit
+    localparam BYTE_ADDR_SHIFT = $clog2(BANDWIDTH / 8);
     wire [GB_ADDR_WIDTH-1:0] gb_bram_word_addr = gb_bram_addr >> BYTE_ADDR_SHIFT;
     wire [WB_ADDR_WIDTH-1:0] wb_bram_word_addr = wb_bram_addr >> BYTE_ADDR_SHIFT;
 

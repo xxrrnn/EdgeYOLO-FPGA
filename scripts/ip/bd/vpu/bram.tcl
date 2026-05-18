@@ -1,12 +1,33 @@
-# Staging BRAM：由 axi_bram_ctrl 驱动
+# HBM BRAM（暂时替代HBM）：由 axi_bram_ctrl 驱动
 # VPU GB/WB：通过 AXI BRAM Controller 连接到 VPU 内部的 True Dual Port RAM
+#
+# 参数来自 vpu_defines.vh，通过 parse_vpu_defines.tcl 解析
 
 # ==============================================================================
-# Global BRAM (数据暂存区) - 1MB
+# 加载 VPU 参数
+# ==============================================================================
+set script_dir [file dirname [info script]]
+source [file join $script_dir "../../../common/parse_vpu_defines.tcl"]
+parse_vpu_defines [file join $script_dir "../../../../rtl/vpu/vpu_defines.vh"]
+
+# 从解析的参数中获取值
+set vpu_bandwidth     [get_vpu_param VPU_BANDWIDTH 256]
+set hbm_bram_depth    [get_vpu_param HBM_BRAM_DEPTH 32768]
+set gb_depth          [get_vpu_param GB_DEPTH 4096]
+set wb_depth          [get_vpu_param WB_DEPTH 1024]
+
+puts "INFO: VPU BRAM parameters:"
+puts "  VPU_BANDWIDTH  = $vpu_bandwidth"
+puts "  HBM_BRAM_DEPTH = $hbm_bram_depth"
+puts "  GB_DEPTH       = $gb_depth"
+puts "  WB_DEPTH       = $wb_depth"
+
+# ==============================================================================
+# HBM BRAM (暂时替代HBM的外部数据暂存区) - 由 HBM_BRAM_DEPTH 和 VPU_BANDWIDTH 决定大小
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 global_bram_ctrl
 set_property -dict [list \
-  CONFIG.DATA_WIDTH {256} \
+  CONFIG.DATA_WIDTH $vpu_bandwidth \
   CONFIG.SINGLE_PORT_BRAM {1} \
 ] [get_bd_cells global_bram_ctrl]
 
@@ -15,30 +36,30 @@ set_property -dict [list \
   CONFIG.use_bram_block {BRAM_Controller} \
   CONFIG.EN_SAFETY_CKT {false} \
   CONFIG.Memory_Type {Single_Port_RAM} \
-  CONFIG.Write_Depth_A {32768} \
-  CONFIG.Write_Width_A {256} \
-  CONFIG.Read_Width_A {256} \
+  CONFIG.Write_Depth_A $hbm_bram_depth \
+  CONFIG.Write_Width_A $vpu_bandwidth \
+  CONFIG.Read_Width_A $vpu_bandwidth \
   CONFIG.Byte_Size {8} \
   CONFIG.Use_Byte_Write_Enable {true} \
 ] [get_bd_cells global_bram]
 
 # ==============================================================================
-# VPU GB (Global Buffer) AXI BRAM Controller - 128KB
+# VPU GB (Global Buffer) AXI BRAM Controller
 # 连接到 VPU 内部的 True Dual Port RAM 的 Port A
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_gb_ctrl
 set_property -dict [list \
-  CONFIG.DATA_WIDTH {256} \
+  CONFIG.DATA_WIDTH $vpu_bandwidth \
   CONFIG.SINGLE_PORT_BRAM {1} \
 ] [get_bd_cells vpu_gb_ctrl]
 
 # ==============================================================================
-# VPU WB (Weight Buffer) AXI BRAM Controller - 128KB
+# VPU WB (Weight Buffer) AXI BRAM Controller
 # 连接到 VPU 内部的 True Dual Port RAM 的 Port A
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_wb_ctrl
 set_property -dict [list \
-  CONFIG.DATA_WIDTH {256} \
+  CONFIG.DATA_WIDTH $vpu_bandwidth \
   CONFIG.SINGLE_PORT_BRAM {1} \
 ] [get_bd_cells vpu_wb_ctrl]
 

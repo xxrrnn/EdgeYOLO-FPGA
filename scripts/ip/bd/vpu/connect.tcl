@@ -34,7 +34,7 @@ set_property -dict [list \
 connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI]     [get_bd_intf_pins axi_mem_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S01_AXI]
 
-# M00: staging global_bram (通过 axi_bram_ctrl) - 数据区
+# M00: hbm_bram (暂时替代HBM，通过 global_bram_ctrl) - 外部数据暂存区
 # M01: VPU GB (通过 vpu_gb_ctrl AXI BRAM Controller)
 # M02: VPU WB (通过 vpu_wb_ctrl AXI BRAM Controller)
 # M03: inst_bram (指令区，供 XDMA 写入指令)
