@@ -54,6 +54,11 @@ if {[llength $ipSynthRuns] > 0} {
     }
 }
 
+# Regenerate targets after IP synthesis to ensure stubs are up-to-date
+generate_target all [get_files $bdFile]
+export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force -quiet
+update_compile_order -fileset sources_1
+
 foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/$bdName/*.xdc"]] {
     if {[llength [get_files -quiet $xdcFile]] == 0} {
         add_files -fileset constrs_1 $xdcFile
@@ -74,6 +79,16 @@ opt_design -directive $optDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_opt.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_opt_timing_summary.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_opt_util.rpt"]
+
+# Gate: stop early if setup WNS is too negative to converge after P&R
+set wns_post_opt [get_property SLACK [get_timing_paths -max_paths 1 -delay_type max]]
+puts "INFO: Post-Opt WNS = ${wns_post_opt} ns"
+if {$wns_post_opt < -0.5} {
+    puts "ERROR: Post-Opt WNS = ${wns_post_opt} ns (< -0.5 ns threshold)"
+    puts "ERROR: Design unlikely to converge after P&R. Fix RTL and re-run."
+    puts "ERROR: Checkpoint saved: $ImplOutputDir/post_opt.dcp"
+    error "Timing gate failed: WNS = ${wns_post_opt} ns. Stopping to save time."
+}
 
 place_design -directive $placeDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]

@@ -25,8 +25,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_Decoder #(
-    parameter INST_BRAM_DEPTH = 262144,  // inst_bram 深度（32位字数）= 1MB
-    parameter INST_ADDR_WIDTH = 18       // log2(INST_BRAM_DEPTH)
+    parameter INST_BRAM_DEPTH = 32768,   // inst_bram 深度（32位字数）= 128KB
+    parameter INST_ADDR_WIDTH = 15       // log2(INST_BRAM_DEPTH)
 ) (
     input  wire        clk,
     input  wire        rst_n,
@@ -85,29 +85,33 @@ module INST_Decoder #(
     localparam [31:0] STATUS_ERROR   = 32'h8000_0000;
     
     // 状态机定义
-    typedef enum logic [4:0] {
-        S_IDLE           = 5'd0,
-        S_FETCH_HEADER   = 5'd1,
-        S_WAIT_HEADER    = 5'd2,
-        S_WAIT_HEADER_PIPE = 5'd3,  // 新增：流水线等待周期
-        S_PARSE_HEADER   = 5'd4,
-        S_FETCH_BODY     = 5'd5,
-        S_WAIT_BODY      = 5'd6,
-        S_WAIT_BODY_PIPE = 5'd7,    // 新增：流水线等待周期
-        S_STORE_BODY     = 5'd8,
-        S_EXEC_NOP       = 5'd9,
-        S_EXEC_CDMA      = 5'd10,
-        S_WAIT_CDMA_CFG  = 5'd11,
-        S_WAIT_CDMA_DONE = 5'd12,
-        S_EXEC_VPU       = 5'd13,
-        S_WAIT_VPU_START = 5'd14,
-        S_WAIT_VPU_DONE  = 5'd15,
-        S_EXEC_WAIT_CDMA = 5'd16,
-        S_EXEC_WAIT_VPU  = 5'd17,
-        S_EXEC_SYNC      = 5'd18,
-        S_NEXT_INST      = 5'd19,
-        S_DONE           = 5'd20,
-        S_ERROR          = 5'd21
+    typedef enum logic [5:0] {
+        S_IDLE            = 6'd0,
+        S_FETCH_HEADER    = 6'd1,
+        S_WAIT_HEADER     = 6'd2,
+        S_WAIT_HEADER_P1  = 6'd3,   // 流水线等待周期 1 (BRAM内部s0)
+        S_WAIT_HEADER_P2  = 6'd4,   // 流水线等待周期 2 (BRAM内部s1)  
+        S_WAIT_HEADER_P3  = 6'd5,   // 流水线等待周期 3 (BRAM输出)
+        S_PARSE_HEADER    = 6'd6,
+        S_FETCH_BODY      = 6'd7,
+        S_WAIT_BODY       = 6'd8,
+        S_WAIT_BODY_P1    = 6'd9,   // 流水线等待周期 1 (BRAM内部s0)
+        S_WAIT_BODY_P2    = 6'd10,  // 流水线等待周期 2 (BRAM内部s1)
+        S_WAIT_BODY_P3    = 6'd11,  // 流水线等待周期 3 (BRAM输出)
+        S_STORE_BODY      = 6'd12,
+        S_EXEC_NOP        = 6'd13,
+        S_EXEC_CDMA       = 6'd14,
+        S_WAIT_CDMA_CFG   = 6'd15,
+        S_WAIT_CDMA_DONE  = 6'd16,
+        S_EXEC_VPU        = 6'd17,
+        S_WAIT_VPU_START  = 6'd18,
+        S_WAIT_VPU_DONE   = 6'd19,
+        S_EXEC_WAIT_CDMA  = 6'd20,
+        S_EXEC_WAIT_VPU   = 6'd21,
+        S_EXEC_SYNC       = 6'd22,
+        S_NEXT_INST       = 6'd23,
+        S_DONE            = 6'd24,
+        S_ERROR           = 6'd25
     } state_t;
     
     state_t state, next_state;
@@ -125,21 +129,13 @@ module INST_Decoder #(
     reg [3:0]  body_word_count;     // 需要读取的字数
     reg [3:0]  body_word_idx;       // 当前读取的字索引
     
-    // 流水线寄存器（用于打断 BRAM → 状态机的关键路径）
-    reg [31:0] inst_rd_data_pipe;
+    // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
+    // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
+    wire [31:0] inst_rd_data_pipe = inst_rd_data;
     
     // 启动边沿检测（修复：使用寄存器锁存pulse）
     reg decoder_start_d;
     reg decoder_start_pulse_reg;
-    
-    // 流水线寄存器：打断 BRAM → 状态机的关键路径
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            inst_rd_data_pipe <= '0;
-        end else begin
-            inst_rd_data_pipe <= inst_rd_data;
-        end
-    end
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -175,17 +171,27 @@ module INST_Decoder #(
             end
             
             S_FETCH_HEADER: begin
-                // 发出读地址，等待 1 周期
+                // 发出读地址，等待 BRAM 流水线延迟 (4周期)
                 next_state = S_WAIT_HEADER;
             end
             
             S_WAIT_HEADER: begin
-                // BRAM 读取延迟 1 周期
-                next_state = S_WAIT_HEADER_PIPE;
+                // BRAM 内部 stage 0: mem[addr]
+                next_state = S_WAIT_HEADER_P1;
             end
             
-            S_WAIT_HEADER_PIPE: begin
-                // 流水线寄存器延迟 1 周期
+            S_WAIT_HEADER_P1: begin
+                // BRAM 内部 stage 1: s0 register
+                next_state = S_WAIT_HEADER_P2;
+            end
+            
+            S_WAIT_HEADER_P2: begin
+                // BRAM 内部 stage 2: s1 register
+                next_state = S_WAIT_HEADER_P3;
+            end
+            
+            S_WAIT_HEADER_P3: begin
+                // BRAM 输出 stage: inst_rd_data
                 next_state = S_PARSE_HEADER;
             end
             
@@ -204,17 +210,27 @@ module INST_Decoder #(
             end
             
             S_FETCH_BODY: begin
-                // 发出读地址
+                // 发出读地址，等待 BRAM 流水线延迟 (4周期)
                 next_state = S_WAIT_BODY;
             end
             
             S_WAIT_BODY: begin
-                // BRAM 读取延迟 1 周期
-                next_state = S_WAIT_BODY_PIPE;
+                // BRAM 内部 stage 0: mem[addr]
+                next_state = S_WAIT_BODY_P1;
             end
             
-            S_WAIT_BODY_PIPE: begin
-                // 流水线寄存器延迟 1 周期
+            S_WAIT_BODY_P1: begin
+                // BRAM 内部 stage 1: s0 register
+                next_state = S_WAIT_BODY_P2;
+            end
+            
+            S_WAIT_BODY_P2: begin
+                // BRAM 内部 stage 2: s1 register
+                next_state = S_WAIT_BODY_P3;
+            end
+            
+            S_WAIT_BODY_P3: begin
+                // BRAM 输出 stage: inst_rd_data
                 next_state = S_STORE_BODY;
             end
             
@@ -366,11 +382,19 @@ module INST_Decoder #(
                 end
                 
                 S_WAIT_HEADER: begin
-                    // 等待 BRAM 读取（1 周期延迟）
+                    // 等待 BRAM 内部流水线 stage 0
                 end
                 
-                S_WAIT_HEADER_PIPE: begin
-                    // 等待流水线寄存器（1 周期延迟）
+                S_WAIT_HEADER_P1: begin
+                    // 等待 BRAM 内部流水线 stage 1
+                end
+                
+                S_WAIT_HEADER_P2: begin
+                    // 等待 BRAM 内部流水线 stage 2
+                end
+                
+                S_WAIT_HEADER_P3: begin
+                    // 等待 BRAM 输出就绪
                 end
                 
                 S_PARSE_HEADER: begin
@@ -391,11 +415,19 @@ module INST_Decoder #(
                 end
                 
                 S_WAIT_BODY: begin
-                    // 等待 BRAM 读取
+                    // 等待 BRAM 内部流水线 stage 0
                 end
                 
-                S_WAIT_BODY_PIPE: begin
-                    // 等待流水线寄存器
+                S_WAIT_BODY_P1: begin
+                    // 等待 BRAM 内部流水线 stage 1
+                end
+                
+                S_WAIT_BODY_P2: begin
+                    // 等待 BRAM 内部流水线 stage 2
+                end
+                
+                S_WAIT_BODY_P3: begin
+                    // 等待 BRAM 输出就绪
                 end
                 
                 S_STORE_BODY: begin

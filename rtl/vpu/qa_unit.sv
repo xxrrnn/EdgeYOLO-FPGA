@@ -50,10 +50,14 @@ module qa_unit #(
 
     localparam  qa_single_compute_blocks      = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH) ;
     localparam  qa_single_compute_save_blocks = (FP_CORE_NUM * Q_INT_WIDTH_OUT + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
+    localparam  FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
+    localparam  GB_BW_SHIFT    = $clog2(GB_BANDWIDTH);
 
 
     typedef enum logic [5:0] {
         IDLE,
+        QA_PRECOMPUTE_1,
+        QA_PRECOMPUTE_2,
         QA_LOAD_SCALE,
         QA_WAIT_SCALE,
         QA_UPDATE,
@@ -97,20 +101,24 @@ module qa_unit #(
     */
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_load_addr;
     reg  [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks_reg;
+    reg  [ADDR_WIDTH - 1 : 0]                       qa_x_load_done_threshold;
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks;
     assign      qa_x_total_blocks             = qa_x_total_blocks_reg;
 
+    // Precompute pipeline registers
+    reg  [2*ADDR_WIDTH - 1 : 0]                     precompute_ch;
+
     
 
-    logic [ADDR_WIDTH - 1 : 0]                       qa_save_addr, qa_save_cnt, n_qa_save_cnt;
+    logic [ADDR_WIDTH - 1 : 0]                       qa_save_addr, qa_save_cnt;
     logic [ADDR_WIDTH - 1 : 0]                       qa_x_load_block_cnt,  n_qa_x_load_block_cnt;
     logic [ADDR_WIDTH - 1 : 0]                       qa_x_load_cnt,  n_qa_x_load_cnt;
-    reg   [ADDR_WIDTH - 1 : 0]                       qa_x_tran_cnt,  n_x_tran_cnt;
+    reg   [ADDR_WIDTH - 1 : 0]                       qa_x_tran_cnt;
     wire  qa_x_load_block_done, qa_save_done, qa_x_load_done, qa_done, qa_x_tran_done;
     
     assign  qa_x_load_block_done                    = (qa_x_load_block_cnt == qa_single_compute_blocks - 1);
-    assign  qa_save_done                            = (qa_save_cnt       == (qa_single_compute_save_blocks - 1));
-    assign  qa_x_load_done                          = (qa_x_load_cnt == (qa_x_total_blocks - qa_single_compute_blocks));
+    assign  qa_save_done                            = 1'b1;  // 每次 SAVE 只写 1 个 word，1 周期完成
+    assign  qa_x_load_done                          = (qa_x_load_cnt == qa_x_load_done_threshold);
     assign  qa_x_tran_done                          = (qa_x_tran_cnt == (FP_CORE_NUM / FP_TRAN_NUM)- 1);
     assign  qa_done                                 =  qa_x_load_done & qa_x_load_block_done & qa_save_done;
 
@@ -137,12 +145,20 @@ module qa_unit #(
             qa_x_load_block_cnt    <= '0;
             qa_x_load_cnt        <= '0;
             qa_x_total_blocks_reg  <= '0;
+            qa_x_load_done_threshold <= '0;
+            precompute_ch          <= '0;
         end else if (c_state == IDLE && qa_unit_start) begin
             qa_x_load_block_cnt    <= '0;
             qa_x_load_cnt          <= '0;
-            qa_x_total_blocks_reg  <= (qa_src_w * qa_src_h * qa_src_c * FP_WIDTH) / GB_BANDWIDTH;
+        end else if (c_state == QA_PRECOMPUTE_1) begin
+            precompute_ch          <= qa_src_c_reg * qa_src_h_reg;
+        end else if (c_state == QA_PRECOMPUTE_2) begin
+            precompute_ch          <= precompute_ch * qa_src_w_reg;
         end else if (c_state == QA_LOAD_SCALE) begin
-            qa_x_total_blocks_reg  <= qa_x_total_blocks_reg;
+            automatic logic [2*ADDR_WIDTH-1:0] total_bits;
+            total_bits = precompute_ch << FP_WIDTH_SHIFT;
+            qa_x_total_blocks_reg    <= total_bits[ADDR_WIDTH-1:0] >> GB_BW_SHIFT;
+            qa_x_load_done_threshold <= (total_bits[ADDR_WIDTH-1:0] >> GB_BW_SHIFT) - qa_single_compute_blocks;
         end else if (c_state == QA_UPDATE) begin
             qa_x_load_block_cnt    <= n_qa_x_load_block_cnt;
             qa_x_load_cnt         <= n_qa_x_load_cnt;
@@ -167,7 +183,7 @@ module qa_unit #(
         end
         else begin
             if(c_state == QA_WAIT_SCALE) begin
-                qa_scale_reg <= wb_doutb[(qa_scale_block_index + 1) * FP_WIDTH -: FP_WIDTH];
+                qa_scale_reg <= wb_doutb[qa_scale_block_index * FP_WIDTH +: FP_WIDTH];
             end
         end
     end
@@ -179,6 +195,9 @@ module qa_unit #(
             qa_save_cnt <= '0;
         end else begin
             case (c_state)
+                IDLE: begin
+                    qa_save_cnt <= '0;
+                end
                 QA_WAIT_X: begin
                     // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
                     // 当 FP_CORE_NUM*FP_WIDTH > GB_BANDWIDTH 时，拼接并右移
@@ -197,21 +216,29 @@ module qa_unit #(
         end
     end
 
+    // Pack writer BRAM interface (forward declaration)
+    wire                         pack_wr_en;
+    wire [GB_ADDR_WIDTH-1:0]     pack_wr_addr;
+    wire [GB_BANDWIDTH-1:0]      pack_wr_data;
+    wire [GB_BANDWIDTH/8-1:0]    pack_wr_we;
+
     always_comb begin
         gb_addrb = '0;
         gb_enb   = '0;
         gb_web   = '0;
         gb_dinb  = '0;
-        if(c_state == QA_LOAD_X ) begin
+
+        // Pack writer 最高优先级（可能在任何状态触发写入）
+        if (pack_wr_en) begin
+            gb_addrb = pack_wr_addr;
+            gb_dinb  = pack_wr_data;
+            gb_web   = pack_wr_we;
+            gb_enb   = 1'b1;
+        end else if(c_state == QA_LOAD_X ) begin
             gb_addrb = qa_x_load_addr;
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
-        end else if(c_state == QA_SAVE) begin
-            gb_addrb = qa_save_addr;
-            gb_enb   = 1'b1;
-            gb_web   = {(GB_BANDWIDTH / 8){1'b1}};
-            gb_dinb  = qa_out_int_reg[qa_save_cnt*GB_BANDWIDTH +: GB_BANDWIDTH];
         end
     end
 
@@ -239,20 +266,28 @@ module qa_unit #(
         .m_axis_result_tvalid(m_axis_int_tvalid)
     );
 
+    // FP MAC result capture (independent)
     always_ff@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
-            qa_x_tran_cnt<= '0;
             qa_out_q_reg <= '0;
-            qa_out_int_reg <= '0;
+        end else if(c_state == IDLE) begin
+            qa_out_q_reg <= '0;
         end else if(fp_res_tvalid) begin
             qa_out_q_reg <= fp_res;
-        end else if(c_state == QA_COMPUTE_WAIT && m_axis_int_tvalid) begin
+        end
+    end
+
+    // INT8 conversion result capture
+    always_ff@(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            qa_x_tran_cnt <= '0;
+            qa_out_int_reg <= '0;
+        end else if(c_state == IDLE) begin
+            qa_x_tran_cnt <= '0;
+            qa_out_int_reg <= '0;
+        end else if((c_state == QA_INT || c_state == QA_INT_WAIT) && m_axis_int_tvalid) begin
             qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
             qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
-        end else if(c_state == IDLE) begin
-            qa_x_tran_cnt<= '0;
-            qa_out_q_reg <= '0;
-            qa_out_int_reg <= '0;
         end
     end
 
@@ -291,9 +326,11 @@ module qa_unit #(
         unique case(c_state)
             IDLE: begin
                 if(qa_unit_start) begin
-                    n_state = QA_LOAD_SCALE;
+                    n_state = QA_PRECOMPUTE_1;
                 end
             end
+            QA_PRECOMPUTE_1 : n_state  = QA_PRECOMPUTE_2;
+            QA_PRECOMPUTE_2 : n_state  = QA_LOAD_SCALE;
             QA_LOAD_SCALE   : n_state  = QA_WAIT_SCALE;
             QA_WAIT_SCALE   : n_state  = QA_LOAD_X;
             QA_UPDATE       : n_state  = QA_LOAD_X;
@@ -320,6 +357,29 @@ module qa_unit #(
         endcase
 
     end
+
+    // =========================================================================
+    // INT8 Pack Writer
+    // =========================================================================
+
+    int8_pack_writer #(
+        .GB_BANDWIDTH(GB_BANDWIDTH),
+        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .PACK_WIDTH(FP_CORE_NUM * Q_INT_WIDTH_OUT)
+    ) u_pack_writer (
+        .clk(clk),
+        .rst_n(rst_n),
+        .pack_valid(c_state == QA_SAVE),
+        .pack_data(qa_out_int_reg),
+        .pack_base_addr(qa_dst_addr_reg >> 5),
+        .pack_last(qa_done),
+        .pack_reset(c_state == IDLE),
+        .bram_addr(pack_wr_addr),
+        .bram_din(pack_wr_data),
+        .bram_we(pack_wr_we),
+        .bram_en(pack_wr_en),
+        .pack_ready()
+    );
 
 
 endmodule

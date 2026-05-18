@@ -70,8 +70,12 @@ module nn_lut_unit#(
     localparam integer W_BEATS=(GB_DATALENGTH_W+GB_BANDWIDTH-1)/GB_BANDWIDTH;
 
     localparam WB_ADDR_WIDTH = $clog2(RAM_DEPTH_WB);
-    wire [ADDR_WIDTH - 1 : 0]  src_byte_length = nn_src_c * nn_src_w * nn_src_h * FP_WIDTH / 8;
-    wire       X_BEATS       = src_byte_length / GB_DATALENGTH_R - 1;
+    localparam FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
+    localparam GB_BW_SHIFT = $clog2(GB_BANDWIDTH);
+
+    // Precomputed: total X beats (registered, not combinational)
+    reg [ADDR_WIDTH - 1 : 0] x_beats_reg;
+    reg [2*ADDR_WIDTH - 1 : 0] precompute_ch_nn;
 
     // 当前状态与下一状态寄存器
     typedef enum logic [5:0] {
@@ -149,13 +153,23 @@ module nn_lut_unit#(
 
     reg [ADDR_WIDTH - 1 : 0]  x_loads, next_x_loads;
     assign next_x_loads = x_loads + 1;
-    wire all_done = (x_loads == X_BEATS);
+    wire all_done = (x_loads == x_beats_reg);
 
     always@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             x_loads <= '0;
+            precompute_ch_nn <= '0;
+            x_beats_reg <= '0;
         end else begin
-            if(c_state == NN_UPDATE) begin
+            if(c_state == IDLE && nn_unit_start) begin
+                x_loads <= '0;
+                precompute_ch_nn <= nn_src_c * nn_src_h;
+            end else if (c_state == NN_LOAD_B && x_beats_reg == '0) begin
+                // Stage 2: compute x_beats from ch * w
+                automatic logic [2*ADDR_WIDTH-1:0] total_bits;
+                total_bits = (precompute_ch_nn * nn_src_w) << FP_WIDTH_SHIFT;
+                x_beats_reg <= (total_bits[ADDR_WIDTH-1:0] >> $clog2(GB_DATALENGTH_R * 8)) - 1;
+            end else if(c_state == NN_UPDATE) begin
                 x_loads <= next_x_loads;
             end
         end
@@ -284,7 +298,7 @@ endgenerate
 
             //---------------------------------
             NN_LOAD_X: begin
-                gb_addrb = nn_src_addr_block + nn_r_cnt + x_loads * (GB_DATALENGTH_R << 5);
+                gb_addrb = nn_src_addr_block + nn_r_cnt + (x_loads << $clog2(R_BEATS));
                 gb_enb = 1'b1;
             end
             NN_WAIT_X: begin
@@ -298,7 +312,7 @@ endgenerate
                     gb_web = {(GB_BANDWIDTH / 8){1'b1}};
                     gb_enb = 1'b1;
                     gb_dinb = silu_out_total[nn_w_cnt*GB_BANDWIDTH +: GB_BANDWIDTH];          
-                    gb_addrb = nn_src_save_addr_block + nn_w_cnt + x_loads * GB_DATALENGTH_W;
+                    gb_addrb = nn_src_save_addr_block + nn_w_cnt + (x_loads << $clog2(W_BEATS));
                 end else begin
                     gb_web = 1'b0;
                     gb_enb = 1'b0;

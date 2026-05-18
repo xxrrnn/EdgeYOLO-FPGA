@@ -275,16 +275,44 @@ module tb_qa_unit;
             $display("  Done! Took %0d cycles", cycle_count);
             repeat(5) @(posedge clk);
 
-            // Verify DST non-zero
+            // Bit-exact verification: compare INT8 output vs golden model
             begin
-                int nonzero = 0;
-                for (int w = 0; w < num_dst_int8_words; w++)
-                    if (u_bram.BRAM[dst_word + w] !== '0) nonzero++;
-                if (nonzero == 0) begin
-                    $display("  FAIL: All DST words are zero!");
-                    test_errors = num_elements;
+                int error_count = 0;
+                int int8_per_word = GB_BANDWIDTH / Q_INT_WIDTH_OUT;  // 32
+                for (int elem = 0; elem < num_elements; elem++) begin
+                    automatic int word_idx = elem / int8_per_word;
+                    automatic int bit_offset = (elem % int8_per_word) * Q_INT_WIDTH_OUT;
+                    automatic reg signed [Q_INT_WIDTH_OUT-1:0] actual_int8;
+                    automatic real fp_product;
+                    automatic int expected_int8;
+
+                    actual_int8 = u_bram.BRAM[dst_word + word_idx][bit_offset +: Q_INT_WIDTH_OUT];
+
+                    // Golden: round(clamp(input * scale, -128, 127))
+                    fp_product = (elem + 1) * scale_value;
+                    if (fp_product > 127.0) expected_int8 = 127;
+                    else if (fp_product < -128.0) expected_int8 = -128;
+                    else expected_int8 = int'(fp_product);  // truncate toward zero
+
+                    if (int'(actual_int8) != expected_int8) begin
+                        // Allow ±1 rounding difference (FP rounding modes)
+                        if ((int'(actual_int8) - expected_int8 > 1) ||
+                            (int'(actual_int8) - expected_int8 < -1)) begin
+                            error_count++;
+                            if (error_count <= 10)
+                                $display("    X [%0d] exp=%0d, act=%0d (fp=%.4f)",
+                                    elem, expected_int8, int'(actual_int8), fp_product);
+                        end
+                    end else if (elem < 16) begin
+                        $display("    V [%0d] val=%0d (fp=%.2f)", elem, int'(actual_int8), fp_product);
+                    end
+                end
+
+                if (error_count == 0) begin
+                    $display("  OK: All %0d INT8 elements verified!", num_elements);
                 end else begin
-                    $display("  OK: %0d/%0d DST words written", nonzero, num_dst_int8_words);
+                    $display("  FAIL: %0d/%0d elements incorrect!", error_count, num_elements);
+                    test_errors = error_count;
                 end
             end
         end

@@ -111,14 +111,18 @@ module mp_unit_fixed #(
     wire signed [5:0] iw = $signed({1'b0, ow_cnt}) + $signed({1'b0, kw_cnt}) - $signed(6'sd2);
     wire in_bounds = (ih >= 0) && (ih < H) && (iw >= 0) && (iw < W);
 
+    // C_BLOCKS is power of 2, use shift
+    localparam C_BLOCKS_SHIFT = $clog2(C_BLOCKS);  // 4
+    localparam ROW_STRIDE = W * C_BLOCKS;  // 160, constant for synthesis
+
     wire [GB_ADDR_WIDTH-1:0] load_addr = src_base_word
-        + ih[3:0] * (W * C_BLOCKS)
-        + iw[3:0] * C_BLOCKS
+        + ih[3:0] * ROW_STRIDE
+        + (iw[3:0] << C_BLOCKS_SHIFT)
         + cb_cnt;
 
     wire [GB_ADDR_WIDTH-1:0] save_addr = dst_base_word
         + oh_cnt * (OW * C_BLOCKS)
-        + ow_cnt * C_BLOCKS
+        + (ow_cnt << C_BLOCKS_SHIFT)
         + cb_cnt;
 
     // =========================================================================

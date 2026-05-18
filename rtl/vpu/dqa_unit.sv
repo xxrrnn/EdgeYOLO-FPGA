@@ -117,13 +117,20 @@ module dqa_unit #(
     localparam DQA_SINGLE_COMPUTE_BLOCKS        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3) >> 5;
     localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM << $clog2(FP_WIDTH)) >> 3) >> 5;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
-    assign dqa_w_load_stride = (dqa_src_c_reg * C_INT_WIDTH_IN) >> (3 + 5);
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
-    assign dqa_w_save_stride = (dqa_src_c_reg << $clog2(FP_WIDTH)) >> (3 + 5);;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_load_stride;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_save_stride;
-    assign dqa_h_load_stride = (dqa_src_w_reg * dqa_src_c_reg << $clog2(C_INT_WIDTH_IN)) >> (3 + 5);;
-    assign dqa_h_save_stride = (dqa_src_w_reg * dqa_src_c_reg << $clog2(FP_WIDTH)) >> (3 + 5);;
+
+    // Precomputed strides (registered to break combinational multiply)
+    reg [ADDR_WIDTH - 1 : 0] dqa_w_load_stride_reg;
+    reg [ADDR_WIDTH - 1 : 0] dqa_w_save_stride_reg;
+    reg [ADDR_WIDTH - 1 : 0] dqa_h_load_stride_reg;
+    reg [ADDR_WIDTH - 1 : 0] dqa_h_save_stride_reg;
+
+    assign dqa_w_load_stride = dqa_w_load_stride_reg;
+    assign dqa_w_save_stride = dqa_w_save_stride_reg;
+    assign dqa_h_load_stride = dqa_h_load_stride_reg;
+    assign dqa_h_save_stride = dqa_h_save_stride_reg;
 
 
     reg [ADDR_WIDTH - 1 : 0]                       dqa_save_addr, dqa_save_cnt;
@@ -414,6 +421,10 @@ module dqa_unit #(
             dqa_src_c_reg      <= '0;
             dqa_src_h_reg      <= '0;
             dqa_src_w_reg      <= '0;
+            dqa_w_load_stride_reg <= '0;
+            dqa_w_save_stride_reg <= '0;
+            dqa_h_load_stride_reg <= '0;
+            dqa_h_save_stride_reg <= '0;
         end else if (dqa_unit_start && dqa_unit_ready) begin
             dqa_src_addr_reg   <= dqa_src_addr;
             dqa_dst_addr_reg   <= dqa_dst_addr;
@@ -422,6 +433,11 @@ module dqa_unit #(
             dqa_src_c_reg      <= dqa_src_c;
             dqa_src_h_reg      <= dqa_src_h;
             dqa_src_w_reg      <= dqa_src_w;
+            // Precompute strides using shifts (C_INT_WIDTH_IN and FP_WIDTH are powers of 2)
+            dqa_w_load_stride_reg <= (dqa_src_c << $clog2(C_INT_WIDTH_IN)) >> (3 + 5);
+            dqa_w_save_stride_reg <= (dqa_src_c << $clog2(FP_WIDTH)) >> (3 + 5);
+            dqa_h_load_stride_reg <= (dqa_src_w * dqa_src_c) << ($clog2(C_INT_WIDTH_IN) - 3 - 5);
+            dqa_h_save_stride_reg <= (dqa_src_w * dqa_src_c) << ($clog2(FP_WIDTH) - 3 - 5);
         end
     end
 
