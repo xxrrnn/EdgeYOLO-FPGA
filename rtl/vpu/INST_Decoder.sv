@@ -106,6 +106,7 @@ module INST_Decoder #(
         S_WAIT_CDMA_CFG   = 6'd15,
         S_WAIT_CDMA_DONE  = 6'd16,
         S_EXEC_VPU        = 6'd17,
+        S_VPU_CDMA_FENCE  = 6'd26,  // CDMA 空闲后等待 AXI 写缓冲 flush
         S_WAIT_VPU_START  = 6'd18,
         S_WAIT_VPU_DONE   = 6'd19,
         S_EXEC_WAIT_CDMA  = 6'd20,
@@ -130,6 +131,7 @@ module INST_Decoder #(
     reg [31:0] body_buffer [0:11];
     reg [3:0]  body_word_count;     // 需要读取的字数
     reg [3:0]  body_word_idx;       // 当前读取的字索引
+    reg [3:0]  fence_cnt;           // CDMA→VPU fence 延迟计数器
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -267,7 +269,16 @@ module INST_Decoder #(
             end
             
             S_EXEC_VPU: begin
-                next_state = S_WAIT_VPU_START;
+                // 确保 CDMA 完全空闲后再启动 VPU
+                // (防止 AXI BRAM Controller Port A 残留活动干扰 VPU 的 Port B 读取)
+                if (cdma_config_ready)
+                    next_state = S_VPU_CDMA_FENCE;
+            end
+            
+            S_VPU_CDMA_FENCE: begin
+                // 等待 AXI 写缓冲 flush (8 个周期)
+                if (fence_cnt == 4'd8)
+                    next_state = S_WAIT_VPU_START;
             end
             
             S_WAIT_VPU_START: begin
@@ -352,6 +363,7 @@ module INST_Decoder #(
             inst_header <= '0;
             body_word_count <= '0;
             body_word_idx <= '0;
+            fence_cnt <= '0;
             
             for (int i = 0; i < 12; i++)
                 body_buffer[i] <= '0;
@@ -482,6 +494,11 @@ module INST_Decoder #(
                     vpu_addr_break  <= body_buffer[9];
                     vpu_addr_s      <= body_buffer[10];
                     vpu_addr_t      <= body_buffer[11];
+                    fence_cnt       <= '0;
+                end
+                
+                S_VPU_CDMA_FENCE: begin
+                    fence_cnt <= fence_cnt + 1;
                 end
                 
                 S_WAIT_VPU_START: begin

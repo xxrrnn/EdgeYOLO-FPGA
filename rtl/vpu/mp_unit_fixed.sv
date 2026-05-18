@@ -70,7 +70,6 @@ module mp_unit_fixed #(
     // =========================================================================
     typedef enum logic [3:0] {
         S_IDLE,
-        S_INIT,
         S_LOAD_REQ,      // 发出 BRAM 读请求
         S_LOAD_WAIT,     // 等待 BRAM 读延迟
         S_LOAD_CMP,      // 读取数据并与当前最大值比较

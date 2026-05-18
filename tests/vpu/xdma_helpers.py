@@ -21,12 +21,12 @@ import time
 from pathlib import Path
 from dataclasses import dataclass
 
-# 地址映射（与 scripts/ip/bd/vpu/address.tcl 一致）
-GLOBAL_BRAM_BASE = 0x10000000   # staging global_bram (1MB) - 数据区
-INST_BRAM_BASE = 0x10200000     # inst_bram (128KB) - 指令区 [优化: 1MB→128KB]
-VPU_GB_BASE = 0x10400000        # VPU Global Buffer (128KB)
-VPU_WB_BASE = 0x10420000        # VPU Weight Buffer (128KB)
-VPU_REGS_BASE = 0x10440000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
+# 地址映射（与 rtl/vpu/vpu_defines.vh 一致）
+GLOBAL_BRAM_BASE = 0x10000000   # HBM BRAM (1MB) - 暂时替代HBM的外部数据暂存区
+INST_BRAM_BASE = 0x10100000     # inst_bram (128KB) - 指令区
+VPU_GB_BASE = 0x10120000        # VPU Global Buffer (128KB)
+VPU_WB_BASE = 0x10140000        # VPU Weight Buffer (32KB)
+VPU_REGS_BASE = 0x10148000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
 
 # 兼容旧代码：CDMA_BASE 已移除（软件不再直接访问 CDMA 寄存器）
 class _DeprecatedCDMABase:
