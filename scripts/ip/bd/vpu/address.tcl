@@ -5,9 +5,10 @@
 # 默认映射（从 vpu_defines.vh 读取）：
 # 0x1000_0000  hbm_bram (1MB) - 暂时替代HBM的外部数据暂存区
 # 0x1010_0000  inst_bram (128KB) - 指令区
-# 0x1012_0000  VPU GB (128KB) - 通过 vpu_gb_ctrl
-# 0x1014_0000  VPU WB (32KB) - 通过 vpu_wb_ctrl
-# 0x1014_8000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+# 0x1018_0000  VPU GB (512KB, 512KB-aligned) - 通过 vpu_gb_ctrl
+# 0x1020_0000  VPU WB (32KB) - 通过 vpu_wb_ctrl
+# 0x1020_8000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+# 0x1012_0000–0x1017_FFFF 保留未用
 #
 # 注意：软件不再直接访问 CDMA 寄存器，由 INST_Decoder 通过 CDMA_Controller 控制
 
@@ -28,7 +29,7 @@ set addr_vpu_regs   [format "0x%08X" [get_vpu_param ADDR_VPU_REGS 0x10440000]]
 set hbm_bram_size   [bytes_to_range [get_vpu_param HBM_BRAM_SIZE_BYTES 1048576]]
 set inst_size       [bytes_to_range [get_vpu_param INST_SIZE_BYTES 1048576]]
 set gb_size         [bytes_to_range [get_vpu_param GB_SIZE_BYTES 131072]]
-set wb_size         [bytes_to_range [get_vpu_param WB_SIZE_BYTES 131072]]
+set wb_size         [bytes_to_range [get_vpu_param WB_SIZE_BYTES 32768]]
 
 puts "INFO: VPU Address Map:"
 puts "  HBM_BRAM      @ $addr_hbm_bram ($hbm_bram_size)"
@@ -74,8 +75,31 @@ proc set_addr_seg_flex {patterns offset range_bytes label} {
 }
 
 # ==============================================================================
-# XDMA address space (xdma_0/M_AXI)
+# XDMA / CDMA 地址空间
+# assign_bd_address 默认将 WB 放在 0x10140000，会挡住 GB 扩到 256KB。
+# 必须先 relocation WB/REGS，再扩展 GB range。
 # ==============================================================================
+set xdma_wb_patterns {
+  {xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0}
+  {xdma_0/M_AXI/*vpu_wb_ctrl*}
+}
+set xdma_regs_patterns {
+  {xdma_0/M_AXI/SEG_vpu_regs_reg0}
+  {xdma_0/M_AXI/*vpu_regs*}
+}
+set xdma_gb_patterns {
+  {xdma_0/M_AXI/SEG_vpu_gb_ctrl_Mem0}
+  {xdma_0/M_AXI/*vpu_gb_ctrl*}
+}
+set cdma_wb_patterns {
+  {axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0}
+  {axi_cdma_0/Data/*vpu_wb_ctrl*}
+}
+set cdma_gb_patterns {
+  {axi_cdma_0/Data/SEG_vpu_gb_ctrl_Mem0}
+  {axi_cdma_0/Data/*vpu_gb_ctrl*}
+}
+
 set_addr_seg_flex {
   {xdma_0/M_AXI/SEG_global_bram_ctrl_Mem0}
   {xdma_0/M_AXI/*global_bram_ctrl*}
@@ -86,38 +110,21 @@ set_addr_seg_flex {
   {xdma_0/M_AXI/*inst_bram*}
 } $addr_inst $inst_size "XDMA inst_bram"
 
-set_addr_seg_flex {
-  {xdma_0/M_AXI/SEG_vpu_gb_ctrl_Mem0}
-  {xdma_0/M_AXI/*vpu_gb_ctrl*}
-} $addr_vpu_gb $gb_size "XDMA VPU GB"
+# 1) 先挪 WB / REGS（assign_bd_address 默认 WB@0x10140000 会挡住 256KB GB）
+set_addr_seg_flex $xdma_wb_patterns $addr_vpu_wb $wb_size "XDMA VPU WB"
+set_addr_seg_flex $xdma_regs_patterns $addr_vpu_regs 4K "XDMA VPU regs"
 
-set_addr_seg_flex {
-  {xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0}
-  {xdma_0/M_AXI/*vpu_wb_ctrl*}
-} $addr_vpu_wb $wb_size "XDMA VPU WB"
+# 2) 再扩展 GB 到 256KB
+set_addr_seg_flex $xdma_gb_patterns $addr_vpu_gb $gb_size "XDMA VPU GB"
 
-set_addr_seg_flex {
-  {xdma_0/M_AXI/SEG_vpu_regs_reg0}
-  {xdma_0/M_AXI/*vpu_regs*}
-} $addr_vpu_regs 4K "XDMA VPU regs"
-
-# ==============================================================================
-# CDMA address space (axi_cdma_0/Data)
-# ==============================================================================
+# CDMA 同样顺序
 set_addr_seg_flex {
   {axi_cdma_0/Data/SEG_global_bram_ctrl_Mem0}
   {axi_cdma_0/Data/*global_bram_ctrl*}
 } $addr_hbm_bram $hbm_bram_size "CDMA hbm_bram"
 
-set_addr_seg_flex {
-  {axi_cdma_0/Data/SEG_vpu_gb_ctrl_Mem0}
-  {axi_cdma_0/Data/*vpu_gb_ctrl*}
-} $addr_vpu_gb $gb_size "CDMA VPU GB"
-
-set_addr_seg_flex {
-  {axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0}
-  {axi_cdma_0/Data/*vpu_wb_ctrl*}
-} $addr_vpu_wb $wb_size "CDMA VPU WB"
+set_addr_seg_flex $cdma_wb_patterns $addr_vpu_wb $wb_size "CDMA VPU WB"
+set_addr_seg_flex $cdma_gb_patterns $addr_vpu_gb $gb_size "CDMA VPU GB"
 
 # ==============================================================================
 # cdma_ctrl 的 AXI-Lite Master 地址空间

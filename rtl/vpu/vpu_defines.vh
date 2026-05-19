@@ -57,16 +57,18 @@
 
 //==============================================================================
 // Global Buffer (GB) 参数
-// 容量：128KB
+// 容量：512KB（支持 128ch×10×10 US 输入+20×20输出，含余量）
 // 
 // ⚠️  IMPORTANT: 修改 GB_SIZE_BYTES 时，必须同步更新：
-//     - Global_VPU_top.v 第65行: X_INTERFACE_PARAMETER MEM_SIZE 值
+//     - Global_VPU_top.v: X_INTERFACE_PARAMETER MEM_SIZE 值
+//     - scripts/ip/bd/vpu/address.tcl（重新 assign_bd_address）
+//     - 软件地址 VPU_WB_BASE / VPU_REGS_BASE（WB/REGS 随 GB 后移）
 //==============================================================================
-`define GB_SIZE_BYTES           131072                              // 128KB
+`define GB_SIZE_BYTES           524288                              // 512KB
 `define GB_BANDWIDTH            `VPU_BANDWIDTH                      // 256 bits
-`define GB_DEPTH                (`GB_SIZE_BYTES / `VPU_BYTES_PER_WORD)  // 4096 words
-`define GB_WORD_ADDR_WIDTH      12                                  // $clog2(4096) = 12
-`define GB_ADDR_WIDTH           17                                  // 字节地址位宽 = $clog2(128KB) = 17
+`define GB_DEPTH                (`GB_SIZE_BYTES / `VPU_BYTES_PER_WORD)  // 16384 words
+`define GB_WORD_ADDR_WIDTH      14                                  // $clog2(16384) = 14
+`define GB_ADDR_WIDTH           19                                  // 字节地址位宽 = $clog2(512KB) = 19
 
 //==============================================================================
 // Weight Buffer (WB) 参数
@@ -103,7 +105,7 @@
 //==============================================================================
 // RAM 深度参数（用于 Global_VPU 等模块）
 //==============================================================================
-`define RAM_DEPTH_GB            `GB_DEPTH                           // 4096
+`define RAM_DEPTH_GB            `GB_DEPTH                           // 16384
 `define RAM_DEPTH_WB            `WB_DEPTH                           // 1024
 
 //==============================================================================
@@ -114,9 +116,10 @@
 
 `define ADDR_HBM_BRAM           32'h1000_0000       // HBM BRAM base (1MB, 暂时替代HBM)
 `define ADDR_INST_BRAM          32'h1010_0000       // Instruction BRAM base (128KB)
-`define ADDR_VPU_GB             32'h1012_0000       // VPU Global Buffer base (128KB)
-`define ADDR_VPU_WB             32'h1014_0000       // VPU Weight Buffer base (32KB)
-`define ADDR_VPU_REGS           32'h1014_8000       // VPU AXI Registers base (4KB)
+// GB 512KB 须 512KB 对齐（0x80000）
+`define ADDR_VPU_GB             32'h1018_0000       // VPU Global Buffer base (512KB)
+`define ADDR_VPU_WB             32'h1020_0000       // VPU Weight Buffer base (32KB)
+`define ADDR_VPU_REGS           32'h1020_8000       // VPU AXI Registers base (4KB)
 
 //==============================================================================
 // CDMA 完成后 cooldown 等待周期数

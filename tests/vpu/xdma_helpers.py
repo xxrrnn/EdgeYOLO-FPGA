@@ -7,10 +7,10 @@ XDMA 读写辅助模块 - 基于 xdma_rw.exe
 
 地址映射（参考 scripts/ip/bd/vpu/address.tcl）：
   0x1000_0000  staging global_bram (1MB) - 数据区
-  0x1020_0000  inst_bram (128KB) - 指令区
-  0x1040_0000  VPU GB (128KB)
-  0x1042_0000  VPU WB (128KB)
-  0x1044_0000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+  0x1010_0000  inst_bram (128KB) - 指令区
+  0x1012_0000  VPU GB (256KB)
+  0x1016_0000  VPU WB (32KB)
+  0x1016_8000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ from dataclasses import dataclass
 # 地址映射（与 rtl/vpu/vpu_defines.vh 一致）
 GLOBAL_BRAM_BASE = 0x10000000   # HBM BRAM (1MB) - 暂时替代HBM的外部数据暂存区
 INST_BRAM_BASE = 0x10100000     # inst_bram (128KB) - 指令区
-VPU_GB_BASE = 0x10120000        # VPU Global Buffer (128KB)
-VPU_WB_BASE = 0x10140000        # VPU Weight Buffer (32KB)
-VPU_REGS_BASE = 0x10148000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
+VPU_GB_BASE = 0x10180000        # VPU Global Buffer (512KB, 512KB-aligned)
+VPU_WB_BASE = 0x10200000        # VPU Weight Buffer (32KB)
+VPU_REGS_BASE = 0x10208000      # VPU AXI Regs (4KB) - 配置 + 状态 + 解码器控制
 
 # 兼容旧代码：CDMA_BASE 已移除（软件不再直接访问 CDMA 寄存器）
 class _DeprecatedCDMABase:

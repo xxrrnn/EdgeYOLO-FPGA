@@ -411,48 +411,49 @@ nn_lut_unit #(
     );
 
     assign config_ready = nn_unit_ready & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready;
-    assign dqa_unit_start = (unit_choose == UNIT_DQA) ? start : 1'b0;
-    assign qa_unit_start  = (unit_choose == UNIT_QA ) ? start : 1'b0;
-    assign nn_unit_start  = (unit_choose == UNIT_NN ) ? start : 1'b0;
-    assign mp_unit_start  = (unit_choose == UNIT_MP ) ? start : 1'b0;
-    assign us_unit_start  = (unit_choose == UNIT_US ) ? start : 1'b0;
-    assign ad_unit_start  = (unit_choose == UNIT_AD ) ? start : 1'b0;
+    // 使用 unit_choose_reg（锁存配置），避免运算期间 unit_choose 输入变化导致 GB 端口切换
+    assign dqa_unit_start = (unit_choose_reg == UNIT_DQA) ? start : 1'b0;
+    assign qa_unit_start  = (unit_choose_reg == UNIT_QA ) ? start : 1'b0;
+    assign nn_unit_start  = (unit_choose_reg == UNIT_NN ) ? start : 1'b0;
+    assign mp_unit_start  = (unit_choose_reg == UNIT_MP ) ? start : 1'b0;
+    assign us_unit_start  = (unit_choose_reg == UNIT_US ) ? start : 1'b0;
+    assign ad_unit_start  = (unit_choose_reg == UNIT_AD ) ? start : 1'b0;
 
 
  // GB Address (Output from Unit to BRAM)
-assign gb_addrb = (unit_choose == UNIT_DQA) ? dqa_gb_addrb : 
-                  (unit_choose == UNIT_NN) ? nn_gb_addrb : 
-                  (unit_choose == UNIT_QA) ? qa_gb_addrb : // Handles QA and SU due to 2'b11
-                  (unit_choose == UNIT_MP) ? mp_gb_addrb : 
-                  (unit_choose == UNIT_US) ? us_gb_addrb : 
-                  (unit_choose == UNIT_AD) ? ad_gb_addrb : 
+assign gb_addrb = (unit_choose_reg == UNIT_DQA) ? dqa_gb_addrb : 
+                  (unit_choose_reg == UNIT_NN) ? nn_gb_addrb : 
+                  (unit_choose_reg == UNIT_QA) ? qa_gb_addrb : // Handles QA and SU due to 2'b11
+                  (unit_choose_reg == UNIT_MP) ? mp_gb_addrb : 
+                  (unit_choose_reg == UNIT_US) ? us_gb_addrb : 
+                  (unit_choose_reg == UNIT_AD) ? ad_gb_addrb : 
                                                   {GB_ADDR_WIDTH{1'b0}};
 
 // GB Data Input (Output from Unit to BRAM write port)
-assign gb_dinb = (unit_choose == UNIT_DQA) ? dqa_gb_dinb : 
-                  (unit_choose == UNIT_NN) ? nn_gb_dinb  : 
-                  (unit_choose == UNIT_QA) ? qa_gb_dinb  : // Handles QA and SU due to 2'b11
-                  (unit_choose == UNIT_MP) ? mp_gb_dinb  : 
-                  (unit_choose == UNIT_US) ? us_gb_dinb  : 
-                  (unit_choose == UNIT_AD) ? ad_gb_dinb  : 
+assign gb_dinb = (unit_choose_reg == UNIT_DQA) ? dqa_gb_dinb : 
+                  (unit_choose_reg == UNIT_NN) ? nn_gb_dinb  : 
+                  (unit_choose_reg == UNIT_QA) ? qa_gb_dinb  : // Handles QA and SU due to 2'b11
+                  (unit_choose_reg == UNIT_MP) ? mp_gb_dinb  : 
+                  (unit_choose_reg == UNIT_US) ? us_gb_dinb  : 
+                  (unit_choose_reg == UNIT_AD) ? ad_gb_dinb  : 
                                                   {GB_BANDWIDTH{1'b0}};
 
 // GB Write Enable (Output from Unit to BRAM)
-assign gb_web  = (unit_choose == UNIT_DQA) ? dqa_gb_web  : 
-                  (unit_choose == UNIT_NN) ? nn_gb_web  : 
-                  (unit_choose == UNIT_QA) ? qa_gb_web  : // Handles QA and SU due to 2'b11
-                  (unit_choose == UNIT_MP) ? mp_gb_web  : 
-                  (unit_choose == UNIT_US) ? us_gb_web  : 
-                  (unit_choose == UNIT_AD) ? ad_gb_web  : 
+assign gb_web  = (unit_choose_reg == UNIT_DQA) ? dqa_gb_web  : 
+                  (unit_choose_reg == UNIT_NN) ? nn_gb_web  : 
+                  (unit_choose_reg == UNIT_QA) ? qa_gb_web  : // Handles QA and SU due to 2'b11
+                  (unit_choose_reg == UNIT_MP) ? mp_gb_web  : 
+                  (unit_choose_reg == UNIT_US) ? us_gb_web  : 
+                  (unit_choose_reg == UNIT_AD) ? ad_gb_web  : 
                                                   {GB_BANDWIDTH/8{1'b0}};
 
 // GB Enable (Output from Unit to BRAM)
-assign gb_enb  = (unit_choose == UNIT_DQA) ? dqa_gb_enb  : 
-                  (unit_choose == UNIT_NN) ? nn_gb_enb  : 
-                  (unit_choose == UNIT_QA) ? qa_gb_enb  : // Handles QA and SU due to 2'b11
-                  (unit_choose == UNIT_MP) ? mp_gb_enb  : 
-                  (unit_choose == UNIT_US) ? us_gb_enb  : 
-                  (unit_choose == UNIT_AD) ? ad_gb_enb  : 
+assign gb_enb  = (unit_choose_reg == UNIT_DQA) ? dqa_gb_enb  : 
+                  (unit_choose_reg == UNIT_NN) ? nn_gb_enb  : 
+                  (unit_choose_reg == UNIT_QA) ? qa_gb_enb  : // Handles QA and SU due to 2'b11
+                  (unit_choose_reg == UNIT_MP) ? mp_gb_enb  : 
+                  (unit_choose_reg == UNIT_US) ? us_gb_enb  : 
+                  (unit_choose_reg == UNIT_AD) ? ad_gb_enb  : 
                                                   1'b0;
 
 

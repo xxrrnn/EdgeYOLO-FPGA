@@ -65,7 +65,7 @@ module Global_VPU_top #(
     // =========================================================================
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 gb_bram CLK" *)
     (* X_INTERFACE_MODE = "Slave" *)
-    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME gb_bram, MEM_SIZE 131072, MEM_WIDTH 256, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 1, READ_WRITE_MODE READ_WRITE" *)
+    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME gb_bram, MEM_SIZE 524288, MEM_WIDTH 256, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 1, READ_WRITE_MODE READ_WRITE" *)
     input  wire                      gb_bram_clk,
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 gb_bram RST" *)
     input  wire                      gb_bram_rst,

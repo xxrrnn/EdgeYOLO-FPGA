@@ -10,9 +10,9 @@
 地址映射（与 vpu_defines.vh 一致）：
   0x1000_0000  global_bram (1MB) - 数据区
   0x1010_0000  inst_bram (128KB) - 指令区
-  0x1012_0000  VPU GB (128KB)
-  0x1014_0000  VPU WB (32KB)
-  0x1014_8000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
+  0x1012_0000  VPU GB (256KB)
+  0x1016_0000  VPU WB (32KB)
+  0x1016_8000  VPU_AXI_Regs (4KB) - 配置 + 状态 + 解码器控制
 """
 
 import sys
@@ -32,9 +32,9 @@ from xdma_helpers import write_blob, read_blob, write_reg, read_reg
 # ==============================================================================
 GLOBAL_BRAM_BASE = 0x10000000  # HBM BRAM (1MB)
 INST_BRAM_BASE   = 0x10100000  # inst_bram (128KB)
-VPU_GB_BASE      = 0x10120000  # VPU GB (128KB)
-VPU_WB_BASE      = 0x10140000  # VPU WB (32KB)
-VPU_REGS_BASE    = 0x10148000  # VPU_AXI_Regs (4KB)
+VPU_GB_BASE      = 0x10180000  # VPU GB (512KB, 512KB-aligned)
+VPU_WB_BASE      = 0x10200000  # VPU WB (32KB)
+VPU_REGS_BASE    = 0x10208000  # VPU_AXI_Regs (4KB)
 
 # ==============================================================================
 # VPU_AXI_Regs 寄存器偏移

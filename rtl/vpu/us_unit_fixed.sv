@@ -203,7 +203,10 @@ module us_unit_fixed #(
 
                 // ---------------------------------------------------------
                 S_LOAD_WAIT: begin
-                    state <= S_LOAD_DONE;
+                    // 保持 enb=1，等待 global_buffer_bram 读首拍数据（read-first，地址上一拍已建立）
+                    gb_addrb <= load_addr;
+                    gb_enb   <= 1'b1;
+                    state    <= S_LOAD_DONE;
                 end
 
                 // ---------------------------------------------------------
