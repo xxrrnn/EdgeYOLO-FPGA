@@ -13,7 +13,7 @@ module qa_unit #(
     parameter FP_WIDTH    =     32,
     parameter Q_INT_WIDTH_OUT =   8,
 
-    parameter MAX_CHANNEL_NUM = 1024
+    parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM
 
 )(
     input   wire                     clk,

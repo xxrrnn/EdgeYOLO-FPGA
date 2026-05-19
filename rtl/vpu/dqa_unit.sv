@@ -11,7 +11,7 @@ module dqa_unit #(
     parameter FP_WIDTH    = 32,
     parameter WB_BANDWIDTH = 256,
     parameter WB_ADDR_WIDTH = 15,   // 字节地址位宽
-    parameter MAX_CHANNEL_NUM = 64
+    parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM
 
 )(
     input   wire                                clk,

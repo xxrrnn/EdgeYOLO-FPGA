@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 `include "mem_defines_auto.vh"
 
 module tb_mp_unit;
@@ -65,7 +66,7 @@ wire all_true = &expected_true;
     localparam INT_NUM_IN  = 32;
     localparam VPU_NUM = 4;
     localparam FP_NUM = 16;
-    localparam MAX_MP_CHANNEL_NUM = 1024;
+    localparam MAX_MP_CHANNEL_NUM = `MAX_CHANNEL_NUM;
 
   // -----------------------
   // BRAM 参数（与 GB_BANDWIDTH 对齐）

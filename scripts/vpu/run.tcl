@@ -1,6 +1,6 @@
 # 一键：创建工程 → BD → 综合实现 → 报告（输出 build/vpu/ImplOutputDir/top.bit）。
 # 用法: vivado -mode batch -source run.tcl [-tclargs --to <stage>]
-# stage: build, bd, synth, rpt (默认 rpt)
+# stage: build, bd, validate, synth, rpt (默认 rpt；validate 与 bd 相同，含 validate_bd_design)
 
 set thisScriptDir [file dirname [file normalize [info script]]]
 
@@ -22,8 +22,8 @@ if {$stopAt eq "build"} {
 }
 
 source [file normalize "$thisScriptDir/1_bd.tcl"]
-if {$stopAt eq "bd"} {
-    puts "Info: Stopping after BD stage."
+if {$stopAt eq "bd" || $stopAt eq "validate"} {
+    puts "Info: Stopping after BD/validate stage."
     return
 }
 

@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
 
 module tb_DCIM_Macro_v2;
 
@@ -16,7 +17,7 @@ module tb_DCIM_Macro_v2;
     localparam IBUF_BANDWIDTH      = 256;
     localparam OBUF_BANDWIDTH      = 256;
     localparam RAM_NBPIPE          = 1;
-    localparam MAX_CHANNEL_NUM         = 512;
+    localparam MAX_CHANNEL_NUM         = `MAX_CHANNEL_NUM;
 
 
 

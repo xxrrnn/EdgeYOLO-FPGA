@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 // tb_qa_unit.sv - Testbench for qa_unit (Quantize Unit)
 // Uses REAL Xilinx IP: fp32_mac (via fp_mac_array), fp32_2_int8_array
@@ -20,7 +21,7 @@ module tb_qa_unit;
     parameter FP_TRAN_NUM   = 8;
     parameter FP_WIDTH      = 32;
     parameter Q_INT_WIDTH_OUT = 8;
-    parameter MAX_CHANNEL_NUM = 1024;
+    parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM;
 
     parameter CLK_PERIOD = 10;
     parameter LANES = GB_BANDWIDTH / FP_WIDTH;

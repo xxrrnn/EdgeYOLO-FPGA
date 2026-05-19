@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "vpu_defines.vh"
 
 // tb_dqa_unit.sv - Testbench for dqa_unit (Dequantize Unit)
 // Uses REAL Xilinx IP: fp32_mac (via fp_mac_array), int32_2_fp32_array
@@ -20,7 +21,7 @@ module tb_dqa_unit;
     parameter FP_WIDTH       = 32;
     parameter WB_BANDWIDTH   = 256;
     parameter WB_ADDR_WIDTH  = 32;
-    parameter MAX_CHANNEL_NUM = 64;
+    parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM;
 
     parameter CLK_PERIOD = 10;
     parameter INT_LANES = GB_BANDWIDTH / C_INT_WIDTH_IN;

@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+`include "vpu_defines.vh"
 module tb_system_inst_decoder;
 
     localparam CLK_PERIOD    = 4.0;
@@ -118,7 +119,7 @@ module tb_system_inst_decoder;
         .COL_WIDTH(COL_WIDTH),
         .RAM_DEPTH_GB(RAM_DEPTH_GB),
         .RAM_DEPTH_WB(RAM_DEPTH_WB),
-        .MAX_CHANNEL_NUM(1024),
+        .MAX_CHANNEL_NUM(`MAX_CHANNEL_NUM),
         .INTERVAL_NUM(16),
         .Q_INT_WIDTH_OUT(8),
         .C_INT_WIDTH_IN(32)
