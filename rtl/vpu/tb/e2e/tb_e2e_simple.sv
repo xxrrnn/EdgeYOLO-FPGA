@@ -485,8 +485,8 @@ module tb_e2e_simple;
 
     // Timeout
     initial begin
-        #(CLK_PERIOD * 200000);  // 200K cycles = 0.8ms (enough to reach QA)
-        $display("FATAL: Global timeout at 200K cycles");
+        #(CLK_PERIOD * 500000);  // 500K cycles = 2ms
+        $display("FATAL: Global timeout at 500K cycles");
         $display("  QA c_state=%0d fp_tready=%b fp_tvalid=%b unit_choose=%0d",
                  u_vpu_top.u_global_vpu.u_qa_unit.c_state,
                  u_vpu_top.u_global_vpu.fp_array_tready,

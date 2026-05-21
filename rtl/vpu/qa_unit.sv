@@ -256,7 +256,7 @@ module qa_unit #(
     
     wire [FP_TRAN_NUM*FP_WIDTH-1:0]     s_axis_tdata;
     wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]         m_axis_int_tdata;
-    assign  s_axis_tvalid = (c_state == QA_INT); 
+    assign  s_axis_tvalid = (c_state == QA_INT || c_state == QA_INT_WAIT); 
     assign  s_axis_tdata  = qa_out_q_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH];
 
     fp32_2_int8_array # (
@@ -351,8 +351,7 @@ module qa_unit #(
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state = QA_INT_WAIT;
             QA_INT_WAIT     : begin
-                // NonBlocking IP: tvalid may stay 0, use latency counter instead
-                if(m_axis_int_tvalid || qa_int_wait_cnt >= 4'd8)
+                if(m_axis_int_tvalid)
                     n_state = qa_x_tran_done ?  QA_SAVE : QA_INT;
                 else
                     n_state = QA_INT_WAIT;
