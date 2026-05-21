@@ -129,22 +129,23 @@ module im2col_unit #(
     reg [GB_BANDWIDTH-1:0] rd_data_reg;
 
     // =========================================================================
-    // 地址计算（组合）
+    // 地址计算（流水线优化：常量在 S_INIT 预算，减少组合逻辑深度）
     // =========================================================================
-    // 每个 c_chunk = 16 channel = 128-bit = 16 bytes
     localparam C_CHUNK_BYTES = 16;
     wire [GB_ADDR_WIDTH-1:0] c_chunk_byte_offset = c_chunk * C_CHUNK_BYTES;
 
-    // 输入像素字节地址 = src_addr + (ih*W + iw)*CH_IN + c_chunk*16
-    wire signed [31:0] in_pixel_index = ih * $signed(src_w_r) + iw;
-    wire [GB_ADDR_WIDTH-1:0] in_pixel_byte_addr = src_addr_r + in_pixel_index * src_c_r + c_chunk_byte_offset;
+    // 预算常量（在 S_INIT 寄存，整个 im2col 期间不变）
+    reg [31:0] row_stride_r;     // = kH * kW * CH_IN
+    reg [31:0] col_stride_r;     // = CH_IN (= src_c_r)
 
-    // 输出 im2col 字节地址 = dst_addr + (oh*OW + ow)*(kH*kW*CH_IN) + (kh*kW + kw)*CH_IN + c_chunk*16
-    wire [31:0] kH_x_kW       = kH_r * kW_r;
-    wire [31:0] row_stride    = kH_x_kW * src_c_r;
-    wire [31:0] out_row_index = oh * ow_max_r + ow;
-    wire [31:0] out_col_index = kh * kW_r + kw;
-    wire [GB_ADDR_WIDTH-1:0] out_byte_addr = dst_addr_r + out_row_index * row_stride + out_col_index * src_c_r + c_chunk_byte_offset;
+    // 输入像素字节地址 = src_addr + (ih*W + iw)*CH_IN + c_chunk*16
+    reg signed [31:0] in_pixel_index_r;
+    wire [GB_ADDR_WIDTH-1:0] in_pixel_byte_addr = src_addr_r + in_pixel_index_r * src_c_r + c_chunk_byte_offset;
+
+    // 输出 im2col 字节地址（分步计算，减少组合深度）
+    reg [31:0] out_row_offset_r;  // = (oh*OW + ow) * row_stride（在每次 oh/ow 变化时更新）
+    reg [31:0] out_col_offset_r;  // = (kh*kW + kw) * CH_IN（在每次 kh/kw 变化时更新）
+    wire [GB_ADDR_WIDTH-1:0] out_byte_addr = dst_addr_r + out_row_offset_r + out_col_offset_r + c_chunk_byte_offset;
 
     // 写使能 mask：写满 16 byte（一个 128-bit word），不管 CH_IN 是否对齐 16
     // (CH_IN 不是 16 倍数的情况由软件 padding 处理)
@@ -207,6 +208,11 @@ module im2col_unit #(
 
                 S_INIT: begin
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
+                    // 预算常量
+                    row_stride_r <= kH_r * kW_r * src_c_r;
+                    col_stride_r <= src_c_r;
+                    out_row_offset_r <= 0;  // (0*OW+0)*row_stride = 0
+                    out_col_offset_r <= 0;  // (0*KW+0)*src_c = 0
                     state <= S_READ_REQ;
                 end
 
@@ -214,6 +220,9 @@ module im2col_unit #(
                     // 计算 (ih, iw)
                     ih <= $signed(oh) * strideH_r - padH_r + $signed({8'd0, kh});
                     iw <= $signed(ow) * strideW_r - padW_r + $signed({8'd0, kw});
+                    // 预算 in_pixel_index（用于下一 cycle）
+                    in_pixel_index_r <= ($signed(oh) * strideH_r - padH_r + $signed({8'd0, kh})) * $signed(src_w_r)
+                                      + ($signed(ow) * strideW_r - padW_r + $signed({8'd0, kw}));
                     rd_wait_cnt <= 0;
                     state <= S_READ_WAIT;
                 end
@@ -264,24 +273,33 @@ module im2col_unit #(
                 end
 
                 S_NEXT: begin
-                    // 递增 kw
+                    // 递增循环计数器 + 增量更新偏移（避免乘法）
                     if (kw + 1 < $signed({1'b0, kW_r})) begin
                         kw <= kw + 1;
+                        out_col_offset_r <= out_col_offset_r + col_stride_r;
                         state <= S_READ_REQ;
                     end else begin
                         kw <= 0;
                         if (kh + 1 < $signed({1'b0, kH_r})) begin
                             kh <= kh + 1;
+                            // kw 回 0，kh++: col_offset = (kh+1)*kW*src_c
+                            out_col_offset_r <= out_col_offset_r + col_stride_r;
+                            // 实际是 reset kw part: offset = (new_kh * kW + 0) * src_c
+                            // 但用增量: old was (kh*kW + kW-1)*src_c, new is (kh+1)*kW*src_c = old + src_c
+                            // Simplified: just add col_stride since kw wraps to 0 and kh++
                             state <= S_READ_REQ;
                         end else begin
                             kh <= 0;
+                            out_col_offset_r <= 0;
                             if (ow + 1 < $signed(ow_max_r)) begin
                                 ow <= ow + 1;
+                                out_row_offset_r <= out_row_offset_r + row_stride_r;
                                 state <= S_READ_REQ;
                             end else begin
                                 ow <= 0;
                                 if (oh + 1 < $signed(oh_max_r)) begin
                                     oh <= oh + 1;
+                                    out_row_offset_r <= out_row_offset_r + row_stride_r;
                                     state <= S_READ_REQ;
                                 end else begin
                                     state <= S_DONE;
