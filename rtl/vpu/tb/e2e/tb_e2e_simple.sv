@@ -27,9 +27,10 @@ module tb_e2e_simple;
 
     // Feature config
     localparam H = 8, W = 8, IC = 16, OC = 16;
-    localparam KH = 1, KW = 1, STRIDE = 1, PAD = 0;
-    localparam OH = H, OW = W;
-    localparam ACC_DEPTH = 1;  // 1×1 conv: only 1 word per pixel
+    localparam KH = 3, KW = 3, STRIDE = 1, PAD = 1;
+    localparam OH = (H + 2*PAD - KH) / STRIDE + 1;  // 8
+    localparam OW = (W + 2*PAD - KW) / STRIDE + 1;  // 8
+    localparam ACC_DEPTH = (KH * KW * IC + 15) / 16; // 9
 
     // =========================================================================
     // 信号
@@ -263,7 +264,7 @@ module tb_e2e_simple;
 
     initial begin
         $display("=============================================================");
-        $display("  tb_e2e_simple: 1x1 conv E2E (IC=16, OC=16, 8x8)");
+        $display("  tb_e2e_simple: 3x3 conv E2E (IC=16, OC=16, 8x8, pad=1)");
         $display("  Full pipeline: im2col -> CDMA -> DCIM -> dqa -> relu -> qa");
         $display("=============================================================");
 
@@ -344,7 +345,7 @@ module tb_e2e_simple;
             32'h0,             // bias (unused)
             32'h0,             // scale (unused)
             32'h010000,        // dst_addr (im2col output)
-            {8'd1, 8'd1, 4'd1, 4'd1, 4'd0, 4'd0},  // addr_break
+            {8'd3, 8'd3, 4'd1, 4'd1, 4'd1, 4'd1},  // addr_break: kH=3,kW=3,stride=1,pad=1
             OH,                // addr_s = OH
             OW                 // addr_t = OW
         );
@@ -354,8 +355,8 @@ module tb_e2e_simple;
         // Phase 5: CDMA (simulated: copy OBUF → IBUF)
         // =================================================================
         $display("[%0t] Phase 5: CDMA copy OBUF→IBUF...", $time);
-        // For 1×1 conv: im2col output = 64 pixels × 1 word = 64 words
-        for (i = 0; i < OH*OW; i = i + 1) begin
+        // For 3×3 conv: im2col output = 64 pixels × 9 words = 576 words
+        for (i = 0; i < OH*OW*ACC_DEPTH; i = i + 1) begin
             obuf_read(20'h01000 + i, rd_word);  // im2col output at 0x010000 byte = 0x1000 word
             ibuf_write(i, rd_word);
         end
