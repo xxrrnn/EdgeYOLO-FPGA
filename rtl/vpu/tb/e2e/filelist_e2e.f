@@ -1,13 +1,13 @@
-# E2E simulation filelist for VCS
-# Base: rtl/vpu/tb/e2e/ (run from build directory)
+# E2E simulation filelist for Vivado xsim
+# All paths absolute
 
 # ==============================================================================
-# Xilinx Floating Point IP shared library (must be first)
+# Xilinx Floating Point IP core library (MUST be compiled first)
 # ==============================================================================
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/build/lite/lite.gen/sources_1/ip/fp16_add/hdl/floating_point_v7_1_rfs.v
+/home/EDAtools/Xilinx/Vivado/2024.2/data/ip/xilinx/floating_point_v7_1/hdl/floating_point_v7_1_rfs.v
 
 # ==============================================================================
-# Xilinx IP simulation models
+# Xilinx Floating Point IP instances
 # ==============================================================================
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/build/lite/lite.gen/sources_1/ip/fp32_mac/sim/fp32_mac.v
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/build/lite/lite.gen/sources_1/ip/fp32_add/sim/fp32_add.v
@@ -26,7 +26,6 @@
 # ==============================================================================
 # Chip defines and DCIM infrastructure
 # ==============================================================================
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/chip/chip_defines.vh
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/ref/DCIM/src/inc/para.v
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/ref/DCIM/src/inc/counter.v
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/ref/DCIM/src/inc/dff.v
@@ -81,12 +80,12 @@
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/global_buffer_bram.v
 
 # VPU FP arrays
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/fp_mac_array.v
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/fp_add_array.sv
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/int32_2_fp32_array.sv
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/fp32_2_int8_array.sv
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/int32_2_fp16_array.sv
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/fp16_2_int8_array.sv
+"/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp array/fp_mac_array.v"
+"/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp array/fp_add_array.sv"
+"/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp array/int32_2_fp32_array.sv"
+"/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp array/fp32_2_int8_array.sv"
+"/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp array/int32_2_fp16_array.sv"
+"/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp array/fp16_2_int8_array.sv"
 
 # ==============================================================================
 # Instruction infrastructure

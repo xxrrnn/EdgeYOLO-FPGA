@@ -1,49 +1,45 @@
 # ==============================================================================
-# Makefile for E2E CNN simulation
+# Makefile for E2E CNN simulation (Vivado xsim)
 # ==============================================================================
 
 PROJ_ROOT = ../../../..
-BUILD_DIR = build
 CHIP_DIR = $(PROJ_ROOT)/rtl/chip
 VPU_DIR = $(PROJ_ROOT)/rtl/vpu
 REF_DIR = $(PROJ_ROOT)/rtl/ref/DCIM
 IP_DIR = $(PROJ_ROOT)/build/lite/lite.gen/sources_1/ip
-XILINX_DIR = /home/EDAtools/Xilinx/Vivado/2024.2
 
-VCS = vcs
-VCS_FLAGS = -sverilog -full64 -debug_access+all -timescale=1ns/1ps
-VCS_FLAGS += +incdir+$(CHIP_DIR)
-VCS_FLAGS += +incdir+$(REF_DIR)/src/inc
-VCS_FLAGS += +incdir+$(REF_DIR)/src/dcim
-VCS_FLAGS += +incdir+$(VPU_DIR)
-VCS_FLAGS += "+incdir+$(VPU_DIR)/fp array"
-VCS_FLAGS += -ignore initializer_driver_checks
-VCS_FLAGS += -kdb -lca +define+SIM
-VCS_FLAGS += +libext+.v+.sv
-VCS_FLAGS += $(XILINX_DIR)/data/verilog/src/glbl.v
+XVLOG = xvlog
+XELAB = xelab
+XSIM = xsim
+
+XVLOG_OPTS = -sv -d SIM \
+  -i $(CHIP_DIR) \
+  -i $(REF_DIR)/src/inc \
+  -i $(REF_DIR)/src/dcim \
+  -i $(VPU_DIR) \
+  -i "$(VPU_DIR)/fp array"
+
+XELAB_OPTS = -debug typical -L floating_point_v7_1_19 -L unisims_ver
+XSIM_OPTS = -runall -nolog
 
 .PHONY: all clean golden compile sim
 
 all: golden sim
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
-
 # Generate golden hex files
 golden:
 	python3 golden_e2e.py
 
-# Compile
-compile: $(BUILD_DIR)
-	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) \
-		-f ../filelist_e2e.f \
-		../tb_e2e_simple.sv \
-		-o simv_e2e
+# Compile all sources
+compile:
+	$(XVLOG) $(XVLOG_OPTS) -f filelist_e2e.f tb_e2e_simple.sv
+	$(XELAB) $(XELAB_OPTS) tb_e2e_simple -s sim_e2e
 
 # Run simulation
 sim: compile
-	cd $(BUILD_DIR) && cp ../hex/*.hex . 2>/dev/null; ./simv_e2e
+	cp hex/*.hex . 2>/dev/null || true
+	$(XSIM) sim_e2e $(XSIM_OPTS)
 
 clean:
-	rm -rf $(BUILD_DIR) *.log *.key DVEfiles
+	rm -rf xsim.dir .Xil *.jou *.log *.pb *.wdb *.hex
 	rm -rf hex/*.hex
