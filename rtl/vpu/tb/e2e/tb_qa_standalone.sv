@@ -137,11 +137,11 @@ module tb_qa_standalone;
         // Init OBUF with FP32 data: 4 values per word, all = 10.0 (0x41200000)
         // 1 pixel × 4 channels = 1 word (simplest case)
         for (i = 0; i < 256; i = i + 1) obuf_mem[i] = 0;
-        obuf_mem[0] = {32'h41200000, 32'h41200000, 32'h41200000, 32'h41200000}; // 4× FP32(10.0)
+        obuf_mem[0] = {32'hc0400000, 32'h42c89a00, 32'h40b66666, 32'h40200000}; // FP32: -3.0, 100.3, 5.7, 2.5
 
         // Init WB: scale = 0.1 (0x3dcccccd) at word 0
         for (i = 0; i < 16; i = i + 1) wb_mem[i] = 0;
-        wb_mem[0] = {96'h0, 32'h3dcccccd};  // scale=0.1 in lowest 32 bits
+        wb_mem[0] = {96'h0, 32'h3f000000};  // scale=0.5 in lowest 32 bits
 
         #20; rst_n = 1;
         #20;
@@ -156,8 +156,8 @@ module tb_qa_standalone;
 
         $display("[%0t] Starting QA: src=0x%h dst=0x%h c=%0d h=%0d w=%0d scale_addr=0x%h",
                  $time, qa_src_addr, qa_dst_addr, qa_src_c, qa_src_h, qa_src_w, qa_scale_addr);
-        $display("  Input FP32: 10.0 (0x41200000), Scale: 0.1 (0x3dcccccd)");
-        $display("  Expected: 10.0 * 0.1 = 1.0 → INT8 = 1");
+        $display("  Input FP32: [2.5, 5.7, 100.3, -3.0], Scale: 0.5");
+        $display("  Expected: 2.5*0.5=1, 5.7*0.5=3, 100.3*0.5=50, -3.0*0.5=-2 → INT8 = 1");
 
         @(posedge clk);
         qa_unit_start = 1;
@@ -185,10 +185,13 @@ module tb_qa_standalone;
         // Check output
         $display("[%0t] OBUF[0x10] = 0x%032h (QA INT8 output)", $time, obuf_mem[16]);
         // Expected: INT8(1) packed = 0x01010101 (4 channels each = 1)
-        if (obuf_mem[16][7:0] == 8'd1)
-            $display("PASS: QA output byte[0] = %0d (expected 1)", obuf_mem[16][7:0]);
+        $display("  QA output bytes: [%0d, %0d, %0d, %0d]", 
+                 $signed(obuf_mem[16][7:0]), $signed(obuf_mem[16][15:8]),
+                 $signed(obuf_mem[16][23:16]), $signed(obuf_mem[16][31:24]));
+        if (obuf_mem[16][7:0] == 8'd1 && obuf_mem[16][15:8] == 8'd3 && obuf_mem[16][23:16] == 8'd50)
+            $display("PASS: QA output matches expected [1, 3, 50, -2]");
         else
-            $display("FAIL: QA output byte[0] = %0d (expected 1)", $signed(obuf_mem[16][7:0]));
+            $display("FAIL: Expected [1, 3, 50, -2]");
 
         $finish;
     end
