@@ -69,6 +69,14 @@ module global_buffer_bram #(
 end
   endgenerate
 
+  // Debug: monitor WB BRAM writes and reads
+  always @(posedge clka) begin
+    if (ena && |wea)
+      $display("[%0t] WB_BRAM WRITE: addr=%0d data=0x%032h wea=0x%04h", $time, addra, dina, wea);
+    if (enb && !(&web))
+      $display("[%0t] WB_BRAM READ_B: addr=%0d data=0x%032h", $time, addrb, BRAM[addrb]);
+  end
+
   //  The following code generates HIGH_PERFORMANCE (use output register) or LOW_LATENCY (no output register)
   generate
     if (RAM_PERFORMANCE == "LOW_LATENCY") begin: no_output_register

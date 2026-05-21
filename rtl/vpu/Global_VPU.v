@@ -582,7 +582,16 @@ assign fp_c_tdata   = (unit_choose == UNIT_DQA) ? dqa_fp_c_tdata  :
   //   - gb_web (NB_COL=16 bit byte enable) 直通 obuf_we
   //   - gb_enb 直通 obuf_en
   // --------------------------------------------------
-  assign obuf_addr = gb_addrb[GB_ADDR_WIDTH-1 : 4];  // 字节地址 >> 4 = 128-bit 字地址
+  // lite 地址适配：
+  //   im2col_unit 的 gb_addrb 是 24-bit 字节地址 → 需要 >> 4 得到 word 地址
+  //   dqa/qa/nn/mp/us/ad 的 gb_addrb 已经在内部做过 >> BYTE_ADDR_SHIFT，
+  //   输出的是 word 地址（不需要再右移）
+  //   统一处理：由于 im2col 输出字节地址，其他 unit 输出 word 地址，
+  //   改为不在这里做右移，而是让 im2col 也输出 word 地址（在 im2col_unit 内部处理）
+  //   但为了不修改所有 unit，这里根据 unit_choose_reg 选择性右移
+  assign obuf_addr = (unit_choose_reg == 32'd7) ?
+                     gb_addrb[GB_ADDR_WIDTH-1 : 4] :  // im2col: 字节地址 >> 4
+                     gb_addrb[`DCIM_OBUF_ADDR_WIDTH-1 : 0];  // 其他 unit: 已是 word 地址
   assign obuf_en   = gb_enb;
   assign obuf_we   = gb_web;
   assign obuf_din  = gb_dinb;
