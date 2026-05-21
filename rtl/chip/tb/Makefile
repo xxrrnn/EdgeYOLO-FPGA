@@ -1,0 +1,84 @@
+# DCIM_Array 测试 Makefile（路径: rtl/chip/tb/Makefile）
+# VCS 在 ../build 下执行，以便 ../filelist.f 中相对路径与原先 rtl/chip/Makefile 一致。
+
+CHIP_DIR = ..
+BUILD_DIR = $(CHIP_DIR)/build
+REF_DIR = $(CHIP_DIR)/../ref/DCIM
+
+VCS = vcs
+VCS_FLAGS = -sverilog -full64 -debug_access+all -timescale=1ns/1ps
+VCS_FLAGS += +incdir+$(REF_DIR)/src/inc
+VCS_FLAGS += +incdir+$(REF_DIR)/src/dcim
+VCS_FLAGS += +incdir+$(CHIP_DIR)
+VCS_FLAGS += -ignore initializer_driver_checks
+
+VCS_FLAGS += -kdb -lca
+FSDB_FLAGS = +fsdb+autoflush
+
+.PHONY: all clean compile sim test test_array test_tile compile_tile sim_tile fsdb verdi test_all test_group compile_group sim_group
+
+all: test_group
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+# 测试单组（8 Tile + 1 IBUF + 1 OBUF）
+compile_group: $(BUILD_DIR)
+	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) +define+SIM \
+		-f ../filelist.f \
+		../tb/tb_DCIM_Array_Group.sv \
+		-o simv_group
+
+sim_group: compile_group
+	cd $(BUILD_DIR) && chmod +x simv_group && ./simv_group
+
+test_group: sim_group
+
+# 测试完整阵列（8 组 × 8 Tile = 64 Tile）
+compile: $(BUILD_DIR)
+	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) +define+SIM \
+		-f ../filelist.f \
+		../tb/tb_DCIM_Array.sv \
+		-o simv
+
+sim: compile
+	cd $(BUILD_DIR) && chmod +x simv && ./simv
+
+test: sim
+
+compile_tile: $(BUILD_DIR)
+	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) +define+SIM \
+		-f ../filelist.f \
+		../tb/tb_DCIM_Tile.sv \
+		-o simv_tile
+
+sim_tile: compile_tile
+	cd $(BUILD_DIR) && chmod +x simv_tile && ./simv_tile
+
+test_tile: sim_tile
+
+test_all: test_group test_tile
+
+# im2col + DCIM 联合仿真
+compile_joint: $(BUILD_DIR)
+	cd $(BUILD_DIR) && $(VCS) $(VCS_FLAGS) +define+SIM \
+		+incdir+$(CHIP_DIR)/../vpu \
+		-f ../filelist.f \
+		$(CHIP_DIR)/../vpu/im2col_unit.sv \
+		$(CHIP_DIR)/../vpu/tb/tb_im2col_dcim_joint.sv \
+		-o simv_joint
+
+sim_joint: compile_joint
+	cd $(BUILD_DIR) && chmod +x simv_joint && ./simv_joint
+
+test_joint: sim_joint
+
+fsdb: compile_group
+	cd $(BUILD_DIR) && chmod +x simv_group && ./simv_group $(FSDB_FLAGS) +fsdbfile+dcim_array_group.fsdb
+
+verdi:
+	cd $(BUILD_DIR) && verdi -dbdir simv_group.daidir -ssf dcim_array_group.fsdb &
+
+clean:
+	rm -rf $(BUILD_DIR) $(CHIP_DIR)/csrc $(CHIP_DIR)/*.daidir $(CHIP_DIR)/*.log $(CHIP_DIR)/*.key $(CHIP_DIR)/*.vpd $(CHIP_DIR)/DVEfiles
+	rm -rf csrc *.daidir *.log *.key *.vpd DVEfiles

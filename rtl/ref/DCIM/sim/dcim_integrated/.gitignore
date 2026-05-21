@@ -1,0 +1,18 @@
+# 仿真产物（相对本目录）
+build/
+csrc/
+simv
+*.daidir/
+*.log
+*.vcd
+*.fsdb
+*.vpd
+*.mem
+ucli.key
+novas*
+verdiLog
+verdi_config_file
+*.swp
+*.swo
+*~
+.DS_Store

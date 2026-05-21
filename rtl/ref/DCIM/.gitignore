@@ -1,0 +1,18 @@
+# 本目录仿真/EDA 产物（相对 rtl/ref/DCIM/）
+*.log
+*.fsdb
+*.vdb
+simv
+novas.*
+ucli.key
+*.vcd
+*.mem
+*.svf
+alib*/
+report/
+work/
+output/
+spyglass/
+macro/
+.DS_Store*
+*.swp
