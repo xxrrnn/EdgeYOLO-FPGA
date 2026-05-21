@@ -200,12 +200,12 @@ module DCIM_Array_Group #(
         .wea(ibuf_ext_wea),
         .mem_ena(ibuf_ext_ena),
         .dina(ibuf_ext_dina),
-        .addra(ibuf_ext_addra),
+        .addra(ibuf_ext_addra[`DCIM_IBUF_ADDR_WIDTH-1:0]),
         .douta(ibuf_ext_douta),
-        .web({STRB_WIDTH{1'b0}}),
+        .web({(BUF_DATA_WIDTH/8){1'b0}}),
         .mem_enb(ibuf_int_en),
         .dinb({BUF_DATA_WIDTH{1'b0}}),
-        .addrb(ibuf_int_addr),
+        .addrb(ibuf_int_addr[`DCIM_IBUF_ADDR_WIDTH-1:0]),
         .doutb(ibuf_int_dout_raw)
     );
     
