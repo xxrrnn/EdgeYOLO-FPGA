@@ -123,7 +123,7 @@ module qa_unit #(
     assign  qa_save_done                            = 1'b1;  // 每次 SAVE 只写 1 个 word，1 周期完成
     assign  qa_x_load_done                          = (qa_x_load_cnt == qa_x_load_done_threshold);
     assign  qa_x_tran_done                          = (qa_x_tran_cnt == (FP_CORE_NUM / FP_TRAN_NUM)- 1);
-    assign  qa_done                                 =  qa_x_load_done & qa_x_load_block_done & qa_save_done;
+    assign  qa_done                                 =  qa_x_load_done & qa_save_done;
 
     always @* begin
         n_qa_x_load_block_cnt       =     qa_x_load_block_cnt;
@@ -294,8 +294,7 @@ module qa_unit #(
             qa_int_wait_cnt <= '0;
         end else if(c_state == QA_INT_WAIT) begin
             qa_int_wait_cnt <= qa_int_wait_cnt + 1'b1;
-            // Capture output after latency (NonBlocking IP: tvalid may stay 0)
-            if(m_axis_int_tvalid || qa_int_wait_cnt >= 4'd7) begin
+            if(m_axis_int_tvalid || qa_int_wait_cnt >= 4'd9) begin
                 qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
                 qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
             end
@@ -351,8 +350,9 @@ module qa_unit #(
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state = QA_INT_WAIT;
             QA_INT_WAIT     : begin
-                if(m_axis_int_tvalid)
-                    n_state = qa_x_tran_done ?  QA_SAVE : QA_INT;
+                // Wait for fp32_to_int8 result: fixed latency (6 cycles) + margin
+                if(qa_int_wait_cnt >= 4'd8)
+                    n_state = QA_SAVE;
                 else
                     n_state = QA_INT_WAIT;
             end 

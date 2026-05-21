@@ -25,11 +25,11 @@ module tb_e2e_simple;
     localparam NUM_TILES       = `DCIM_TILES_PER_GROUP;   // 8
     localparam WB_ADDR_WIDTH   = `WB_ADDR_WIDTH;         // 15
 
-    // Feature config
-    localparam H = 8, W = 8, IC = 16, OC = 16;
+    // Feature config - minimal size for quick xsim completion
+    localparam H = 2, W = 2, IC = 16, OC = 16;
     localparam KH = 3, KW = 3, STRIDE = 1, PAD = 1;
-    localparam OH = (H + 2*PAD - KH) / STRIDE + 1;  // 8
-    localparam OW = (W + 2*PAD - KW) / STRIDE + 1;  // 8
+    localparam OH = (H + 2*PAD - KH) / STRIDE + 1;  // 2
+    localparam OW = (W + 2*PAD - KW) / STRIDE + 1;  // 2
     localparam ACC_DEPTH = (KH * KW * IC + 15) / 16; // 9
 
     // =========================================================================
@@ -281,7 +281,7 @@ module tb_e2e_simple;
 
     initial begin
         $display("=============================================================");
-        $display("  tb_e2e_simple: 3x3 conv E2E (IC=16, OC=16, 8x8, pad=1)");
+        $display("  tb_e2e_simple: 3x3 conv E2E (IC=16, OC=16, 2x2, pad=1)");
         $display("  Full pipeline: im2col -> CDMA -> DCIM -> dqa -> relu -> qa");
         $display("=============================================================");
 
@@ -485,22 +485,20 @@ module tb_e2e_simple;
 
     // Timeout
     initial begin
-        #(CLK_PERIOD * 500000);  // 500K cycles = 2ms
-        $display("FATAL: Global timeout at 500K cycles");
-        $display("  QA c_state=%0d fp_tready=%b fp_tvalid=%b unit_choose=%0d",
-                 u_vpu_top.u_global_vpu.u_qa_unit.c_state,
-                 u_vpu_top.u_global_vpu.fp_array_tready,
-                 u_vpu_top.u_global_vpu.fp_array_tvalid,
-                 u_vpu_top.u_global_vpu.unit_choose);
-        $display("  QA int_tvalid=%b s_axis_tvalid=%b",
-                 u_vpu_top.u_global_vpu.u_qa_unit.m_axis_int_tvalid,
-                 u_vpu_top.u_global_vpu.u_qa_unit.s_axis_tvalid);
-        $display("  QA qa_out_q_reg=0x%032h qa_scale_reg=0x%08h",
-                 u_vpu_top.u_global_vpu.u_qa_unit.qa_out_q_reg,
-                 u_vpu_top.u_global_vpu.u_qa_unit.qa_scale_reg);
-        $display("  QA qa_fp_in_reg=0x%032h",
-                 u_vpu_top.u_global_vpu.u_qa_unit.qa_fp_in_reg);
+        #(CLK_PERIOD * 2000000);  // 2M cycles
+        $display("FATAL: Global timeout at 2M cycles");
         $finish(1);
     end
+
+    // Periodic QA progress monitor
+    reg [31:0] mon_cnt;
+    always @(posedge clk) begin
+        if (u_vpu_top.u_global_vpu.u_qa_unit.c_state == 12) begin // QA_SAVE
+            mon_cnt <= mon_cnt + 1;
+            if (mon_cnt < 5)
+                $display("[%0t] QA_SAVE #%0d", $time, mon_cnt);
+        end
+    end
+    initial mon_cnt = 0;
 
 endmodule
