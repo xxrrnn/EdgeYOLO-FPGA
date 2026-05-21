@@ -343,8 +343,9 @@ module tb_e2e_simple;
         wb_write(15'h0050, 128'h0);
         wb_write(15'h0060, 128'h0);
         wb_write(15'h0070, 128'h0);
-        // QA scale (1 × FP32): scale=1.0, WB byte address 0x80
-        wb_write(15'h0080, {96'h0, 32'h3f800000});
+        // QA scale (1 × FP32): 1/768 ≈ 0.001302 = 0x3aaaaaab
+        // This ensures QA output = 768.0 * (1/768) = 1.0 → INT8 = 1 (within range)
+        wb_write(15'h0080, {96'h0, 32'h3aaaaaab});
         $display("[%0t] Phase 3 done", $time);
 
         // =================================================================
@@ -435,6 +436,7 @@ module tb_e2e_simple;
         // Phase 8: QA (FP32 → INT8)
         // =================================================================
         $display("[%0t] Phase 8: Running QA...", $time);
+        $display("  QA: fp_array_tready=%b at start", u_vpu_top.u_global_vpu.fp_array_tready);
         // QA: src=DQA output, dst=QA output area
         // WB: qa_scale at word 8 (byte addr 128)
         vpu_exec(
@@ -483,8 +485,21 @@ module tb_e2e_simple;
 
     // Timeout
     initial begin
-        #(CLK_PERIOD * 5000000);
-        $display("FATAL: Global timeout");
+        #(CLK_PERIOD * 200000);  // 200K cycles = 0.8ms (enough to reach QA)
+        $display("FATAL: Global timeout at 200K cycles");
+        $display("  QA c_state=%0d fp_tready=%b fp_tvalid=%b unit_choose=%0d",
+                 u_vpu_top.u_global_vpu.u_qa_unit.c_state,
+                 u_vpu_top.u_global_vpu.fp_array_tready,
+                 u_vpu_top.u_global_vpu.fp_array_tvalid,
+                 u_vpu_top.u_global_vpu.unit_choose);
+        $display("  QA int_tvalid=%b s_axis_tvalid=%b",
+                 u_vpu_top.u_global_vpu.u_qa_unit.m_axis_int_tvalid,
+                 u_vpu_top.u_global_vpu.u_qa_unit.s_axis_tvalid);
+        $display("  QA qa_out_q_reg=0x%032h qa_scale_reg=0x%08h",
+                 u_vpu_top.u_global_vpu.u_qa_unit.qa_out_q_reg,
+                 u_vpu_top.u_global_vpu.u_qa_unit.qa_scale_reg);
+        $display("  QA qa_fp_in_reg=0x%032h",
+                 u_vpu_top.u_global_vpu.u_qa_unit.qa_fp_in_reg);
         $finish(1);
     end
 

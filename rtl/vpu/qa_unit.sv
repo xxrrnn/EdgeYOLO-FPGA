@@ -116,6 +116,7 @@ module qa_unit #(
     logic [ADDR_WIDTH - 1 : 0]                       qa_x_load_block_cnt,  n_qa_x_load_block_cnt;
     logic [ADDR_WIDTH - 1 : 0]                       qa_x_load_cnt,  n_qa_x_load_cnt;
     reg   [ADDR_WIDTH - 1 : 0]                       qa_x_tran_cnt;
+    reg   [3:0]                                      qa_int_wait_cnt;  // latency counter for fp32_to_int8
     wire  qa_x_load_block_done, qa_save_done, qa_x_load_done, qa_done, qa_x_tran_done;
     
     assign  qa_x_load_block_done                    = (qa_x_load_block_cnt == qa_single_compute_blocks - 1);
@@ -284,12 +285,20 @@ module qa_unit #(
         if(!rst_n) begin
             qa_x_tran_cnt <= '0;
             qa_out_int_reg <= '0;
+            qa_int_wait_cnt <= '0;
         end else if(c_state == IDLE) begin
             qa_x_tran_cnt <= '0;
             qa_out_int_reg <= '0;
-        end else if((c_state == QA_INT || c_state == QA_INT_WAIT) && m_axis_int_tvalid) begin
-            qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
-            qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
+            qa_int_wait_cnt <= '0;
+        end else if(c_state == QA_INT) begin
+            qa_int_wait_cnt <= '0;
+        end else if(c_state == QA_INT_WAIT) begin
+            qa_int_wait_cnt <= qa_int_wait_cnt + 1'b1;
+            // Capture output after latency (NonBlocking IP: tvalid may stay 0)
+            if(m_axis_int_tvalid || qa_int_wait_cnt >= 4'd7) begin
+                qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
+                qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
+            end
         end
     end
 
@@ -342,7 +351,8 @@ module qa_unit #(
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state = QA_INT_WAIT;
             QA_INT_WAIT     : begin
-                if(m_axis_int_tvalid)
+                // NonBlocking IP: tvalid may stay 0, use latency counter instead
+                if(m_axis_int_tvalid || qa_int_wait_cnt >= 4'd8)
                     n_state = qa_x_tran_done ?  QA_SAVE : QA_INT;
                 else
                     n_state = QA_INT_WAIT;
