@@ -83,21 +83,36 @@ module tb_e2e_simple;
     always #(CLK_PERIOD/2) clk = ~clk;
 
     // =========================================================================
-    // WB BRAM model (for dqa scale/bias and qa scale)
+    // WB BRAM interface - drives Global_VPU_top's wb_bram port
+    // Global_VPU internally has its own BRAM; Port A is the external write path
     // =========================================================================
-    localparam WB_DEPTH = `WB_DEPTH;  // 1024 words
-    reg [127:0] wb_mem [0:WB_DEPTH-1];
+    reg         tb_wb_en;
+    reg  [15:0] tb_wb_we;
+    reg  [WB_ADDR_WIDTH-1:0] tb_wb_addr;
+    reg  [127:0] tb_wb_din;
 
     assign wb_bram_clk = clk;
     assign wb_bram_rst = ~rst_n;
+    assign wb_bram_en  = tb_wb_en;
+    assign wb_bram_we  = tb_wb_we;
+    assign wb_bram_addr = tb_wb_addr;
+    assign wb_bram_din  = tb_wb_din;
+    // wb_bram_dout not used by TB (only VPU internal reads via Port B)
 
-    always @(posedge clk) begin
-        if (wb_bram_en) begin
-            if (|wb_bram_we)
-                wb_mem[wb_bram_addr >> 4] <= wb_bram_din;
+    task wb_write;
+        input [WB_ADDR_WIDTH-1:0] byte_addr;
+        input [127:0] data;
+        begin
+            @(posedge clk);
+            tb_wb_en   <= 1'b1;
+            tb_wb_we   <= 16'hFFFF;
+            tb_wb_addr <= byte_addr;
+            tb_wb_din  <= data;
+            @(posedge clk);
+            tb_wb_en   <= 1'b0;
+            tb_wb_we   <= 16'h0;
         end
-    end
-    assign wb_bram_dout = wb_mem[wb_bram_addr >> 4];
+    endtask
 
     // =========================================================================
     // Global_VPU_top (full VPU with real FP IPs)
@@ -279,10 +294,8 @@ module tb_e2e_simple;
         cfg_wr_en = 0; cfg_wr_addr = 0; cfg_wr_data = 0;
         obuf_ext_wea = 0; obuf_ext_ena = 0; obuf_ext_addra = 0; obuf_ext_dina = 0;
         ibuf_ext_wea = 0; ibuf_ext_ena = 0; ibuf_ext_addra = 0; ibuf_ext_dina = 0;
+        tb_wb_en = 0; tb_wb_we = 0; tb_wb_addr = 0; tb_wb_din = 0;
         pass_count = 0; fail_count = 0;
-
-        // Init WB
-        for (i = 0; i < WB_DEPTH; i = i + 1) wb_mem[i] = 0;
 
         repeat(10) @(posedge clk);
         rst_n = 1;
@@ -316,19 +329,22 @@ module tb_e2e_simple;
         $display("[%0t] Phase 2 done", $time);
 
         // =================================================================
-        // Phase 3: Load DQA params into WB (scale=1.0, bias=0.0)
+        // Phase 3: Load DQA params into WB via wb_bram interface
         // =================================================================
         $display("[%0t] Phase 3: Loading DQA/QA params into WB...", $time);
         // DQA scale (16 channels × FP32): scale=1.0 for all = 0x3f800000
-        // Pack 4 FP32 per 128-bit word
-        for (i = 0; i < 4; i = i + 1)
-            wb_mem[i] = {32'h3f800000, 32'h3f800000, 32'h3f800000, 32'h3f800000};
-        // DQA bias (16 channels × FP32): bias=0.0 for all = 0x00000000
-        for (i = 4; i < 8; i = i + 1)
-            wb_mem[i] = 128'h0;
-        // QA scale (1 × FP32): 1/act_scale ≈ 42.47 = 0x4229e148
-        // For simplicity use scale=1.0 (output = input truncated to uint8)
-        wb_mem[8] = {96'h0, 32'h3f800000};
+        // Pack 4 FP32 per 128-bit word, WB byte addresses 0x00..0x3F
+        wb_write(15'h0000, {32'h3f800000, 32'h3f800000, 32'h3f800000, 32'h3f800000});
+        wb_write(15'h0010, {32'h3f800000, 32'h3f800000, 32'h3f800000, 32'h3f800000});
+        wb_write(15'h0020, {32'h3f800000, 32'h3f800000, 32'h3f800000, 32'h3f800000});
+        wb_write(15'h0030, {32'h3f800000, 32'h3f800000, 32'h3f800000, 32'h3f800000});
+        // DQA bias (16 channels × FP32): bias=0.0, WB byte addresses 0x40..0x7F
+        wb_write(15'h0040, 128'h0);
+        wb_write(15'h0050, 128'h0);
+        wb_write(15'h0060, 128'h0);
+        wb_write(15'h0070, 128'h0);
+        // QA scale (1 × FP32): scale=1.0, WB byte address 0x80
+        wb_write(15'h0080, {96'h0, 32'h3f800000});
         $display("[%0t] Phase 3 done", $time);
 
         // =================================================================
@@ -379,6 +395,12 @@ module tb_e2e_simple;
         wait(dcim_ready == 1);
         $display("[%0t] Phase 6 done: DCIM complete", $time);
 
+        // Verify DCIM output in OBUF
+        obuf_read(20'h02000, rd_word);
+        $display("  DCIM out[0] = 0x%032h (expected non-zero INT32s)", rd_word);
+        obuf_read(20'h02001, rd_word);
+        $display("  DCIM out[1] = 0x%032h", rd_word);
+
         // =================================================================
         // Phase 7: DQA (INT32 → FP32, scale*x + bias)
         // =================================================================
@@ -398,6 +420,16 @@ module tb_e2e_simple;
             32'h0, 32'h0, 32'h0
         );
         $display("[%0t] Phase 7 done: DQA complete", $time);
+
+        // Verify DQA output in OBUF (should be valid FP32)
+        $display("[%0t] --- DQA output verification ---", $time);
+        obuf_read(20'h03000, rd_word);  // DQA dst at 0x030000 byte = 0x3000 word
+        $display("  DQA out[0] = 0x%032h", rd_word);
+        // Each 128-bit = 4 FP32 values; with scale=1.0, bias=0.0:
+        // FP32 output = float(DCIM_INT32_accumulator)
+        // DCIM with weight=+1, 3x3 im2col: accumulator = sum of 144 INT8 activations
+        obuf_read(20'h03001, rd_word);
+        $display("  DQA out[1] = 0x%032h", rd_word);
 
         // =================================================================
         // Phase 8: QA (FP32 → INT8)
