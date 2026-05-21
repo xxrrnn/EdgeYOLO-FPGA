@@ -248,10 +248,12 @@ module tb_e2e_simple;
             addr_break  <= p_break;
             addr_s      <= p_s;
             addr_t      <= p_t;
-            @(posedge clk);
+            @(posedge clk);  // 等参数被 config_ready&&config_valid 锁存
+            @(posedge clk);  // 再等一 cycle 确保 unit_choose_reg 更新
             vpu_start   <= 1'b1;
             @(posedge clk);
             vpu_start   <= 1'b0;
+            @(posedge clk);
             wait(vpu_ready);
         end
     endtask
