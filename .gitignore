@@ -137,3 +137,4 @@ rtl/**/csrc/rmar0.h
 # ============================================
 .codex
 .cursor/
+rtl/chip/build/
