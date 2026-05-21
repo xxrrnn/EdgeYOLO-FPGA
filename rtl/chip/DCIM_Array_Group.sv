@@ -187,9 +187,9 @@ module DCIM_Array_Group #(
     // IBUF 实例
     // ========================================================================
     // 每组独立的 IBUF，容量为原来的 1/8
-    // 优化：IN_REG=1 打断跨 SLR 路径，NUM_BANKS=2 减少级联深度
+    // 修复：IBUF 用实际需要的 IBUF_ADDR_WIDTH(17)，不用 OBUF 的 20-bit
     ibuf #(
-        .AWIDTH(BUF_ADDR_WIDTH),
+        .AWIDTH(`DCIM_IBUF_ADDR_WIDTH),
         .NUM_COL(BUF_DATA_WIDTH/8),
         .DWIDTH(BUF_DATA_WIDTH),
         .NBPIPE(2),
