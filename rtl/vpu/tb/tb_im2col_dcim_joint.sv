@@ -360,8 +360,9 @@ module tb_im2col_dcim_joint;
         // 每 entry 128 bits = 32 个 4-bit nibble，全设为 0001
         begin
             reg [BUF_DATA_WIDTH-1:0] wei_word;
-            // 每个 nibble = 4'b0001，128 bits / 4 = 32 nibbles
-            wei_word = {32{4'b0001}};
+            // INT8 mode weight format: 128-bit entry = {high_nibble(64-bit), low_nibble(64-bit)}
+            // For weight=+1 (INT8=0x01): low=0x1, high=0x0
+            wei_word = {64'h0000000000000000, 64'h1111111111111111};
             for (t = 0; t < NUM_TILES; t = t + 1) begin
                 for (i = 0; i < CYCLE; i = i + 1) begin
                     ibuf_write(IBUF_WEI_BASE + t * CYCLE + i, wei_word);
@@ -377,7 +378,7 @@ module tb_im2col_dcim_joint;
         $display("[%0t]   dcim_ready=%b dcim_done=%b", $time, dcim_ready, dcim_done);
 
         // MODE = INT4 (3'b100), acc_depth = ACC_DEPTH
-        dcim_cfg_write(`DCIM_REG_MODE, {16'h0, ACC_DEPTH[7:0], 5'h0, `MODE_INT4});
+        dcim_cfg_write(`DCIM_REG_MODE, {16'h0, ACC_DEPTH[7:0], 5'h0, `MODE_INT8});
 
         // ACT_BASE = IBUF_ACT_BASE
         dcim_cfg_write(`DCIM_REG_ACT_BASE, {{(32-IBUF_ADDR_WIDTH){1'b0}}, IBUF_ACT_BASE});

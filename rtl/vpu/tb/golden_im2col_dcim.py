@@ -107,92 +107,46 @@ def generate_weights():
 # =============================================================================
 def compute_dcim(im2col_matrix, weights):
     """
-    DCIM 计算：每 Tile 对 im2col 每行做 MAC
+    DCIM 计算（INT8 activation × INT4 weight）:
     
-    DCIM 工作方式：
-    - 读取 IBUF 中的 activation（im2col 数据）
-    - 每次读 1 个 128-bit word = 16 个 INT8 值 = CH_IN 个 activation
-    - 与 weight SRAM 中的 CH_IN × CH_OUT 个 INT4 权重做 MAC
-    - acc_depth 次累加后输出
+    硬件流程（act_nibble_converter + mergeArray）：
+      1. 每个 128-bit IBUF word = 16 个 INT8 activation (= CH_IN 通道)
+      2. act_nibble_converter 将每个 INT8 拆成高低两个 4-bit nibble
+         - Phase 0 (refresh): 发送高 nibble (bit[7:4])
+         - Phase 1: 发送低 nibble (bit[3:0])
+      3. maArray: 每 phase 做 INT4×INT4 乘加，得到 CH_OUT 个 partial sum
+      4. mergeArray INT8 模式:
+         - refresh 拍: temp = maResult_high
+         - 下一拍: temp = maResult_low + (temp << 4)
+         => final = weight × act_high × 16 + weight × act_low
+                  = weight × (act_high × 16 + act_low)
+                  = weight × activation_INT8
+      5. accumulateArray: 跨 acc_depth 个 word 累加
     
-    acc_depth = ceil(im2col_row_bytes / 16) = ceil(144 / 16) = 9
-    每个 acc cycle 处理 16 个 activation（1 word）
-    
-    但实际上 DCIM 做的是：
-    output[tile][row][ch_out] = sum over acc_cycles of (
-        sum over ch_in of (act[cycle][ch] * weight[tile][ch][ch_out])
+    最终: output[ch_out] = sum over acc_depth of (
+        sum over CH_IN of (weight[ch_in][ch_out] × activation[word][ch_in])
     )
     
-    由于 weight 全为 +1：
-    output[tile][row][ch_out] = sum of all activation values in that row
-    
-    但要注意 INT4 mode 下 activation 是 4-bit nibble！
-    act_nibble_converter 将每个 INT8 byte 拆成 2 个 4-bit nibble
+    由于 weight 全为 +1 (INT4 signed):
+    output = sum of all INT8 activation values in im2col row
     """
-    acc_depth = (KH * KW * CH_IN + 15) // 16  # 9
+    acc_depth = (KH * KW * CH_IN + 15) // 16  # 9 words per row
     num_rows = OH * OW  # 64
-    
-    # DCIM 在 INT4 mode 下的行为:
-    # - activation 被 act_nibble_converter 拆分为 4-bit nibble
-    # - 每个 128-bit word = 32 个 4-bit nibble（不是 16 个 8-bit）
-    # - 但 CH_IN=16，所以实际每个 cycle 处理 16 个 4-bit nibble
-    # - 每行 9 个 word = 9 × 16 = 144 个 nibble? 不对...
-    #
-    # 实际上在 INT4 mode 中:
-    # - 每个 128-bit IBUF word 包含 CH_IN=16 个 INT8 activation
-    # - act_nibble_converter 将 16 个 INT8 拆成 32 个 INT4 nibble
-    # - 乘以 INT4 weight，结果是 INT8 per channel pair
-    # - 最终累加得到 wider result
-    #
-    # 简化: weight=+1, INT4 乘法:
-    # output[ch_out] = sum over (acc_depth cycles × CH_IN channels) of nibble values
-    
-    # 每个 INT8 activation byte 拆成 low nibble 和 high nibble (signed 4-bit: -8~7)
-    # byte 0x01 → low=1, high=0
-    # byte 0x10 → low=0, high=1
-    # byte 0x1F → low=-1, high=1 (signed: 0xF = -1)
-    
-    # DCIM 在 MODE_INT4 下：
-    # 每 cycle 读 1 个 128-bit word (16 bytes)
-    # act_nibble_converter 将其拆为 2 组 × 16 个 4-bit nibble
-    # 每组与 weight 做 16×16 INT4 MAC，结果累加
-    # 所以 acc_depth=9 → 每行实际做 9×2=18 次 MAC cycle
-    #
-    # 但这取决于具体的 act_nibble_converter 实现...
-    # 让我们简化：对于 golden check，直接用 known pattern 验证
-    
-    # 方案：使用简单加法验证
-    # weight 全为 +1 (INT4)，activation 是 INT4 nibble
-    # output[row][ch_out] = sum of all input nibbles across acc_depth
     
     results = np.zeros((NUM_TILES, num_rows, DCIM_CH_OUT), dtype=np.int32)
     
     for tile in range(NUM_TILES):
         for row in range(num_rows):
-            # 将该行 144 bytes 解释为 4-bit nibbles
+            # 直接对 im2col 行的所有 INT8 值求和（因为 weight=+1）
+            # 每行 acc_depth × 16 bytes，但实际只有 KH*KW*CH_IN=144 个有效值
+            # IBUF 按 word 对齐到 acc_depth=9 words = 144 bytes，刚好无 padding
             row_data = im2col_matrix[row]  # 144 INT8 values
             
-            # DCIM 处理: 每个 word (16 bytes) 拆成 nibbles
-            # 然后 MAC with weight=+1
-            # 简化计算: sum of all signed 4-bit nibbles
-            acc = np.zeros(DCIM_CH_OUT, dtype=np.int32)
+            # weight=+1 时：output = sum of signed INT8 activations
+            # 注意：im2col_matrix 是 np.int8，直接 sum 可能溢出，转 int32
+            activation_sum = np.sum(row_data.astype(np.int32))
             
-            for word_idx in range(acc_depth):
-                # 该 word 的 16 个 bytes
-                start_byte = word_idx * 16
-                for ch in range(min(16, len(row_data) - start_byte)):
-                    byte_val = int(row_data[start_byte + ch])
-                    # 拆成两个 signed 4-bit nibble
-                    lo = byte_val & 0xF
-                    hi = (byte_val >> 4) & 0xF
-                    # signed 4-bit: if >= 8, subtract 16
-                    if lo >= 8: lo -= 16
-                    if hi >= 8: hi -= 16
-                    # weight=+1, 对每个 output channel 都加这两个 nibble
-                    # （因为 weight 矩阵全为 +1）
-                    acc += (lo + hi)
-            
-            results[tile, row, :] = acc
+            results[tile, row, :] = activation_sum
     
     return results
 
@@ -294,9 +248,10 @@ def generate_instructions():
     insts.append(header)
     
     # MODE: addr=0x008, data = {acc_depth[7:0], mode[2:0]}
-    MODE_INT4 = 0b100
+    # MODE_INT8 = 3'b110: weight=INT4, activation=INT8 (converter 拆分为2拍)
+    MODE_INT8 = 0b110
     insts.append(0x008)  # addr
-    insts.append((acc_depth << 8) | MODE_INT4)  # data
+    insts.append((acc_depth << 8) | MODE_INT8)  # data
     
     # ACT_BASE: addr=0x010, data = IBUF_ACT_BASE (word addr in IBUF)
     insts.append(0x010)
@@ -397,9 +352,34 @@ def main():
     print(f"Wrote golden_dcim_tile0~7.hex")
     
     # Weight hex (for IBUF loading)
-    # 每个 entry = 128 bits = 32 个 4-bit nibble, 全为 0001
-    wei_word = 0x1111_1111_1111_1111_1111_1111_1111_1111  # 32 nibbles of 0001
-    wei_hex = [f'{wei_word:032x}'] * (NUM_TILES * CYCLE)
+    # INT8 mode weight format:
+    #   Each 128-bit SRAM entry = 2 output channels
+    #   Bits [63:0] = ch_out_even: {high_nibble_16ch[63:0] | ... wait}
+    #   Actually: subcol layout within each maColumn (4 subcols per column):
+    #     subcol 0: low nibble weights for ch_out N   (64 bits = 16 ch_in × 4 bits)
+    #     subcol 1: high nibble weights for ch_out N  (64 bits)
+    #     subcol 2: low nibble weights for ch_out N+1 (64 bits)
+    #     subcol 3: high nibble weights for ch_out N+1 (64 bits)
+    #   Each maColumn (256 bits) = 2 ch_out × (high+low nibble) = 4 subcols
+    #   ppCache dn_data = {entry[7],...,entry[0]} = 1024 bits
+    #   maColumn 0 gets bits [255:0] = entry[0] (128b) + entry[1] (128b)
+    #
+    #   For weight=+1 (INT8 = 0x01):  low_nibble = 0x1, high_nibble = 0x0
+    #   Entry[0] covers maColumn 0, subcol 0-1 (= ch_out 0):
+    #     bits[63:0] = subcol0 = low nibble = all 0x1 = 0x1111111111111111
+    #     bits[127:64] = subcol1 = high nibble = all 0x0 = 0x0000000000000000
+    #   Entry[1] covers maColumn 0, subcol 2-3 (= ch_out 1):
+    #     bits[63:0] = subcol2 = low nibble = 0x1111111111111111
+    #     bits[127:64] = subcol3 = high nibble = 0x0000000000000000
+    #   ...repeat for entries 2-7 (ch_out 2-7)
+    #   With NUM_TILES=8 tiles, CYCLE=8 entries per tile:
+    #   But we only need 8 entries for 16 ch_out (2 ch_out per 2 entries → 16 ch_out = 8 maColumn × 2 entries)
+    #   Wait: 4 maColumns × 2 entries each = 8 entries total. 
+    #   maColumn i uses entries [2*i] and [2*i+1].
+    
+    # For weight=+1: each entry = {high_nibble_block=0, low_nibble_block=all_1s}
+    wei_entry_hex = '0000000000000000' + '1111111111111111'  # 128 bits: high=0, low=0x1×16
+    wei_hex = [wei_entry_hex] * (NUM_TILES * CYCLE)
     write_hex_file(os.path.join(output_dir, 'golden_weight.hex'), wei_hex)
     print(f"Wrote golden_weight.hex ({len(wei_hex)} words)")
     
@@ -423,16 +403,10 @@ def main():
     
     # Self-check: manual calculation for row 0
     row0 = im2col[0]
-    nibble_sum = 0
-    for byte_val in row0:
-        b = int(byte_val) & 0xFF
-        lo = b & 0xF
-        hi = (b >> 4) & 0xF
-        if lo >= 8: lo -= 16
-        if hi >= 8: hi -= 16
-        nibble_sum += lo + hi
-    print(f"  Manual nibble sum for row 0: {nibble_sum}")
-    assert nibble_sum == dcim_out[0, 0, 0], "MISMATCH!"
+    # weight=+1, INT8 mode: output = sum of all INT8 activation values
+    manual_sum = int(np.sum(row0.astype(np.int32)))
+    print(f"  Manual INT8 sum for row 0: {manual_sum}")
+    assert manual_sum == dcim_out[0, 0, 0], f"MISMATCH! got {dcim_out[0, 0, 0]}"
     print(f"  ✓ Self-check PASSED")
     
     print(f"\n{'='*60}")
