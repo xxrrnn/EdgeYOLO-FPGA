@@ -238,3 +238,11 @@ set_multicycle_path 2 -setup \
 set_multicycle_path 1 -hold \
   -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}] \
   -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_rega_reg*}]
+
+# IBUF URAM cascade (AWIDTH=17, cascade ~16 deep)
+set_multicycle_path 2 -setup \
+  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}] \
+  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_rega_reg*}]
+set_multicycle_path 1 -hold \
+  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}] \
+  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_rega_reg*}]
