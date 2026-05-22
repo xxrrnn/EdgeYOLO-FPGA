@@ -224,3 +224,17 @@ set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {N
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/inst_decoder/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/cdma_ctrl/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/inst_bram/*}]
+
+# ============================================================================
+# OBUF URAM cascade multicycle path
+# ============================================================================
+# OBUF is 16MB deep (AWIDTH=20), requiring 7+ URAM cascade stages.
+# The cascade read data path takes ~5.5ns (> 4ns period at 250MHz).
+# This is safe because obuf_bank has NBPIPE=2 pipeline registers that
+# absorb the extra latency. OBUF READ_LATENCY is set to 9 in chip_defines.
+set_multicycle_path 2 -setup \
+  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}] \
+  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_rega_reg*}]
+set_multicycle_path 1 -hold \
+  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}] \
+  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_rega_reg*}]
