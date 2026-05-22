@@ -248,19 +248,3 @@ set_multicycle_path 1 -hold \
   -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_rega_reg*}]
 
 # im2col S_INIT one-time precompute registers
-# stride_h_wc_r = strideH_r * src_w_r * src_c_r (3-operand mult, 2 DSPs cascaded)
-# Only computed once during S_INIT state; functionally correct with 2-cycle path
-set_multicycle_path 2 -setup \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/strideH_r_reg*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/stride_h_wc_r_reg*}]
-set_multicycle_path 1 -hold \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/strideH_r_reg*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/stride_h_wc_r_reg*}]
-
-# Similarly for other S_INIT precompute paths if needed
-set_multicycle_path 2 -setup \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/kH_r_reg*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/row_stride_r_reg*}]
-set_multicycle_path 1 -hold \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/kH_r_reg*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *im2col_inst/row_stride_r_reg*}]
