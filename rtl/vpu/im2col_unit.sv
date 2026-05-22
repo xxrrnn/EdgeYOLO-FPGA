@@ -101,6 +101,7 @@ module im2col_unit #(
     // =========================================================================
     localparam S_IDLE       = 4'd0;
     localparam S_INIT       = 4'd1;
+    localparam S_PRECOMPUTE = 4'd9;  // 预算二级乘法（S_INIT 结果 → 最终常量）
     localparam S_READ_REQ   = 4'd2;  // 发出读请求
     localparam S_READ_WAIT  = 4'd3;  // 等待读延迟（OBUF 流水线）
     localparam S_READ_LATCH = 4'd4;  // 锁存读回数据
@@ -134,13 +135,14 @@ module im2col_unit #(
     localparam C_CHUNK_BYTES = 16;
     wire [GB_ADDR_WIDTH-1:0] c_chunk_byte_offset = c_chunk * C_CHUNK_BYTES;
 
-    // 预算常量（S_INIT 计算一次）
-    reg [31:0] row_stride_r;         // = kH * kW * CH_IN
-    reg [31:0] col_stride_r;         // = CH_IN
-    reg [31:0] w_times_c_r;          // = W * CH_IN（行间距，字节）
-    reg [31:0] stride_h_wc_r;        // = strideH * W * CH_IN
-    reg [31:0] stride_w_c_r;         // = strideW * CH_IN
-    reg signed [GB_ADDR_WIDTH-1:0] in_base_r;  // = src_addr - padH*W*C - padW*C
+    // 预算常量（S_INIT 算一级，S_PRECOMPUTE 算二级）
+    reg [31:0] row_stride_r;         // = kH * kW * CH_IN  （二级，S_PRECOMPUTE）
+    reg [31:0] col_stride_r;         // = CH_IN（直接赋值）
+    reg [31:0] w_times_c_r;          // = W * CH_IN（一级，S_INIT）
+    reg [31:0] stride_h_wc_r;        // = strideH * W * CH_IN（二级，S_PRECOMPUTE）
+    reg [31:0] stride_w_c_r;         // = strideW * CH_IN（一级，S_INIT）
+    reg [31:0] kw_times_c_r;         // = kW * CH_IN（一级，S_INIT，供 row_stride 用）
+    reg signed [GB_ADDR_WIDTH-1:0] in_base_r;  // = src_addr - padH*W*C - padW*C（二级）
 
     // 增量累加寄存器（运行时只有加减）
     // in_pixel_byte_addr = in_base_r + oh*strideH*W*C + kh*W*C + ow*strideW*C + kw*C + c_chunk*16
@@ -188,6 +190,9 @@ module im2col_unit #(
             kH_r <= 0; kW_r <= 0;
             strideH_r <= 0; strideW_r <= 0;
             padH_r <= 0; padW_r <= 0;
+            row_stride_r <= 0; col_stride_r <= 0; w_times_c_r <= 0;
+            stride_h_wc_r <= 0; stride_w_c_r <= 0; kw_times_c_r <= 0;
+            in_base_r <= 0;
         end else begin
             // 默认信号
             gb_enb <= 1'b0;
@@ -219,23 +224,26 @@ module im2col_unit #(
 
                 S_INIT: begin
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
-                    // 预算所有运行时常量（只在 S_INIT 执行一次乘法）
-                    row_stride_r  <= kH_r * kW_r * src_c_r;
-                    col_stride_r  <= src_c_r;
-                    w_times_c_r   <= src_w_r * src_c_r;
-                    stride_h_wc_r <= strideH_r * src_w_r * src_c_r;
-                    stride_w_c_r  <= strideW_r * src_c_r;
-                    // 输入地址偏置（减去 padding 贡献）
-                    in_base_r     <= src_addr_r
-                                     - $signed(padH_r) * $signed(src_w_r * src_c_r)
-                                     - $signed(padW_r) * $signed(src_c_r);
-                    // 增量累加器初始为 0（oh=0, kh=0, ow=0, kw=0）
-                    in_oh_acc_r <= 0;
-                    in_kh_acc_r <= 0;
-                    in_ow_acc_r <= 0;
-                    in_kw_acc_r <= 0;
-                    out_row_offset_r <= 0;
-                    out_col_offset_r <= 0;
+                    // 一级乘法（单操作数，单 DSP，< 2ns）
+                    col_stride_r  <= src_c_r;                    // 直接赋值
+                    w_times_c_r   <= src_w_r * src_c_r;          // W * CH_IN
+                    stride_w_c_r  <= strideW_r * src_c_r;        // strideW * CH_IN
+                    kw_times_c_r  <= kW_r * src_c_r;             // kW * CH_IN
+                    // 增量累加器初始为 0
+                    in_oh_acc_r <= 0; in_kh_acc_r <= 0;
+                    in_ow_acc_r <= 0; in_kw_acc_r <= 0;
+                    out_row_offset_r <= 0; out_col_offset_r <= 0;
+                    state <= S_PRECOMPUTE;
+                end
+
+                S_PRECOMPUTE: begin
+                    // 二级乘法：使用 S_INIT 已寄存的中间结果（< 2ns 每路）
+                    stride_h_wc_r <= strideH_r * w_times_c_r;   // strideH * (W*CH_IN)
+                    row_stride_r  <= kH_r * kw_times_c_r;        // kH * (kW*CH_IN)
+                    // in_base = src_addr - padH*(W*CH_IN) - padW*CH_IN
+                    in_base_r     <= $signed(src_addr_r)
+                                   - $signed(padH_r) * $signed(w_times_c_r)
+                                   - $signed(padW_r) * $signed(src_c_r);
                     state <= S_READ_REQ;
                 end
 
