@@ -139,7 +139,8 @@ if {[llength $setupPaths] == 0} {
     }
 }
 
-set_param general.maxThreads 8
+set_param general.maxThreads 1
+set_param place.timingDrivenSynthPlacement false
 place_design -directive $placeDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
