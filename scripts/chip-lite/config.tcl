@@ -23,7 +23,7 @@ set ImplOutputDir [file normalize "$projPath/ImplOutputDir"]
 
 set synDirective Default
 set optDirective ExploreWithRemap
-set placeDirective AltSpreadLogic_high
+set placeDirective Explore
 set physOptDirectiveAp AggressiveExplore
 set routeDirective AggressiveExplore
 set physOptDirectiveAr AggressiveExplore
