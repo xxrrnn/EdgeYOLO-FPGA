@@ -139,7 +139,8 @@ if {[llength $setupPaths] == 0} {
     }
 }
 
-place_design -directive $placeDirective -mt off
+set_param general.maxThreads 8
+place_design -directive $placeDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
