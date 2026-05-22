@@ -142,17 +142,18 @@ module im2col_unit #(
     reg [31:0] stride_h_wc_r;        // = strideH * W * CH_IN（二级，S_PRECOMPUTE）
     reg [31:0] stride_w_c_r;         // = strideW * CH_IN（一级，S_INIT）
     reg [31:0] kw_times_c_r;         // = kW * CH_IN（一级，S_INIT，供 row_stride 用）
-    reg signed [GB_ADDR_WIDTH-1:0] in_base_r;  // = src_addr - padH*W*C - padW*C（二级）
+    reg signed [31:0] in_base_r;  // = src_addr - padH*W*C - padW*C（二级）
 
-    // 增量累加寄存器（运行时只有加减）
-    // in_pixel_byte_addr = in_base_r + oh*strideH*W*C + kh*W*C + ow*strideW*C + kw*C + c_chunk*16
-    reg [GB_ADDR_WIDTH-1:0] in_oh_acc_r;   // = oh * stride_h_wc_r
-    reg [GB_ADDR_WIDTH-1:0] in_kh_acc_r;   // = kh * w_times_c_r
-    reg [GB_ADDR_WIDTH-1:0] in_ow_acc_r;   // = ow * stride_w_c_r
-    reg [GB_ADDR_WIDTH-1:0] in_kw_acc_r;   // = kw * col_stride_r
-    // 组合：只加法，0 乘法运行时
-    wire [GB_ADDR_WIDTH-1:0] in_pixel_byte_addr =
-        in_base_r + in_oh_acc_r + in_kh_acc_r + in_ow_acc_r + in_kw_acc_r + c_chunk_byte_offset;
+    // 增量累加寄存器（有符号，确保与 in_base_r 相加时不溢出）
+    reg signed [31:0] in_oh_acc_r;   // = oh * stride_h_wc_r
+    reg signed [31:0] in_kh_acc_r;   // = kh * w_times_c_r
+    reg signed [31:0] in_ow_acc_r;   // = ow * stride_w_c_r
+    reg signed [31:0] in_kw_acc_r;   // = kw * col_stride_r
+    // 组合：全有符号加法，地址截断到 GB_ADDR_WIDTH
+    wire signed [31:0] in_pixel_byte_addr_s =
+        $signed(in_base_r) + $signed(in_oh_acc_r) + $signed(in_kh_acc_r)
+        + $signed(in_ow_acc_r) + $signed(in_kw_acc_r) + $signed(c_chunk_byte_offset);
+    wire [GB_ADDR_WIDTH-1:0] in_pixel_byte_addr = in_pixel_byte_addr_s[GB_ADDR_WIDTH-1:0];
 
     // 输出地址：同样只加法
     reg [31:0] out_row_offset_r;  // = (oh*OW + ow) * row_stride
@@ -258,12 +259,10 @@ module im2col_unit #(
                 S_READ_WAIT: begin
                     if (ih_ok && iw_ok) begin
                         in_bound <= 1'b1;
-                        if (rd_wait_cnt == 0) begin
-                            // 发出 OBUF 读请求
-                            gb_addrb <= in_pixel_byte_addr;
-                            gb_enb   <= 1'b1;
-                            gb_web   <= '0;  // 读
-                        end
+                        // 持续 assert gb_enb，让 OBUF pipeline 正常推进
+                        gb_addrb <= in_pixel_byte_addr;
+                        gb_enb   <= 1'b1;
+                        gb_web   <= '0;  // 读
                         if (rd_wait_cnt == READ_LATENCY) begin
                             state <= S_READ_LATCH;
                         end else begin
@@ -272,12 +271,14 @@ module im2col_unit #(
                     end else begin
                         // pad 区域，跳过读，直接写 0
                         in_bound <= 1'b0;
+                        gb_enb   <= 1'b0;
                         state <= S_WRITE;
                     end
                 end
 
                 S_READ_LATCH: begin
                     rd_data_reg <= gb_doutb;
+                    gb_enb      <= 1'b0;  // 读完毕，释放 Port A
                     state       <= S_WRITE;
                 end
 
