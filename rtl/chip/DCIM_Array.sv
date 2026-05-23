@@ -49,6 +49,7 @@ module DCIM_Array #(
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,    // 全局统一激活基址（广播）
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]      wei_base_addrs,   // 每 Tile 的权重基址
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]      out_base_addrs,   // 每 Tile 的输出基址
+    input  wire [NUM_TILES-1:0]                     tile_mask,        // 每 bit 控制对应 Tile 是否启用 (1=enabled)
     
     // 1 套外部 IBUF 接口（已由 bd 层广播展开为 NUM_GROUPS 套向量，Port A）
     input  wire [NUM_GROUPS*STRB_WIDTH-1:0]                 ibuf_ext_wea,
@@ -120,6 +121,7 @@ module DCIM_Array #(
                 .act_base_addr(act_base_addr),
                 .wei_base_addrs(group_wei_base_addrs),
                 .out_base_addrs(group_out_base_addrs),
+                .tile_mask     (tile_mask[g*TILES_PER_GROUP +: TILES_PER_GROUP]),
                 
                 // IBUF 广播写接口：各 Group 取各自对应分片
                 .ibuf_ext_wea(ibuf_ext_wea[g*STRB_WIDTH +: STRB_WIDTH]),

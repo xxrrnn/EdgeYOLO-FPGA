@@ -43,6 +43,7 @@ module DCIM_Array_Group #(
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [TILES_PER_GROUP*BUF_ADDR_WIDTH-1:0] wei_base_addrs,
     input  wire [TILES_PER_GROUP*BUF_ADDR_WIDTH-1:0] out_base_addrs,
+    input  wire [TILES_PER_GROUP-1:0]                tile_mask,        // 每 bit 控制对应 Tile 是否启用
     
     // 外部 IBUF 接口（Port A: 广播写入，所有组接收相同数据）
     // 软件只需发起一次写操作，由顶层将信号广播到所有 Group
@@ -119,6 +120,7 @@ module DCIM_Array_Group #(
             ) u_tile (
                 .clk(clk), .rst_n(rst_n),
                 .start(start),
+                .tile_enable(tile_mask[i]),
                 .done(tile_done[i]),
                 .ready(tile_ready[i]),
                 .mode(mode),

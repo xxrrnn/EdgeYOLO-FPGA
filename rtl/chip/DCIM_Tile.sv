@@ -1,60 +1,60 @@
 `timescale 1ns / 1ps
+`include "chip_defines.vh"
 
 // ============================================================================
-// DCIM_Tile - 单个 DCIM 计算 Tile，使用 ready/valid 握手协议访问外部 IBUF/OBUF
+// DCIM_Tile - 单个 DCIM 计算 Tile（支持任意 acc_depth 的 im2col matmul）
 // ============================================================================
+// 架构：每个 acc_word 流式加载 CYCLE=8 个 weight entries + 1 个 activation word
+//   → ppCache → maArray → mergeArray → accumulateArray → 输出
 //
-// 接口协议：
-//   - IBUF 读：Tile 发出 (rd_valid, rd_addr)，等待 rd_ready 握手，
-//              数据通过 (rd_data_valid, rd_data) 返回
-//   - OBUF 写：Tile 发出 (wr_valid, wr_addr, wr_data, wr_strb)，等待 wr_ready 握手
+// Weight SRAM 用作 ppCache 的暂存（不需要预加载全部 weight）。
+// 每个 acc_word 的 8 entries 从 IBUF[wei_base + row_cnt*CYCLE + 0..7] 实时加载。
 //
+// 支持的 CNN 算子范围（im2col 后的 matmul）：
+//   - 1×1 conv 任意 IC (acc_depth = ceil(IC/16))
+//   - 3×3 conv 任意 IC (acc_depth = ceil(9*IC/16))
+//   - 6×6 conv (acc_depth = ceil(36*IC/16))
+//   - 任意 kernel 只要 acc_depth ≤ DCIM_ACC_MAX=80
 // ============================================================================
-
-`include "para.v"
 
 module DCIM_Tile #(
-    parameter WD1     = 4,
-    parameter CH_IN   = 16,
-    parameter CH_OUT  = 16,
-    parameter SRAM_DP = 128,
-    parameter CYCLE   = 8,
-    parameter ACC     = 80,
-    
-    parameter BUF_ADDR_WIDTH = 14,
-    parameter BUF_DATA_WIDTH = 128,
+    parameter WD1             = `DCIM_WD1,
+    parameter CH_IN           = `DCIM_CH_IN,
+    parameter CH_OUT          = `DCIM_CH_OUT,
+    parameter SRAM_DP         = `DCIM_SRAM_DP,
+    parameter CYCLE           = `DCIM_CYCLE,
+    parameter ACC             = `DCIM_ACC_MAX,
+    parameter BUF_ADDR_WIDTH  = `DCIM_BUF_ADDR_WIDTH,
+    parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
     
     localparam SRAM_WD     = CH_IN * CH_OUT * WD1 / CYCLE,
     localparam ADDR_WD     = $clog2(SRAM_DP),
-    localparam ACC_UBD_WD  = $clog2(ACC+1),
-    localparam WD2         = 2*WD1 + $clog2(CH_IN),
-    localparam WD3         = WD2 + $clog2(ACC),
-    localparam OUT_WIDTH   = CH_OUT * WD3
+    localparam OUT_WIDTH   = CH_OUT * (2*WD1 + $clog2(CH_IN) + $clog2(ACC)),
+    localparam WD3         = 2*WD1 + $clog2(CH_IN) + $clog2(ACC),
+    localparam ACC_UBD_WD  = $clog2(ACC+1)
 )(
     input  wire                          clk,
     input  wire                          rst_n,
     
-    // 控制接口
     input  wire                          start,
+    input  wire                          tile_enable,  // 1=enabled, 0=stay IDLE (from DCIM_REG_TILE_MASK)
     output wire                          done,
     output wire                          ready,
     
-    // 配置接口
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    // num_rows 端口已移除：在 CNN 应用中 num_rows == acc_depth
     input  wire [BUF_ADDR_WIDTH-1:0]     wei_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,
     
-    // IBUF 读接口 (ready/valid)
+    // IBUF read interface (shared via arbiter)
     output reg                           ibuf_rd_valid,
     input  wire                          ibuf_rd_ready,
     output reg  [BUF_ADDR_WIDTH-1:0]     ibuf_rd_addr,
     input  wire                          ibuf_rd_data_valid,
     input  wire [BUF_DATA_WIDTH-1:0]     ibuf_rd_data,
     
-    // OBUF 写接口 (ready/valid)
+    // OBUF write interface (to arbiter)
     output reg                           obuf_wr_valid,
     input  wire                          obuf_wr_ready,
     output reg  [BUF_ADDR_WIDTH-1:0]     obuf_wr_addr,
@@ -67,16 +67,16 @@ module DCIM_Tile #(
     // ========================================================================
     typedef enum logic [3:0] {
         ST_IDLE,
-        ST_LOAD_WEI_REQ,    // 发出权重读请求，等待 ready 握手
-        ST_LOAD_WEI_RESP,   // 等待 data_valid 返回
-        ST_LOAD_WEI_DONE,   // 将数据写入 DCIM SRAM
+        ST_LOAD_WEI_REQ,
+        ST_LOAD_WEI_RESP,
+        ST_LOAD_WEI_DONE,
         ST_PREP_PPCACHE,
         ST_LOAD_PPCACHE,
         ST_SWAP_PPCACHE,
-        ST_LOAD_ACT_REQ,    // 发出激活读请求，等待 ready 握手
-        ST_LOAD_ACT_RESP,   // 等待 data_valid 返回
-        ST_LOAD_ACT2_REQ,   // INT16 第二次读请求
-        ST_LOAD_ACT2_RESP,  // INT16 第二次等待返回
+        ST_LOAD_ACT_REQ,
+        ST_LOAD_ACT_RESP,
+        ST_LOAD_ACT2_REQ,
+        ST_LOAD_ACT2_RESP,
         ST_COMPUTE,
         ST_WAIT_RESULT,
         ST_DONE
@@ -115,23 +115,21 @@ module DCIM_Tile #(
     // ========================================================================
     // 计数器和配置寄存器
     // ========================================================================
-    // row_cnt: 最大值 = acc_reg-1 ≤ 79，用 ACC_UBD_WD 位够；
-    // 但 DCIM_Tile 的 acc_depth 最大值 DCIM_ACC_MAX=80，用 7 位（2^7=128 > 80）
     reg [ACC_UBD_WD-1:0]     row_cnt;
-    reg [3:0]                wei_load_cnt;
-    reg [3:0]                ppcache_cnt;
-    // result_cnt: EXPECTED_OUTPUTS=1，只需 1 位；用 2 位留余量
+    reg [9:0]                wei_load_cnt;
+    reg [5:0]                ppcache_cnt;
     reg [1:0]                result_cnt;
-    // result_cnt_nonzero：result_cnt != 0 的单比特流水线信号，替代 96 级 >=1 比较器
     reg                      result_cnt_nonzero;
     reg [BUF_DATA_WIDTH-1:0] act_buf_lo;
-    reg [BUF_DATA_WIDTH-1:0] ibuf_data_latch;  // 锁存从IBUF返回的数据
+    reg [BUF_DATA_WIDTH-1:0] ibuf_data_latch;
     
     // ========================================================================
-    // start 上升沿检测（支持电平输入）
+    // start 上升沿检测 + tile_enable 门控
+    // tile_enable=0 的 Tile 不响应 start，永远停在 IDLE
     // ========================================================================
     reg start_d;
-    wire start_pulse = start && !start_d;
+    wire start_pulse_raw = start && !start_d;
+    wire start_pulse     = start_pulse_raw && tile_enable;
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) start_d <= 0;
@@ -140,14 +138,10 @@ module DCIM_Tile #(
     
     (* max_fanout = 32 *) reg [2:0] mode_reg;
     reg [ACC_UBD_WD-1:0]     acc_reg;
-    // num_rows_reg 已移除：在 CNN 应用中，num_rows 永远等于 acc_depth
-    // 直接使用 acc_reg 代替 num_rows_reg，消除除法器
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] out_base_addr_reg;
     
-    // EXPECTED_OUTPUTS == 1：只需检测 result_cnt >= 1，等价于 result_cnt_nonzero
-    // 避免 32-bit CARRY8 链（96 logic levels → 1 flip-flop）
     localparam [31:0] EXPECTED_OUTPUTS = 32'd1;
     
     (* max_fanout = 16 *) reg is_int16_reg;
@@ -155,7 +149,6 @@ module DCIM_Tile #(
     
     assign ready = (state == ST_IDLE);
     
-    // done 信号：置位后保持，直到下次启动时清除
     reg done_reg;
     assign done = done_reg;
     always_ff @(posedge clk or negedge rst_n) begin
@@ -165,9 +158,8 @@ module DCIM_Tile #(
     end
     
     // ========================================================================
-    // 状态机：状态转换（添加流水线优化）
+    // 状态机辅助信号
     // ========================================================================
-    // 添加辅助信号，打破组合逻辑链
     (* max_fanout = 8 *) reg ibuf_handshake_done;
     (* max_fanout = 8 *) reg ibuf_data_received;
     (* max_fanout = 8 *) reg conv_handshake_done;
@@ -190,16 +182,17 @@ module DCIM_Tile #(
             ibuf_handshake_done <= (ibuf_rd_valid && ibuf_rd_ready);
             ibuf_data_received <= ibuf_rd_data_valid;
             conv_handshake_done <= (conv_valid && conv_ready);
-            wei_load_finished <= (wei_load_cnt >= CYCLE - 1);
-            ppcache_finished <= (ppcache_cnt >= CYCLE + 2);
+            wei_load_finished <= (wei_load_cnt >= acc_reg * CYCLE - 1);
+            ppcache_finished <= (state == ST_LOAD_PPCACHE) && ((row_cnt == 0) ? (ppcache_cnt >= 4 * CYCLE) : (ppcache_cnt >= 2 * CYCLE));
             all_rows_processed <= (row_cnt >= acc_reg - 1);
-            // result_cnt >= 1 ⟺ result_cnt != 0 ⟺ |result_cnt（1 级 OR 门）
-            // 再打一拍给 all_results_collected，彻底消除组合逻辑路径
             result_cnt_nonzero <= (result_cnt != 2'd0);
             all_results_collected <= result_cnt_nonzero;
         end
     end
     
+    // ========================================================================
+    // 状态机转移（核心改动：COMPUTE 后回到 LOAD_WEI 加载下一组 weight）
+    // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= ST_IDLE;
         else state <= next_state;
@@ -228,7 +221,7 @@ module DCIM_Tile #(
             ST_COMPUTE: begin
                 if (conv_handshake_done) begin
                     if (all_rows_processed) next_state = ST_WAIT_RESULT;
-                    else next_state = ST_LOAD_ACT_REQ;
+                    else next_state = ST_PREP_PPCACHE;  // Next acc_word: just load from SRAM (already there)
                 end
             end
             ST_WAIT_RESULT:    if (all_results_collected) next_state = ST_DONE;
@@ -238,13 +231,12 @@ module DCIM_Tile #(
     end
     
     // ========================================================================
-    // 配置寄存器：在启动时锁存配置
+    // 配置寄存器
     // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mode_reg <= `MODE_INT8;
             acc_reg <= 0;
-            // num_rows_reg 已移除
             wei_base_addr_reg <= 0;
             act_base_addr_reg <= 0;
             out_base_addr_reg <= 0;
@@ -252,7 +244,6 @@ module DCIM_Tile #(
         end else if (state == ST_IDLE && start_pulse) begin
             mode_reg <= mode;
             acc_reg <= acc_depth;
-            // num_rows_reg 已移除：直接使用 acc_reg
             wei_base_addr_reg <= wei_base_addr;
             act_base_addr_reg <= act_base_addr;
             out_base_addr_reg <= out_base_addr;
@@ -261,7 +252,7 @@ module DCIM_Tile #(
     end
     
     // ========================================================================
-    // 主控制逻辑（优化组合逻辑深度）
+    // 主控制逻辑
     // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -273,7 +264,6 @@ module DCIM_Tile #(
             ibuf_data_latch <= 0;
             act_buf_lo <= 0;
         end else begin
-            // 默认控制信号
             dcim_wr_wei <= 0;
             dcim_load_wei <= 0;
             dcim_swap_wei <= 0;
@@ -286,7 +276,8 @@ module DCIM_Tile #(
                 end
                 
                 // ==============================================================
-                // 权重加载：发出读请求 → 等待数据 → 写入SRAM → 循环
+                // Weight 加载：每个 acc_word 从 IBUF 读 CYCLE=8 entries
+                // 地址 = wei_base + row_cnt * CYCLE + wei_load_cnt
                 // ==============================================================
                 ST_LOAD_WEI_REQ: begin
                     ibuf_rd_valid <= 1'b1;
@@ -303,20 +294,26 @@ module DCIM_Tile #(
                 
                 ST_LOAD_WEI_DONE: begin
                     dcim_wr_wei <= 1'b1;
-                    dcim_addr_wei <= wei_load_cnt;
+                    dcim_addr_wei <= wei_load_cnt[ADDR_WD-1:0];
                     dcim_data_wei <= ibuf_data_latch;
                     wei_load_cnt <= wei_load_cnt + 1;
                 end
                 
                 // ==============================================================
-                // ppCache 加载阶段
+                // ppCache 加载
                 // ==============================================================
                 ST_PREP_PPCACHE: begin
-                    dcim_addr_wei <= 0;
+                    dcim_addr_wei <= row_cnt * CYCLE;
+                    ppcache_cnt <= 0;
                 end
                 
                 ST_LOAD_PPCACHE: begin
-                    dcim_load_wei <= (ppcache_cnt == 0);
+                    // row_cnt==0: 2 loads (IDLE→PREPARE→READY), trigger at cnt=0 and cnt=2*CYCLE
+                    // row_cnt>0: 1 load (PREPARE→READY), trigger at cnt=0 only
+                    if (row_cnt == 0)
+                        dcim_load_wei <= (ppcache_cnt == 0) || (ppcache_cnt == 2 * CYCLE);
+                    else
+                        dcim_load_wei <= (ppcache_cnt == 0);
                     ppcache_cnt <= ppcache_cnt + 1;
                 end
                 
@@ -325,7 +322,7 @@ module DCIM_Tile #(
                 end
                 
                 // ==============================================================
-                // 激活加载：发出读请求 → 等待数据
+                // Activation 加载
                 // ==============================================================
                 ST_LOAD_ACT_REQ: begin
                     ibuf_rd_valid <= 1'b1;
@@ -348,7 +345,6 @@ module DCIM_Tile #(
                     end
                 end
                 
-                // INT16 第二次读取
                 ST_LOAD_ACT2_REQ: begin
                     ibuf_rd_valid <= 1'b1;
                     ibuf_rd_addr <= act_base_addr_reg + row_cnt * 2 + 1;
@@ -364,7 +360,7 @@ module DCIM_Tile #(
                 end
                 
                 // ==============================================================
-                // 计算阶段
+                // 计算
                 // ==============================================================
                 ST_COMPUTE: begin
                     conv_valid <= 1'b1;
@@ -384,7 +380,7 @@ module DCIM_Tile #(
     end
     
     // ========================================================================
-    // 结果保存：OBUF 写入（使用 ready/valid 握手）
+    // 结果保存：OBUF 写入
     // ========================================================================
     reg [2:0] save_phase;
     (* keep = "true" *) reg [OUT_WIDTH-1:0] dcim_data_latch;
@@ -398,8 +394,7 @@ module DCIM_Tile #(
     genvar gi;
     generate
         for (gi = 0; gi < 8; gi = gi + 1) begin : int8_extract
-            localparam PHYS_IDX_RAW = gi * 2 + 2;
-            localparam PHYS_IDX = (PHYS_IDX_RAW >= CH_OUT) ? (CH_OUT - 2) : PHYS_IDX_RAW;
+            localparam PHYS_IDX = gi * 2;
             if (WD3 <= 32) begin : sign_extend
                 assign int8_result[gi] = {{(32-WD3){phys_ch_reg[PHYS_IDX][WD3-1]}}, phys_ch_reg[PHYS_IDX]};
             end else begin : truncate
@@ -421,12 +416,6 @@ module DCIM_Tile #(
                                       int8_result[3], int8_result[2], int8_result[1], int8_result[0]};
     wire [127:0] int16_packed_comb = {int16_result[3], int16_result[2], int16_result[1], int16_result[0]};
     
-    // save_phase:
-    //   0: 等待 DCIM 输出
-    //   1: 解包物理通道
-    //   2: 打包为 INT32
-    //   3: 发出第一次 OBUF 写请求，等待 wr_ready
-    //   4: (INT8) 发出第二次 OBUF 写请求，等待 wr_ready
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             result_cnt <= 0;
@@ -448,6 +437,9 @@ module DCIM_Tile #(
                         if (dcim_valid_out && dcim_ready_out) begin
                             dcim_data_latch <= dcim_data_out;
                             save_phase <= 3'd1;
+                            `ifdef SIM
+                            $display("[%0t] Tile save: dcim_valid_out fired, result_cnt=%0d, out_base=0x%05h", $time, result_cnt, out_base_addr_reg);
+                            `endif
                         end
                     end
                     
@@ -461,36 +453,44 @@ module DCIM_Tile #(
                     3'd2: begin
                         int8_packed_reg <= int8_packed_comb;
                         int16_packed_reg <= int16_packed_comb;
+                        // Pre-arm valid + addr/data so phase=3 already has
+                        // valid=1 from cycle 0, removing the "valid is 0
+                        // on entry" race with the arbiter.
+                        obuf_wr_valid <= 1'b1;
+                        obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
+                        if (is_int16_reg) begin
+                            obuf_wr_addr <= out_base_addr_reg + result_cnt;
+                            obuf_wr_data <= int16_packed_comb;
+                        end else begin
+                            obuf_wr_addr <= out_base_addr_reg + result_cnt * 2;
+                            obuf_wr_data <= int8_packed_comb[127:0];
+                        end
                         save_phase <= 3'd3;
                     end
                     
                     3'd3: begin
-                        obuf_wr_valid <= 1'b1;
-                        obuf_wr_strb <= {(BUF_DATA_WIDTH/8){1'b1}};
-                        
-                        if (is_int16_reg) begin
-                            obuf_wr_addr <= out_base_addr_reg + result_cnt;
-                            obuf_wr_data <= int16_packed_reg;
-                            if (obuf_wr_valid && obuf_wr_ready) begin
-                                obuf_wr_valid <= 0;
+                        // valid/addr/data already driven from phase=2; just
+                        // wait for arbiter ready.
+                        if (obuf_wr_ready) begin
+                            obuf_wr_valid <= 0;  // Always clear valid after handshake
+                            if (is_int16_reg) begin
                                 save_phase <= 3'd0;
                                 result_cnt <= result_cnt + 1;
-                            end
-                        end else begin
-                            obuf_wr_addr <= out_base_addr_reg + result_cnt * 2;
-                            obuf_wr_data <= int8_packed_reg[127:0];
-                            if (obuf_wr_valid && obuf_wr_ready) begin
-                                obuf_wr_valid <= 0;
+                            end else begin
+                                // INT8: go to phase=4 for second word.
+                                // Clear valid for one cycle to let arbiter's grant_taken reset.
                                 save_phase <= 3'd4;
                             end
                         end
                     end
                     
                     3'd4: begin
+                        // Second INT8 word: arm valid/addr/data on entry.
+                        // Only check ready when our own valid is asserted.
                         obuf_wr_valid <= 1'b1;
-                        obuf_wr_strb <= {(BUF_DATA_WIDTH/8){1'b1}};
-                        obuf_wr_addr <= out_base_addr_reg + result_cnt * 2 + 1;
-                        obuf_wr_data <= int8_packed_reg[255:128];
+                        obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
+                        obuf_wr_addr  <= out_base_addr_reg + result_cnt * 2 + 1;
+                        obuf_wr_data  <= int8_packed_reg[255:128];
                         if (obuf_wr_valid && obuf_wr_ready) begin
                             obuf_wr_valid <= 0;
                             save_phase <= 3'd0;
@@ -506,11 +506,41 @@ module DCIM_Tile #(
             end
         end
     end
-    
+
+`ifdef SIM
+`ifdef PROBE_OBUF_X
     // ========================================================================
-    // 模块实例化
+    // SIM-only probe: log phase=3/4 valid/ready/addr to debug INT8 second-word issue
+    // Off by default; enable with `xvlog -d PROBE_OBUF_X`
     // ========================================================================
-    
+    always_ff @(posedge clk) begin
+        if (rst_n && (save_phase == 3'd3 || save_phase == 3'd4) &&
+            (out_base_addr_reg == 20'h20000)) begin
+            $display("[%0t] PROBE.Tile@%m: phase=%0d result_cnt=%0d valid=%b ready=%b addr=0x%05h data[31:0]=0x%08h",
+                     $time, save_phase, result_cnt, obuf_wr_valid, obuf_wr_ready,
+                     obuf_wr_addr, obuf_wr_data[31:0]);
+        end
+    end
+`endif
+`endif
+
+    // ========================================================================
+    // DCIM 计算核心实例化
+    // ========================================================================
+    act_nibble_converter #(
+        .CH_IN(CH_IN)
+    ) u_act_nibble_converter (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .mode         (mode_reg),
+        .raw_act_valid(conv_valid),
+        .raw_act_ready(conv_ready),
+        .raw_act_data (conv_data),
+        .dcim_act_valid(dcim_valid_act),
+        .dcim_act_ready(dcim_ready_act),
+        .dcim_act_data (dcim_data_act)
+    );
+
     dcim #(
         .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT),
         .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC)
@@ -520,16 +550,9 @@ module DCIM_Tile #(
         .wr_wei(dcim_wr_wei), .load_wei(dcim_load_wei), .swap_wei(dcim_swap_wei),
         .up_ready_wei(dcim_ready_wei), .up_address_wei(dcim_addr_wei),
         .up_data_wei(dcim_data_wei), .up_be_wei({SRAM_WD{1'b1}}),
-        .up_valid_cal(dcim_valid_act), .up_ready_cal(dcim_ready_act), .up_data_cal(dcim_data_act),
+        .up_valid_cal(dcim_valid_act), .up_ready_cal(dcim_ready_act),
+        .up_data_cal(dcim_data_act),
         .dn_valid(dcim_valid_out), .dn_ready(dcim_ready_out), .dn_data(dcim_data_out)
-    );
-    
-    act_nibble_converter #(
-        .CH_IN(CH_IN), .MODE_INT8(`MODE_INT8), .MODE_INT16(`MODE_INT16)
-    ) u_converter (
-        .clk(clk), .rst_n(rst_n), .mode(mode_reg),
-        .raw_act_valid(conv_valid), .raw_act_ready(conv_ready), .raw_act_data(conv_data),
-        .dcim_act_valid(dcim_valid_act), .dcim_act_ready(dcim_ready_act), .dcim_act_data(dcim_data_act)
     );
 
 endmodule

@@ -141,6 +141,7 @@ module DCIM_Array_bd #(
     reg [INT_ADDR_W-1:0]                 cfg_act_base_addr;  // 全局统一激活基址
     reg [NUM_TILES*INT_ADDR_W-1:0]       cfg_wei_base_addrs; // 8 Tile 各自权重基址
     reg [NUM_TILES*INT_ADDR_W-1:0]       cfg_out_base_addrs; // 8 Tile 各自输出基址
+    reg [NUM_TILES-1:0]                  cfg_tile_mask;      // 每 bit 控制对应 Tile 是否启用
 
     integer _i;
 
@@ -150,6 +151,7 @@ module DCIM_Array_bd #(
             cfg_mode          <= `MODE_INT8;
             cfg_acc_depth     <= 0;
             cfg_act_base_addr <= 0;
+            cfg_tile_mask     <= {NUM_TILES{1'b1}};  // default: all enabled
             for (_i = 0; _i < NUM_TILES; _i = _i + 1) begin
                 cfg_wei_base_addrs[_i*INT_ADDR_W +: INT_ADDR_W] <= 0;
                 cfg_out_base_addrs[_i*INT_ADDR_W +: INT_ADDR_W] <= 0;
@@ -173,7 +175,8 @@ module DCIM_Array_bd #(
                             cfg_wei_base_addrs[t*INT_ADDR_W +: INT_ADDR_W]
                                 <= { {(INT_ADDR_W-IBUF_ADDR_W){1'b0}}, cfg_wr_data_d[IBUF_ADDR_W-1:0] };
                     end
-                end else if (cfg_wr_addr_d >= `DCIM_REG_OUT_BASE) begin
+                end else if (cfg_wr_addr_d >= `DCIM_REG_OUT_BASE &&
+                             cfg_wr_addr_d < (`DCIM_REG_OUT_BASE + NUM_TILES*4)) begin
                     begin : out_decode
                         integer t2;
                         t2 = (cfg_wr_addr_d - `DCIM_REG_OUT_BASE) >> 2;
@@ -181,6 +184,8 @@ module DCIM_Array_bd #(
                             cfg_out_base_addrs[t2*INT_ADDR_W +: INT_ADDR_W]
                                 <= cfg_wr_data_d[INT_ADDR_W-1:0];
                     end
+                end else if (cfg_wr_addr_d == `DCIM_REG_TILE_MASK) begin
+                    cfg_tile_mask <= cfg_wr_data_d[NUM_TILES-1:0];
                 end
             end
         end
@@ -317,6 +322,7 @@ module DCIM_Array_bd #(
         .act_base_addr   (cfg_act_base_addr),
         .wei_base_addrs  (cfg_wei_base_addrs),
         .out_base_addrs  (cfg_out_base_addrs),
+        .tile_mask       (cfg_tile_mask),
         .ibuf_ext_wea    (ibuf_ext_wea_v),
         .ibuf_ext_ena    (ibuf_ext_ena_v),
         .ibuf_ext_addra  (ibuf_ext_addra_v),
