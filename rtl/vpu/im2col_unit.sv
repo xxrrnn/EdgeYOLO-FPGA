@@ -121,9 +121,11 @@ module im2col_unit #(
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
     // 读延迟计数
-    // OBUF 读延迟: DCIM_Array_bd mux(0) + obuf input_reg(1) + bank_sel/memreg(1)
-    //   + NBPIPE(2) + bank_sel_pipe/output_mux(TOTAL_PIPE=4) + obuf output_mux(1) = 9
-    localparam READ_LATENCY = 9;
+    // OBUF 读延迟 (v2 双级输入寄存器):
+    //   DCIM_Array_bd mux(0) + obuf IN_REG1(1) + per-bank IN_REG2(1)
+    //   + memrega(1) + NBPIPE(2) + bank_sel_pipe→output_mux(1) + obuf output_mux(1) = 7
+    // 加上 VPU 端 obuf_dout 入 nn_lut 等的余量，统一等到 10 拍。
+    localparam READ_LATENCY = 10;
     reg [3:0] rd_wait_cnt;
 
     // 锁存的读数据

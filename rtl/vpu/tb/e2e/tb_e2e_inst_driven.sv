@@ -515,12 +515,12 @@ module tb_e2e_inst_driven;
     // For now we hard-code the SCALED values matching golden_e2e_inst.py default
     // (scale=0.2 -> L1 32x32, L2 16x16, L3 16x16). A future enhancement can parse
     // hex_inst/manifest.txt for parametric configurability.
-    localparam integer L1_IN_H = 16, L1_IN_W = 16, L1_IN_C = 16;
-    localparam integer L1_OH = 8, L1_OW = 8, L1_OC = 32, L1_ACC_DEPTH = 9, L1_NUM_TILES = 4;
-    localparam integer L2_IN_H = 8, L2_IN_W = 8, L2_IN_C = 32;
-    localparam integer L2_OH = 8, L2_OW = 8, L2_OC = 16, L2_ACC_DEPTH = 2, L2_NUM_TILES = 2;
-    localparam integer L3_IN_H = 8, L3_IN_W = 8, L3_IN_C = 16;
-    localparam integer L3_OH = 8, L3_OW = 8, L3_OC = 16, L3_ACC_DEPTH = 9, L3_NUM_TILES = 2;
+    localparam integer L1_IN_H = 32, L1_IN_W = 32, L1_IN_C = 16;
+    localparam integer L1_OH = 16, L1_OW = 16, L1_OC = 32, L1_ACC_DEPTH = 9, L1_NUM_TILES = 4;
+    localparam integer L2_IN_H = 16, L2_IN_W = 16, L2_IN_C = 32;
+    localparam integer L2_OH = 16, L2_OW = 16, L2_OC = 16, L2_ACC_DEPTH = 2, L2_NUM_TILES = 2;
+    localparam integer L3_IN_H = 16, L3_IN_W = 16, L3_IN_C = 16;
+    localparam integer L3_OH = 16, L3_OW = 16, L3_OC = 16, L3_ACC_DEPTH = 9, L3_NUM_TILES = 2;
 
     // Number of golden words to compare per checkpoint (cap by VERIFY_MAX_WORDS)
     function automatic integer min2(input integer a, input integer b);
