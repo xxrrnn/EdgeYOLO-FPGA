@@ -53,6 +53,7 @@ module Global_VPU #(
     output wire [`DCIM_BUF_DATA_WIDTH/8-1:0] obuf_we,          // 16-byte strb
     output wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_din,         // 128-bit
     input  wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_dout,        // 128-bit
+    input  wire                              obuf_rd_valid,    // OBUF 读数据有效（ready/valid）
 
     // WB 端口保留
     input wire [WB_ADDR_WIDTH-1:0]          wb_addra,
@@ -322,6 +323,7 @@ nn_lut_unit #(
       .gb_web(qa_gb_web),   
       .gb_enb(qa_gb_enb),    
       .gb_doutb(gb_doutb),
+      .gb_rd_valid(obuf_rd_valid),
 
       // --- Weight Buffer (WB) Ports (Simple Dual-Port BRAM-like interface) ---
       .wb_addrb(qa_wb_addrb),

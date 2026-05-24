@@ -52,6 +52,7 @@ module Global_VPU_top #(
     output wire [`DCIM_BUF_DATA_WIDTH/8-1:0] obuf_we,
     output wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_din,
     input  wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_dout,
+    input  wire                              obuf_rd_valid,
 
     // Weight Buffer (WB) BRAM 接口 - 128-bit
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 wb_bram CLK" *)
@@ -116,6 +117,7 @@ module Global_VPU_top #(
         .obuf_we(obuf_we),
         .obuf_din(obuf_din),
         .obuf_dout(obuf_dout),
+        .obuf_rd_valid(obuf_rd_valid),
         // WB 接口
         .wb_addra(wb_bram_word_addr[WB_ADDR_WIDTH-1:0]),
         .wb_dina(wb_bram_din),

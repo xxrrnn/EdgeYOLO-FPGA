@@ -139,7 +139,8 @@ connect_bd_net [get_bd_pins vpu_0/obuf_addr] [get_bd_pins dcim_array_0/vpu_obuf_
 connect_bd_net [get_bd_pins vpu_0/obuf_en]   [get_bd_pins dcim_array_0/vpu_obuf_en]
 connect_bd_net [get_bd_pins vpu_0/obuf_we]   [get_bd_pins dcim_array_0/vpu_obuf_we]
 connect_bd_net [get_bd_pins vpu_0/obuf_din]  [get_bd_pins dcim_array_0/vpu_obuf_din]
-connect_bd_net [get_bd_pins dcim_array_0/vpu_obuf_dout] [get_bd_pins vpu_0/obuf_dout]
+connect_bd_net [get_bd_pins dcim_array_0/vpu_obuf_dout]     [get_bd_pins vpu_0/obuf_dout]
+connect_bd_net [get_bd_pins dcim_array_0/vpu_obuf_rd_valid] [get_bd_pins vpu_0/obuf_rd_valid]
 
 # ==============================================================================
 # INST_Decoder <-> inst_bram (wire read interface)

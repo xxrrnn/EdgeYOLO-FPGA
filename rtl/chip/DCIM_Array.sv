@@ -63,7 +63,8 @@ module DCIM_Array #(
     input  wire [NUM_GROUPS-1:0]                    obuf_ext_ena,
     input  wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]     obuf_ext_addra,
     input  wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     obuf_ext_dina,
-    output wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     obuf_ext_douta
+    output wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]     obuf_ext_douta,
+    output wire [NUM_GROUPS-1:0]                    obuf_ext_douta_valid
 );
 
     // ========================================================================
@@ -135,7 +136,8 @@ module DCIM_Array #(
                 .obuf_ext_ena(obuf_ext_ena[g]),
                 .obuf_ext_addra(obuf_ext_addra[g*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
                 .obuf_ext_dina(obuf_ext_dina[g*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
-                .obuf_ext_douta(obuf_ext_douta[g*BUF_DATA_WIDTH +: BUF_DATA_WIDTH])
+                .obuf_ext_douta(obuf_ext_douta[g*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .obuf_ext_douta_valid(obuf_ext_douta_valid[g])
             );
         end
     endgenerate

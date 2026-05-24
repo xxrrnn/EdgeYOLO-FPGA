@@ -91,6 +91,7 @@ module DCIM_Array_bd #(
     input  wire [BUF_DATA_WIDTH/8-1:0]   vpu_obuf_we,         // 16-byte strb
     input  wire [BUF_DATA_WIDTH-1:0]     vpu_obuf_din,        // 128-bit 写数据
     output wire [BUF_DATA_WIDTH-1:0]     vpu_obuf_dout,       // 128-bit 读数据
+    output wire                          vpu_obuf_rd_valid,   // 读数据有效（ready/valid，替代硬编码延迟）
 
     // =========================================================================
     // 状态输出
@@ -260,9 +261,11 @@ module DCIM_Array_bd #(
     wire [NUM_GROUPS*INT_ADDR_W-1:0]     obuf_ext_addra_v;
     wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0] obuf_ext_dina_v;
     wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0] obuf_ext_douta_v;
+    wire [NUM_GROUPS-1:0]                obuf_ext_douta_valid_v;
 
     // VPU 读出 = OBUF Port A 读出（同周期到达，需要等 OBUF 流水线延迟）
-    assign vpu_obuf_dout = obuf_ext_douta_v[BUF_DATA_WIDTH-1:0];
+    assign vpu_obuf_dout     = obuf_ext_douta_v[BUF_DATA_WIDTH-1:0];
+    assign vpu_obuf_rd_valid = obuf_ext_douta_valid_v[0];  // Group 0，lite 仅 1 组
 
     generate
         if (NUM_GROUPS == 1) begin : gen_obuf_single
@@ -329,7 +332,8 @@ module DCIM_Array_bd #(
         .obuf_ext_ena    (obuf_ext_ena_v),
         .obuf_ext_addra  (obuf_ext_addra_v),
         .obuf_ext_dina   (obuf_ext_dina_v),
-        .obuf_ext_douta  (obuf_ext_douta_v)
+        .obuf_ext_douta  (obuf_ext_douta_v),
+        .obuf_ext_douta_valid(obuf_ext_douta_valid_v)
     );
 
 endmodule

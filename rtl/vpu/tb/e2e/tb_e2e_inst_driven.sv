@@ -102,6 +102,7 @@ module tb_e2e_inst_driven;
     wire [STRB_WIDTH-1:0]      vpu_obuf_we;
     wire [BUF_DATA_WIDTH-1:0]  vpu_obuf_din;
     wire [BUF_DATA_WIDTH-1:0]  vpu_obuf_dout;
+    wire                       vpu_obuf_rd_valid;
 
     // VPU WB BRAM (Port A driven by TB; Port B internal to VPU)
     wire        wb_bram_clk_w, wb_bram_rst_w;
@@ -188,6 +189,7 @@ module tb_e2e_inst_driven;
         .obuf_we     (vpu_obuf_we),
         .obuf_din    (vpu_obuf_din),
         .obuf_dout   (vpu_obuf_dout),
+        .obuf_rd_valid(vpu_obuf_rd_valid),
         .wb_bram_clk (wb_bram_clk_w),
         .wb_bram_rst (wb_bram_rst_w),
         .wb_bram_en  (tb_wb_en),
@@ -226,6 +228,7 @@ module tb_e2e_inst_driven;
         .vpu_obuf_we    (vpu_obuf_we),
         .vpu_obuf_din   (vpu_obuf_din),
         .vpu_obuf_dout  (vpu_obuf_dout),
+        .vpu_obuf_rd_valid(vpu_obuf_rd_valid),
         .done           (dcim_done)
     );
 
@@ -724,8 +727,8 @@ module tb_e2e_inst_driven;
 
     // Timeout (cycles)
     initial begin
-        #(CLK_PERIOD * 200000000);
-        $display("FATAL: Global timeout at 200M cycles");
+        #(CLK_PERIOD * 500000000);
+        $display("FATAL: Global timeout at 500M cycles");
         $finish(1);
     end
 

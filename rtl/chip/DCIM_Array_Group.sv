@@ -58,7 +58,8 @@ module DCIM_Array_Group #(
     input  wire                          obuf_ext_ena,
     input  wire [BUF_ADDR_WIDTH-1:0]     obuf_ext_addra,
     input  wire [BUF_DATA_WIDTH-1:0]     obuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     obuf_ext_douta
+    output wire [BUF_DATA_WIDTH-1:0]     obuf_ext_douta,
+    output wire                          obuf_ext_douta_valid  // Port A 读数据有效（ready/valid）
 );
 
     // ========================================================================
@@ -228,6 +229,7 @@ module DCIM_Array_Group #(
         .dina(obuf_ext_dina),
         .addra(obuf_ext_addra),
         .douta(obuf_ext_douta),
+        .douta_valid(obuf_ext_douta_valid),
         .web(obuf_int_we),
         .mem_enb(obuf_int_en),
         .dinb(obuf_int_din),

@@ -39,6 +39,9 @@ module tb_qa_standalone;
     wire [GB_BANDWIDTH/8-1:0] gb_web;
     wire                      gb_enb;
     reg  [GB_BANDWIDTH-1:0]   gb_doutb;
+    // gb_rd_valid: standalone tb 里 OBUF 行为模型 1 拍延迟，enb 打 1 拍后有效
+    reg                       gb_rd_valid_r;
+    always @(posedge clk) gb_rd_valid_r <= gb_enb && ~|gb_web;
 
     // WB interface
     wire [WB_ADDR_WIDTH-1:0]  wb_addrb;
@@ -102,6 +105,7 @@ module tb_qa_standalone;
         .gb_web(gb_web),
         .gb_enb(gb_enb),
         .gb_doutb(gb_doutb),
+        .gb_rd_valid(gb_rd_valid_r),
         .wb_addrb(wb_addrb),
         .wb_dinb(wb_dinb),
         .wb_enb(wb_enb),

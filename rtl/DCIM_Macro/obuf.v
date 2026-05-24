@@ -36,6 +36,7 @@ module obuf #(
     input [DWIDTH-1:0] dina,
     input [AWIDTH-1:0] addra,
     output reg [DWIDTH-1:0] douta,
+    output wire             douta_valid,  // 读数据有效脉冲（与 douta 同拍）
     // Port B (Internal Tile write interface)
     input [NUM_COL-1:0] web,
     input mem_enb,
@@ -180,6 +181,16 @@ end
 // ============================================================================
 // 输出多路选择器
 // ============================================================================
+// read_en_pipe：跟踪 Port A 读使能，流水到输出，产生 douta_valid
+(* shreg_extract = "no" *) reg read_en_pipe_a [0:TOTAL_PIPE];
+always @(posedge clk) begin
+    // 第 0 级：IN_REG1 完成后（addra_reg 有效，wea=0）
+    read_en_pipe_a[0] <= mem_ena_reg && ~|wea_reg;
+    for (i = 0; i < TOTAL_PIPE; i = i + 1)
+        read_en_pipe_a[i+1] <= read_en_pipe_a[i];
+end
+assign douta_valid = read_en_pipe_a[TOTAL_PIPE];
+
 always @(posedge clk) begin
     douta <= bank_douta[bank_sel_a_pipe[TOTAL_PIPE-1]];
     doutb <= bank_doutb[bank_sel_b_pipe[TOTAL_PIPE-1]];
