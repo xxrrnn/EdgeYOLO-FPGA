@@ -32,6 +32,6 @@ module fp32_2_int8_array #(
         end
     endgenerate
 
-    assign m_axis_result_tvalid = tvalid_arr[0];
+    assign m_axis_result_tvalid = &tvalid_arr;
 
 endmodule

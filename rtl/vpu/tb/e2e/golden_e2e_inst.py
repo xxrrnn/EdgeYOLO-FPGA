@@ -361,7 +361,9 @@ def build_wb_blob(layers, qscale_addrs, scale_addrs, bias_addrs):
         for c in range(ly.out_ch):
             struct.pack_into('<f', blob, saddr + c * 4, float(ly.dqa_scale[c]))
             struct.pack_into('<f', blob, baddr + c * 4, float(ly.dqa_bias[c]))
-        struct.pack_into('<f', blob, qaddr, float(ly.act_scale))
+        # QA hardware implements multiplication: q = round(dqa * qscale).
+        # Python golden defines q = round(dqa / act_scale), so qscale is reciprocal.
+        struct.pack_into('<f', blob, qaddr, float(1.0 / ly.act_scale))
     return bytes(blob)
 
 

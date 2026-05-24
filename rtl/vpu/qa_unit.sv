@@ -77,6 +77,14 @@ module qa_unit #(
 
     // dqa signals
     reg     [FP_WIDTH - 1 : 0]                            qa_scale_reg;
+    
+    // OBUF read latency counter
+    reg [4:0] qa_rd_wait_cnt;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) qa_rd_wait_cnt <= 0;
+        else if (c_state == QA_LOAD_X) qa_rd_wait_cnt <= qa_rd_wait_cnt + 1;
+        else qa_rd_wait_cnt <= 0;
+    end
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_fp_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_out_q_reg;
     reg     [FP_CORE_NUM * Q_INT_WIDTH_OUT - 1 : 0]       qa_out_int_reg;
@@ -237,7 +245,7 @@ module qa_unit #(
             gb_dinb  = pack_wr_data;
             gb_web   = pack_wr_we;
             gb_enb   = 1'b1;
-        end else if(c_state == QA_LOAD_X ) begin
+        end else if(c_state == QA_LOAD_X) begin
             gb_addrb = qa_x_load_addr;
             gb_enb   = 1'b1;
             gb_web   = '0;
@@ -245,10 +253,15 @@ module qa_unit #(
         end
     end
 
+    localparam [FP_WIDTH-1:0] QA_UINT8_ZERO_POINT_FP32 = 32'hc3000000;  // -128.0f
+
     assign fp_array_tvalid  = (c_state == QA_COMPUTE)? 1'b1 : 1'b0;
     assign fp_a_tdata       = (c_state == QA_COMPUTE)? qa_fp_in_reg: '0;
     assign fp_b_tdata       = (c_state == QA_COMPUTE)? {FP_CORE_NUM{qa_scale_reg}} : '0;
-    assign fp_c_tdata       =  '0;
+    // Convert unsigned clamp [0,255] using signed INT8 converter:
+    //   signed_q = clamp(round(dqa*qscale - 128), -128, 127)
+    //   uint8_q  = signed_q + 128 (applied below as XOR 0x80 per byte)
+    assign fp_c_tdata       = (c_state == QA_COMPUTE)? {FP_CORE_NUM{QA_UINT8_ZERO_POINT_FP32}} : '0;
 
 
     /* FP2INT ARRAY*/
@@ -256,7 +269,7 @@ module qa_unit #(
     
     wire [FP_TRAN_NUM*FP_WIDTH-1:0]     s_axis_tdata;
     wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]         m_axis_int_tdata;
-    assign  s_axis_tvalid = (c_state == QA_INT || c_state == QA_INT_WAIT); 
+    assign  s_axis_tvalid = (c_state == QA_INT); 
     assign  s_axis_tdata  = qa_out_q_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH];
 
     fp32_2_int8_array # (
@@ -280,7 +293,63 @@ module qa_unit #(
         end
     end
 
-    // INT8 conversion result capture
+    function automatic [7:0] qa_uint8_round_fp32;
+        input [31:0] signed_fp;
+        reg sign;
+        reg [7:0] exp;
+        reg [23:0] mant;
+        integer e;
+        integer shift;
+        integer rounded_abs;
+        integer int_part;
+        integer frac_part;
+        integer threshold;
+        begin
+            sign = signed_fp[31];
+            exp  = signed_fp[30:23];
+            mant = {1'b1, signed_fp[22:0]};
+
+            if (exp == 0) begin
+                rounded_abs = 0;
+            end else begin
+                e = exp - 127;
+                if (e < -1) begin
+                    rounded_abs = 0;
+                end else if (e < 0) begin
+                    rounded_abs = 1;  // |x| >= 0.5
+                end else if (e >= 8) begin
+                    rounded_abs = 256;
+                end else begin
+                    shift = 23 - e;
+                    int_part = mant >> shift;
+                    frac_part = mant & ((1 << shift) - 1);
+                    threshold = 1 << (shift - 1);
+                    rounded_abs = int_part + ((frac_part >= threshold) ? 1 : 0);
+                end
+            end
+
+            // signed_fp is (dqa*qscale - 128.0). Convert rounded signed value
+            // back to UINT8 with clamp.
+            if (sign) begin
+                if (rounded_abs >= 128) qa_uint8_round_fp32 = 8'h00;
+                else                    qa_uint8_round_fp32 = 8'(128 - rounded_abs);
+            end else begin
+                if (rounded_abs >= 127) qa_uint8_round_fp32 = 8'hff;
+                else                    qa_uint8_round_fp32 = 8'(128 + rounded_abs);
+            end
+        end
+    endfunction
+
+    wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data;
+    generate
+        genvar qg;
+        for (qg = 0; qg < FP_TRAN_NUM; qg = qg + 1) begin : gen_qa_quant_pack
+            assign qa_quant_pack_data[qg*Q_INT_WIDTH_OUT +: Q_INT_WIDTH_OUT] =
+                qa_uint8_round_fp32(qa_out_q_reg[qg*FP_WIDTH +: FP_WIDTH]);
+        end
+    endgenerate
+
+    // INT8 conversion result capture (debug/legacy mirror; pack writer uses qa_quant_pack_data directly)
     always_ff@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             qa_x_tran_cnt <= '0;
@@ -294,9 +363,10 @@ module qa_unit #(
             qa_int_wait_cnt <= '0;
         end else if(c_state == QA_INT_WAIT) begin
             qa_int_wait_cnt <= qa_int_wait_cnt + 1'b1;
-            if(m_axis_int_tvalid || qa_int_wait_cnt >= 4'd9) begin
+            if(m_axis_int_tvalid) begin
                 qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
-                qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
+                qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT]
+                    <= qa_quant_pack_data;
             end
         end
     end
@@ -344,18 +414,12 @@ module qa_unit #(
             QA_LOAD_SCALE   : n_state  = QA_WAIT_SCALE;
             QA_WAIT_SCALE   : n_state  = QA_LOAD_X;
             QA_UPDATE       : n_state  = QA_LOAD_X;
-            QA_LOAD_X       : n_state  = QA_WAIT_X;
+            QA_LOAD_X       : n_state  = (qa_rd_wait_cnt >= 9) ? QA_WAIT_X : QA_LOAD_X;
             QA_WAIT_X       : n_state  = qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE;
             QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
-            QA_INT          : n_state = QA_INT_WAIT;
-            QA_INT_WAIT     : begin
-                // Wait for fp32_to_int8 result: fixed latency (6 cycles) + margin
-                if(qa_int_wait_cnt >= 4'd8)
-                    n_state = QA_SAVE;
-                else
-                    n_state = QA_INT_WAIT;
-            end 
+            QA_INT          : n_state = QA_SAVE;
+            QA_INT_WAIT     : n_state = QA_SAVE;
             QA_SAVE        : begin
                 if(qa_done) begin
                     n_state = IDLE;
@@ -381,7 +445,7 @@ module qa_unit #(
         .clk(clk),
         .rst_n(rst_n),
         .pack_valid(c_state == QA_SAVE),
-        .pack_data(qa_out_int_reg),
+        .pack_data(qa_quant_pack_data),
         .pack_base_addr(qa_dst_addr_reg >> BYTE_ADDR_SHIFT),
         .pack_last(qa_done),
         .pack_reset(c_state == IDLE),
