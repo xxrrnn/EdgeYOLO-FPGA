@@ -288,8 +288,19 @@ always @(posedge clk) begin
     end
 end
 
-integer douta_init_j;
-initial douta = {DWIDTH{1'b0}};
+    integer mem_pipe_init_i;
+    initial begin
+        memrega = {DWIDTH{1'b0}};
+        memregb = {DWIDTH{1'b0}};
+        for (mem_pipe_init_i = 0; mem_pipe_init_i < NBPIPE; mem_pipe_init_i = mem_pipe_init_i + 1) begin
+            mem_pipe_rega[mem_pipe_init_i] = {DWIDTH{1'b0}};
+            mem_pipe_regb[mem_pipe_init_i] = {DWIDTH{1'b0}};
+        end
+        for (mem_pipe_init_i = 0; mem_pipe_init_i <= NBPIPE; mem_pipe_init_i = mem_pipe_init_i + 1) begin
+            mem_en_pipe_rega[mem_pipe_init_i] = 1'b0;
+            mem_en_pipe_regb[mem_pipe_init_i] = 1'b0;
+        end
+    end
 always @(posedge clk) begin
     if (mem_en_pipe_rega[NBPIPE])
         douta <= mem_pipe_rega[NBPIPE-1];
