@@ -136,6 +136,14 @@ module dqa_relu_unit #(
 
 
     reg [ADDR_WIDTH - 1 : 0]                       dqa_save_addr, dqa_save_cnt;
+    
+    // OBUF read latency counter (OBUF v2 has 9-cycle read pipeline)
+    reg [4:0] dqa_rd_wait_cnt;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) dqa_rd_wait_cnt <= 0;
+        else if (c_state == DQA_LOAD_X) dqa_rd_wait_cnt <= dqa_rd_wait_cnt + 1;
+        else dqa_rd_wait_cnt <= 0;
+    end
     reg [ADDR_WIDTH - 1 : 0]                       dqa_scale_load_cnt;
     reg [ADDR_WIDTH - 1 : 0]                       dqa_bias_load_cnt;
     reg [ADDR_WIDTH - 1 : 0]                       dqa_x_load_block_cnt,  n_dqa_x_load_block_cnt;
@@ -326,7 +334,11 @@ module dqa_relu_unit #(
         gb_enb   = '0;
         gb_web   = '0;
         gb_dinb  = '0;
-        if(c_state == DQA_LOAD_X ) begin
+        if(c_state == DQA_LOAD_X) begin
+            if(dqa_rd_wait_cnt == 0)
+                $display("[%0t] DQA OBUF read: gb_addrb=0x%h (src_addr=0x%h, shift=%0d, offset=%0d)",
+                    $time, (dqa_src_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add,
+                    dqa_src_addr_reg, BYTE_ADDR_SHIFT, dqa_x_load_addr_add);
             gb_addrb = (dqa_src_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add;
             gb_enb   = 1'b1;
             gb_web   = '0;
@@ -394,8 +406,11 @@ module dqa_relu_unit #(
     endgenerate
 
 
-    assign dqa_full_scale_wire = dqa_scale_reg[MAX_CHANNEL_LENGTH - (dqa_x_load_c_cnt << $clog2(FP_CORE_LENGTH))  - 1-: FP_CORE_LENGTH];
-    assign dqa_full_bias_wire = dqa_bias_reg[MAX_CHANNEL_LENGTH - (dqa_x_load_c_cnt << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
+    wire [ADDR_WIDTH-1:0] dqa_channel_group_count = dqa_src_c_reg >> $clog2(FP_CORE_NUM);
+    wire [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel = dqa_channel_group_count - 1 - dqa_x_load_c_cnt;
+
+    assign dqa_full_scale_wire = dqa_scale_reg[MAX_CHANNEL_LENGTH - (dqa_scale_bias_group_sel << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
+    assign dqa_full_bias_wire  = dqa_bias_reg [MAX_CHANNEL_LENGTH - (dqa_scale_bias_group_sel << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
 
 
     assign fp_array_tvalid  = (c_state == DQA_COMPUTE)? 1'b1 : 1'b0;
@@ -460,7 +475,7 @@ module dqa_relu_unit #(
             DQA_LAOD_ADDR_2 : n_state = DQA_LAOD_ADDR_3;
             DQA_LAOD_ADDR_3 : n_state = DQA_LAOD_ADDR_4;
             DQA_LAOD_ADDR_4 : n_state = DQA_LOAD_X;
-            DQA_LOAD_X      : n_state = DQA_WAIT_X;
+            DQA_LOAD_X      : n_state = (dqa_rd_wait_cnt >= 9) ? DQA_WAIT_X : DQA_LOAD_X;
             DQA_WAIT_X      : n_state = dqa_x_load_block_done ? DQA_FP : DQA_UPDATE;
             DQA_FP          : n_state = DQA_FP_WAIT;
             DQA_FP_WAIT     : begin
