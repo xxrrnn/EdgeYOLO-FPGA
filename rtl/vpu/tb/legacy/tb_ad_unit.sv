@@ -29,7 +29,7 @@
 // 依赖:
 // -----
 // - rtl/vpu/ad_unit.sv
-// - rtl/vpu/fp array/fp_add_array.sv
+// - rtl/vpu/fp_array/fp_add_array.sv
 // - rtl/vpu/global_buffer_bram.v
 // - Xilinx IP: fp32_add (通过 scripts/ip/floating_point_fp32.tcl 生成)
 //

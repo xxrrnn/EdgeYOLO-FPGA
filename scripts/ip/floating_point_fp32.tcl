@@ -1,4 +1,4 @@
-# FP32/FP16 乘/加 IP（xilinx.com:ip:floating_point），供 rtl/vpu/fp array/ 模块例化。
+# FP32/FP16 乘/加 IP（xilinx.com:ip:floating_point），供 rtl/vpu/fp_array/ 模块例化。
 # 在已打开的工程内调用：fp32_mac_ips_create
 #
 # 与 fp_mac_array.v 中 localparam 对齐：MULT_TOTAL_LATENCY = FP32_MULT_LAT + FP32_ADD_LAT

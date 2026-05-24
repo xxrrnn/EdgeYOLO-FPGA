@@ -40,6 +40,7 @@ module dqa_relu_unit #(
     output  logic [GB_BANDWIDTH/8-1:0]          gb_web,   
     output  logic                               gb_enb,    
     input   wire [GB_BANDWIDTH-1:0]             gb_doutb,
+    input   wire                                gb_doutb_valid,  // OBUF 读数据有效（与 gb_doutb 同拍）
 
     output  reg [WB_ADDR_WIDTH-1:0]             wb_addrb,
     output  reg [WB_BANDWIDTH-1:0]              wb_dinb,
@@ -136,14 +137,12 @@ module dqa_relu_unit #(
 
 
     reg [ADDR_WIDTH - 1 : 0]                       dqa_save_addr, dqa_save_cnt;
-    
-    // OBUF read latency counter (OBUF v2 has 9-cycle read pipeline)
-    reg [4:0] dqa_rd_wait_cnt;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) dqa_rd_wait_cnt <= 0;
-        else if (c_state == DQA_LOAD_X) dqa_rd_wait_cnt <= dqa_rd_wait_cnt + 1;
-        else dqa_rd_wait_cnt <= 0;
-    end
+
+    // -------------------------------------------------------------------------
+    // OBUF 读：用 ready/valid 替代硬编码延迟（与 qa_unit 同构）
+    //   - DQA_LOAD_X 发地址（gb_enb=1）然后立即进 DQA_WAIT_X
+    //   - DQA_WAIT_X 等 gb_doutb_valid，采样后视情况进 DQA_FP / DQA_UPDATE
+    // -------------------------------------------------------------------------
     reg [ADDR_WIDTH - 1 : 0]                       dqa_scale_load_cnt;
     reg [ADDR_WIDTH - 1 : 0]                       dqa_bias_load_cnt;
     reg [ADDR_WIDTH - 1 : 0]                       dqa_x_load_block_cnt,  n_dqa_x_load_block_cnt;
@@ -297,7 +296,9 @@ module dqa_relu_unit #(
             
     end
 
-    /*  X LOAD   */
+    /*  X LOAD  —— ready/valid 触发采样（DQA_WAIT_X 等 gb_doutb_valid）
+     *  obuf.v 的 douta_valid 与 douta 同拍，等 valid 拉高直接采样。
+     */
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             dqa_int_in_reg <= '0;
@@ -306,10 +307,12 @@ module dqa_relu_unit #(
         end else begin
             case (c_state)
                 DQA_WAIT_X: begin
-                    if (FP_CORE_NUM * C_INT_WIDTH_IN > GB_BANDWIDTH)
-                        dqa_int_in_reg <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : GB_BANDWIDTH]};
-                    else
-                        dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
+                    if (gb_doutb_valid) begin
+                        if (FP_CORE_NUM * C_INT_WIDTH_IN > GB_BANDWIDTH)
+                            dqa_int_in_reg <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : GB_BANDWIDTH]};
+                        else
+                            dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
+                    end
                 end
                 DQA_SAVE: begin
                     dqa_save_cnt <= dqa_save_cnt + 1;
@@ -335,15 +338,13 @@ module dqa_relu_unit #(
         gb_web   = '0;
         gb_dinb  = '0;
         if(c_state == DQA_LOAD_X) begin
-            if(dqa_rd_wait_cnt == 0)
-                $display("[%0t] DQA OBUF read: gb_addrb=0x%h (src_addr=0x%h, shift=%0d, offset=%0d)",
-                    $time, (dqa_src_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add,
-                    dqa_src_addr_reg, BYTE_ADDR_SHIFT, dqa_x_load_addr_add);
+            // 只读：发地址，1 拍后进 DQA_WAIT_X 等 ready/valid
             gb_addrb = (dqa_src_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add;
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
         end else if(c_state == DQA_SAVE) begin
+            // 只写
             gb_addrb = dqa_save_addr;
             gb_enb   = 1'b1;
             gb_web   = {(GB_BANDWIDTH / 8){1'b1}};
@@ -475,8 +476,9 @@ module dqa_relu_unit #(
             DQA_LAOD_ADDR_2 : n_state = DQA_LAOD_ADDR_3;
             DQA_LAOD_ADDR_3 : n_state = DQA_LAOD_ADDR_4;
             DQA_LAOD_ADDR_4 : n_state = DQA_LOAD_X;
-            DQA_LOAD_X      : n_state = (dqa_rd_wait_cnt >= 9) ? DQA_WAIT_X : DQA_LOAD_X;
-            DQA_WAIT_X      : n_state = dqa_x_load_block_done ? DQA_FP : DQA_UPDATE;
+            DQA_LOAD_X      : n_state = DQA_WAIT_X;
+            DQA_WAIT_X      : n_state = gb_doutb_valid ? (dqa_x_load_block_done ? DQA_FP : DQA_UPDATE)
+                                                       : DQA_WAIT_X;
             DQA_FP          : n_state = DQA_FP_WAIT;
             DQA_FP_WAIT     : begin
                 if(m_axis_result_tvalid) begin

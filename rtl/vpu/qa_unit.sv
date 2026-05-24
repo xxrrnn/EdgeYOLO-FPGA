@@ -41,6 +41,7 @@ module qa_unit #(
     output logic [GB_BANDWIDTH/8-1:0]   gb_web,   
     output logic                        gb_enb,    
     input  wire [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire                         gb_doutb_valid,  // OBUF 读数据有效（与 gb_doutb 同拍）
 
     output reg [WB_ADDR_WIDTH-1:0]      wb_addrb,
     output reg [WB_BANDWIDTH-1:0]       wb_dinb,
@@ -49,11 +50,33 @@ module qa_unit #(
     input wire [WB_BANDWIDTH-1:0]       wb_doutb
 );
 
-    localparam  qa_single_compute_blocks      = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH) ;
+    localparam  QA_FP_BITS                    = FP_CORE_NUM * FP_WIDTH;
+    // 至少 1 个 block：FP 数据能在一个 GB word 内装下时仍要跑一轮 LOAD/COMPUTE/SAVE
+    localparam  qa_single_compute_blocks      = (QA_FP_BITS <= GB_BANDWIDTH) ? 1
+                                                : (QA_FP_BITS / GB_BANDWIDTH);
     localparam  qa_single_compute_save_blocks = (FP_CORE_NUM * Q_INT_WIDTH_OUT + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
     localparam  FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
     localparam  GB_BW_SHIFT    = $clog2(GB_BANDWIDTH);
     localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+
+    // =========================================================================
+    // 参数化 byte-write 写回方案（替代旧 int8_pack_writer 子模块）
+    // -------------------------------------------------------------------------
+    // 每次 QA_SAVE 输出 FP_CORE_NUM 个量化整数，共 SAVE_DATA_BITS bit。
+    // 通过 OBUF byte enable 一次只写一个 slot，SAVES_PER_WORD 次写满一个 word。
+    //
+    // 各种配置都被覆盖（只要 SAVES_PER_WORD 是 2 的幂）：
+    //   INT8 + 4 core : 32 bit/save × 4 = 128 bit/word  (当前)
+    //   INT8 + 8 core : 64 bit/save × 2 = 128 bit/word
+    //   INT16 + 4 core: 64 bit/save × 2 = 128 bit/word
+    //   INT16 + 8 core: 128 bit/save × 1 = 128 bit/word  (退化为整字写)
+    //   INT4 + 4 core : 16 bit/save × 8 = 128 bit/word
+    // =========================================================================
+    localparam SAVE_DATA_BITS  = FP_CORE_NUM * Q_INT_WIDTH_OUT;       // 每次 SAVE 的有效位宽
+    localparam SAVE_DATA_BYTES = SAVE_DATA_BITS / 8;                  // 对应字节数
+    localparam SAVES_PER_WORD  = GB_BANDWIDTH / SAVE_DATA_BITS;       // 几次 SAVE 写满一个 word
+    localparam SLOT_IDX_BITS   = (SAVES_PER_WORD <= 1) ? 1 : $clog2(SAVES_PER_WORD);
+    // 注：当 SAVES_PER_WORD == 1 时 SLOT_IDX_BITS=1（占位，但 slot_idx 强制为 0）
 
 
     typedef enum logic [5:0] {
@@ -77,19 +100,18 @@ module qa_unit #(
 
     // dqa signals
     reg     [FP_WIDTH - 1 : 0]                            qa_scale_reg;
-    
-    // OBUF 读延迟计数器：等待 TOTAL_PIPE+2 拍确保数据稳定
-    // （包含 wea_reg 残留清零时间 + OBUF 流水线延迟）
-    reg [4:0] qa_rd_wait_cnt;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) qa_rd_wait_cnt <= 0;
-        else if (c_state == QA_LOAD_X) qa_rd_wait_cnt <= 1;
-        else if (c_state == QA_WAIT_X) qa_rd_wait_cnt <= qa_rd_wait_cnt + 1;
-        else qa_rd_wait_cnt <= 0;
-    end
+
+    // -------------------------------------------------------------------------
+    // OBUF 读：用 ready/valid 替代硬编码延迟
+    //   - QA_LOAD_X 发地址（gb_enb=1, gb_web=0）
+    //   - QA_WAIT_X 等待 gb_doutb_valid 拉高，采样 gb_doutb，立刻进下一状态
+    //   - obuf.v 内部 douta_valid 已与 douta 同拍，无需额外打拍
+    // -------------------------------------------------------------------------
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_fp_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_out_q_reg;
     reg     [FP_CORE_NUM * Q_INT_WIDTH_OUT - 1 : 0]       qa_out_int_reg;
+    // 量化后待写的 INT8 数据（前置声明，供 byte-write 写回路径使用）
+    reg     [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]             qa_quant_pack_data_reg;
     
     // Latched input parameters
     reg     [ADDR_WIDTH - 1 : 0]                          qa_src_addr_reg;
@@ -114,6 +136,7 @@ module qa_unit #(
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_load_addr;
     reg  [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks_reg;
     reg  [ADDR_WIDTH - 1 : 0]                       qa_x_load_done_threshold;
+    reg  [ADDR_WIDTH - 1 : 0]                       qa_total_save_slots_reg;
     wire [ADDR_WIDTH - 1 : 0]                       qa_x_total_blocks;
     assign      qa_x_total_blocks             = qa_x_total_blocks_reg;
 
@@ -130,10 +153,17 @@ module qa_unit #(
     wire  qa_x_load_block_done, qa_save_done, qa_x_load_done, qa_done, qa_x_tran_done;
     
     assign  qa_x_load_block_done                    = (qa_x_load_block_cnt == qa_single_compute_blocks - 1);
-    assign  qa_save_done                            = 1'b1;  // 每次 SAVE 只写 1 个 word，1 周期完成
+    wire    qa_save_is_last_overall;
+    assign  qa_save_is_last_overall                  = (qa_total_save_slots_reg != '0)
+                                                       && (qa_save_cnt == qa_total_save_slots_reg - 1);
+    // qa_save_done: 写满当前 128-bit word，或已写完最后一个有效 slot（部分 word 收尾）
+    assign  qa_save_done                            = (SAVES_PER_WORD == 1) ? 1'b1
+                                                       : ((qa_save_cnt[SLOT_IDX_BITS-1:0] == SAVES_PER_WORD - 1)
+                                                          | qa_save_is_last_overall);
     assign  qa_x_load_done                          = (qa_x_load_cnt == qa_x_load_done_threshold);
     assign  qa_x_tran_done                          = (qa_x_tran_cnt == (FP_CORE_NUM / FP_TRAN_NUM)- 1);
-    assign  qa_done                                 =  qa_x_load_done & qa_save_done;
+    // 必须在 QA_SAVE 状态才判 done，避免 IDLE 时 load_cnt/threshold 均为 0 误触发
+    assign  qa_done                                 = (c_state == QA_SAVE) && qa_x_load_done && qa_save_done;
 
     always @* begin
         n_qa_x_load_block_cnt       =     qa_x_load_block_cnt;
@@ -157,9 +187,10 @@ module qa_unit #(
         if(!rst_n) begin
             qa_x_load_block_cnt    <= '0;
             qa_x_load_cnt        <= '0;
-            qa_x_total_blocks_reg  <= '0;
-            qa_x_load_done_threshold <= '0;
-            precompute_ch          <= '0;
+            qa_x_total_blocks_reg      <= '0;
+            qa_x_load_done_threshold   <= '0;
+            qa_total_save_slots_reg    <= '0;
+            precompute_ch              <= '0;
         end else if (c_state == IDLE && qa_unit_start) begin
             qa_x_load_block_cnt    <= '0;
             qa_x_load_cnt          <= '0;
@@ -169,9 +200,16 @@ module qa_unit #(
             precompute_ch          <= precompute_ch * qa_src_w_reg;
         end else if (c_state == QA_LOAD_SCALE) begin
             automatic logic [2*ADDR_WIDTH-1:0] total_bits;
+            automatic logic [ADDR_WIDTH-1:0] total_blocks;
             total_bits = precompute_ch << FP_WIDTH_SHIFT;
-            qa_x_total_blocks_reg    <= total_bits[ADDR_WIDTH-1:0] >> GB_BW_SHIFT;
-            qa_x_load_done_threshold <= (total_bits[ADDR_WIDTH-1:0] >> GB_BW_SHIFT) - qa_single_compute_blocks;
+            total_blocks = total_bits[ADDR_WIDTH-1:0] >> GB_BW_SHIFT;
+            qa_x_total_blocks_reg <= total_blocks;
+            // clamp 防止 total_blocks < qa_single_compute_blocks 时 underflow 成 0xFFFF_FFFF
+            qa_x_load_done_threshold <= (total_blocks > qa_single_compute_blocks)
+                                        ? (total_blocks - qa_single_compute_blocks)
+                                        : '0;
+            // 总 SAVE 次数 = ceil(total_fp32 / FP_CORE_NUM)
+            qa_total_save_slots_reg <= (precompute_ch + FP_CORE_NUM - 1) / FP_CORE_NUM;
         end else if (c_state == QA_UPDATE) begin
             qa_x_load_block_cnt    <= n_qa_x_load_block_cnt;
             qa_x_load_cnt         <= n_qa_x_load_cnt;
@@ -201,7 +239,15 @@ module qa_unit #(
         end
     end
 
-    /*  X LOAD   */
+    /*  X LOAD —— ready/valid 触发采样（替代硬编码延迟）
+     *  obuf.v 的 douta_valid 与 douta 同拍，所以这里只需要等 gb_doutb_valid 拉高即可。
+     *
+     *  qa_save_cnt 语义（重要）：
+     *    - 每个 LOAD/COMPUTE/INT 周期产出 1 个 slot（FP_CORE_NUM 个 INT8）
+     *    - 每次 QA_SAVE 写 1 个 slot 后递增
+     *    - 跨 QA_UPDATE 等中间状态必须保持，不能清零
+     *    - 只在 IDLE/qa_done 时清零（一次 QA 操作开始/结束）
+     */
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             qa_fp_in_reg <= '0;
@@ -212,8 +258,7 @@ module qa_unit #(
                     qa_save_cnt <= '0;
                 end
                 QA_WAIT_X: begin
-                    // 硬延迟等待 8 拍后采样（第 8 拍时数据已在 gb_doutb 上稳定）
-                    if (qa_rd_wait_cnt == 9) begin
+                    if (gb_doutb_valid) begin
                         if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
                             qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
                         else
@@ -224,17 +269,38 @@ module qa_unit #(
                     qa_save_cnt <= qa_save_cnt + 1;
                 end
                 default: begin
-                    qa_save_cnt <= '0;
+                    // 中间状态保持 qa_save_cnt（不能清零，否则 slot_idx 重置导致写错位置）
                 end
             endcase
         end
     end
 
-    // Pack writer BRAM interface (forward declaration)
-    wire                         pack_wr_en;
-    wire [GB_ADDR_WIDTH-1:0]     pack_wr_addr;
-    wire [GB_BANDWIDTH-1:0]      pack_wr_data;
-    wire [GB_BANDWIDTH/8-1:0]    pack_wr_we;
+    // =========================================================================
+    // OBUF 端口分时控制（替代旧 int8_pack_writer + always_comb pack 优先级路径）
+    // -------------------------------------------------------------------------
+    // 设计原则：QA_LOAD_X 只读，QA_SAVE 只写，其他状态闲置，杜绝读写争用。
+    //
+    // 写策略（byte-write 直写）：
+    //   - 每个 QA_SAVE 状态写 1 个 byte slot（SAVE_DATA_BYTES 字节）
+    //   - slot_idx 由 qa_save_cnt 低位提供，决定写到 word 的哪个位置
+    //   - SAVES_PER_WORD 个 slot 写满一个 128-bit word 后，qa_save_cnt 进位触发新 word
+    // =========================================================================
+    wire [SLOT_IDX_BITS-1:0]            slot_idx;
+    wire [ADDR_WIDTH-1:0]               word_offset;
+    wire [GB_BANDWIDTH-1:0]             qa_save_din_shifted;
+    wire [GB_BANDWIDTH/8-1:0]           qa_save_we_shifted;
+
+    assign slot_idx    = (SAVES_PER_WORD == 1) ? '0 : qa_save_cnt[SLOT_IDX_BITS-1:0];
+    assign word_offset = (SAVES_PER_WORD == 1) ? qa_save_cnt
+                                               : (qa_save_cnt >> SLOT_IDX_BITS);
+
+    // 把 SAVE_DATA_BITS 的量化数据移位到目标 slot 位置
+    assign qa_save_din_shifted = { {(GB_BANDWIDTH-SAVE_DATA_BITS){1'b0}}, qa_quant_pack_data_reg }
+                                 << (slot_idx * SAVE_DATA_BITS);
+
+    // byte enable: SAVE_DATA_BYTES 个 '1' 移位到目标 slot 位置
+    assign qa_save_we_shifted  = { {(GB_BANDWIDTH/8-SAVE_DATA_BYTES){1'b0}}, {SAVE_DATA_BYTES{1'b1}} }
+                                 << (slot_idx * SAVE_DATA_BYTES);
 
     always_comb begin
         gb_addrb = '0;
@@ -242,19 +308,25 @@ module qa_unit #(
         gb_web   = '0;
         gb_dinb  = '0;
 
-        // Pack writer 最高优先级（可能在任何状态触发写入）
-        // 使用三值判断避免 bram_en 初始 X 时传播 X 到 gb_web
-        if (pack_wr_en === 1'b1) begin
-            gb_addrb = pack_wr_addr;
-            gb_dinb  = pack_wr_data;
-            gb_web   = pack_wr_we;
-            gb_enb   = 1'b1;
-        end else if(c_state == QA_LOAD_X) begin
-            gb_addrb = qa_x_load_addr;
-            gb_enb   = 1'b1;
-            gb_web   = '0;
-            gb_dinb  = '0;
-        end
+        unique case (c_state)
+            QA_LOAD_X: begin
+                // 只读
+                gb_addrb = qa_x_load_addr;
+                gb_enb   = 1'b1;
+                gb_web   = '0;
+                gb_dinb  = '0;
+            end
+            QA_SAVE: begin
+                // 只写：byte-write 到 dst_addr + word_offset 的 slot_idx 位置
+                gb_addrb = (qa_dst_addr_reg >> BYTE_ADDR_SHIFT) + word_offset;
+                gb_enb   = 1'b1;
+                gb_web   = qa_save_we_shifted;
+                gb_dinb  = qa_save_din_shifted;
+            end
+            default: begin
+                // 其余状态 OBUF 端口闲置（gb_enb=0）
+            end
+        endcase
     end
 
     assign fp_array_tvalid  = (c_state == QA_COMPUTE)? 1'b1 : 1'b0;
@@ -296,12 +368,11 @@ module qa_unit #(
     end
 
     // =========================================================================
-    // FP32→UINT8: 直接使用 Vivado fp32_to_int8 IP (C_LATENCY=6)
-    // QA_INT 时向 IP 送入数据，QA_INT_WAIT 等待 m_axis_int_tvalid（约 6 拍后）
-    // m_axis_int_tdata 即最终 INT8 结果，直接锁存给 pack_writer 使用
-    // 不再有任何自定义算术路径，彻底消除 CARRY8 级联时序违例
+    // FP32→INT8: Vivado fp32_to_int8 IP (C_LATENCY=6) 直接产出对称 INT8。
+    //   - QA_INT 状态向 IP 送入数据
+    //   - QA_INT_WAIT 等 m_axis_int_tvalid（约 6 拍后）锁存到 qa_quant_pack_data_reg
+    //   - qa_quant_pack_data_reg 由 byte-write 写回路径直接消费
     // =========================================================================
-    reg [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data_reg;
 
     // INT8 result capture + tran counter
     always_ff @(posedge clk or negedge rst_n) begin
@@ -373,17 +444,18 @@ module qa_unit #(
             QA_WAIT_SCALE   : n_state  = QA_LOAD_X;
             QA_UPDATE       : n_state  = QA_LOAD_X;
             QA_LOAD_X       : n_state  = QA_WAIT_X;
-            // 等 TOTAL_PIPE+2=8 拍后数据稳定（6拍OBUF流水 + 2拍wea_reg残留余量）
-            QA_WAIT_X       : n_state  = (qa_rd_wait_cnt >= 9) ? (qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE) : QA_WAIT_X;            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
+            // ready/valid：等 OBUF 读数据有效信号（gb_doutb_valid）拉高
+            QA_WAIT_X       : n_state  = gb_doutb_valid ? (qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE) : QA_WAIT_X;
+            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state  = QA_INT_WAIT;
             QA_INT_WAIT     : n_state  = m_axis_int_tvalid ? QA_SAVE : QA_INT_WAIT;
             QA_SAVE        : begin
-                if(qa_done) begin
+                // 每轮 COMPUTE 只写 1 个 slot（1 cycle SAVE），然后 UPDATE 进入下一轮 LOAD
+                if (qa_done)
                     n_state = IDLE;
-                end else begin
-                    n_state = qa_save_done? QA_UPDATE: QA_SAVE;
-                end
+                else
+                    n_state = QA_UPDATE;
             end
             default: n_state = IDLE;
             
@@ -392,27 +464,10 @@ module qa_unit #(
     end
 
     // =========================================================================
-    // INT8 Pack Writer
+    // 写回路径：使用 byte-write 直接驱动 OBUF Port A（见上方 always_comb）。
+    // 旧 int8_pack_writer 子模块已删除：每次 QA_SAVE 直接发 1 个 slot 写请求，
+    // SAVES_PER_WORD 拍写满一个 word；不再有 buffer/pack_cnt/X 传播路径。
     // =========================================================================
-
-    int8_pack_writer #(
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
-        .PACK_WIDTH(FP_CORE_NUM * Q_INT_WIDTH_OUT)
-    ) u_pack_writer (
-        .clk(clk),
-        .rst_n(rst_n),
-        .pack_valid(c_state == QA_SAVE),
-        .pack_data(qa_quant_pack_data_reg),
-        .pack_base_addr(qa_dst_addr_reg >> BYTE_ADDR_SHIFT),
-        .pack_last(qa_done),
-        .pack_reset(c_state == IDLE),
-        .bram_addr(pack_wr_addr),
-        .bram_din(pack_wr_data),
-        .bram_we(pack_wr_we),
-        .bram_en(pack_wr_en),
-        .pack_ready()
-    );
 
 
 endmodule

@@ -323,6 +323,7 @@ nn_lut_unit #(
       .gb_web(qa_gb_web),   
       .gb_enb(qa_gb_enb),    
       .gb_doutb(gb_doutb),
+      .gb_doutb_valid(obuf_rd_valid),  // ready/valid: OBUF 读数据有效（替代硬延迟）
 
       // --- Weight Buffer (WB) Ports (Simple Dual-Port BRAM-like interface) ---
       .wb_addrb(qa_wb_addrb),
@@ -435,6 +436,7 @@ nn_lut_unit #(
         .gb_web( dqa_gb_web),
         .gb_enb( dqa_gb_enb),
         .gb_doutb(gb_doutb),
+        .gb_doutb_valid(obuf_rd_valid),  // ready/valid: OBUF 读数据有效（替代硬延迟）
 
         .wb_addrb( dqa_wb_addrb),
         .wb_dinb( dqa_wb_dinb),

@@ -68,8 +68,8 @@ foreach pattern {*.v *.sv} {
     }
 }
 foreach f [glob -nocomplain \
-    [file normalize "$vpuRtlDir/fp array/*.v"] \
-    [file normalize "$vpuRtlDir/fp array/*.sv"]] {
+    [file normalize "$vpuRtlDir/fp_array/*.v"] \
+    [file normalize "$vpuRtlDir/fp_array/*.sv"]] {
     lappend vpuRtlFiles $f
 }
 

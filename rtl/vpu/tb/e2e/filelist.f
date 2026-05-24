@@ -56,7 +56,6 @@
 ../../../ad_unit.sv
 ../../../mp_unit_fixed.sv
 ../../../us_unit_fixed.sv
-../../../int8_pack_writer.sv
 ../../../rst_n_sync.v
 ../../../global_buffer_bram.v
 
