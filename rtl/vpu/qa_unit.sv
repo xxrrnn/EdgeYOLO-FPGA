@@ -235,7 +235,8 @@ module qa_unit #(
         gb_dinb  = '0;
 
         // Pack writer 最高优先级（可能在任何状态触发写入）
-        if (pack_wr_en) begin
+        // 使用三值判断避免 bram_en 初始 X 时传播 X 到 gb_web
+        if (pack_wr_en === 1'b1) begin
             gb_addrb = pack_wr_addr;
             gb_dinb  = pack_wr_data;
             gb_web   = pack_wr_we;
