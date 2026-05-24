@@ -213,7 +213,7 @@ module qa_unit #(
                 end
                 QA_WAIT_X: begin
                     // 硬延迟等待 8 拍后采样（第 8 拍时数据已在 gb_doutb 上稳定）
-                    if (qa_rd_wait_cnt == 8) begin
+                    if (qa_rd_wait_cnt == 9) begin
                         if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
                             qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
                         else
@@ -374,7 +374,7 @@ module qa_unit #(
             QA_UPDATE       : n_state  = QA_LOAD_X;
             QA_LOAD_X       : n_state  = QA_WAIT_X;
             // 等 TOTAL_PIPE+2=8 拍后数据稳定（6拍OBUF流水 + 2拍wea_reg残留余量）
-            QA_WAIT_X       : n_state  = (qa_rd_wait_cnt >= 8) ? (qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE) : QA_WAIT_X;            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
+            QA_WAIT_X       : n_state  = (qa_rd_wait_cnt >= 9) ? (qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE) : QA_WAIT_X;            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state  = QA_INT_WAIT;
             QA_INT_WAIT     : n_state  = m_axis_int_tvalid ? QA_SAVE : QA_INT_WAIT;
