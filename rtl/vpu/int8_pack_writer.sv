@@ -60,11 +60,12 @@ module int8_pack_writer #(
 
                 if (pack_full || pack_last) begin
                     // 输出完整 word 到 BRAM
+                    // 注意：用 buffer | pack_data 拼接，避免两次 NBA 写同一寄存器的仿真歧义
                     bram_en   <= 1'b1;
                     bram_we   <= {(GB_BANDWIDTH/8){1'b1}};
                     bram_addr <= pack_base_addr + word_cnt;
-                    bram_din  <= buffer;
-                    bram_din[pack_cnt * PACK_WIDTH +: PACK_WIDTH] <= pack_data;
+                    bram_din  <= (buffer & ~({GB_BANDWIDTH{1'b1}} << (pack_cnt * PACK_WIDTH))) |
+                                 ({{(GB_BANDWIDTH-PACK_WIDTH){1'b0}}, pack_data} << (pack_cnt * PACK_WIDTH));
                     pack_cnt  <= '0;
                     word_cnt  <= word_cnt + 1;
                     buffer    <= '0;

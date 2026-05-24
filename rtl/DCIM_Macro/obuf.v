@@ -189,8 +189,18 @@ always @(posedge clk) begin
     for (i = 0; i < TOTAL_PIPE; i = i + 1)
         read_en_pipe_a[i+1] <= read_en_pipe_a[i];
 end
+integer read_en_init_j;
+initial begin
+    for (read_en_init_j = 0; read_en_init_j <= TOTAL_PIPE; read_en_init_j = read_en_init_j + 1)
+        read_en_pipe_a[read_en_init_j] = 1'b0;
+    for (read_en_init_j = 0; read_en_init_j < TOTAL_PIPE; read_en_init_j = read_en_init_j + 1) begin
+        bank_sel_a_pipe[read_en_init_j] = {BANK_BITS{1'b0}};
+        bank_sel_b_pipe[read_en_init_j] = {BANK_BITS{1'b0}};
+    end
+end
 assign douta_valid = read_en_pipe_a[TOTAL_PIPE];
 
+initial douta = {DWIDTH{1'b0}};
 always @(posedge clk) begin
     douta <= bank_douta[bank_sel_a_pipe[TOTAL_PIPE-1]];
     doutb <= bank_doutb[bank_sel_b_pipe[TOTAL_PIPE-1]];
@@ -278,6 +288,8 @@ always @(posedge clk) begin
     end
 end
 
+integer douta_init_j;
+initial douta = {DWIDTH{1'b0}};
 always @(posedge clk) begin
     if (mem_en_pipe_rega[NBPIPE])
         douta <= mem_pipe_rega[NBPIPE-1];
