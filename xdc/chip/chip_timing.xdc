@@ -90,9 +90,12 @@ set_false_path -hold \
   -to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/SAXISCC*}]
 
 # DCIM weight_reg → SRAM DINB hold（SRAM 写入时序由 DCIM 协议保证）
-set_false_path -hold \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */u_tile/dcim_data_wei_reg*/C}] \
-  -to   [get_pins -quiet -hierarchical -filter {NAME =~ */u_sramWrap/u_rf/mem_reg*/DINBDIN*}]
+# 路径: gen_tiles[N].u_tile/dcim_data_wei_reg → u_dcim/.../mem_reg*/DINBDIN
+set _fp_wei_from [get_pins -quiet -hierarchical -filter {NAME =~ */gen_tiles*.u_tile/dcim_data_wei_reg*/C}]
+set _fp_wei_to   [get_pins -quiet -hierarchical -filter {NAME =~ */u_sramWrap/u_rf/mem_reg*/DINBDIN*}]
+if {[llength $_fp_wei_from] && [llength $_fp_wei_to]} {
+  set_false_path -hold -from $_fp_wei_from -to $_fp_wei_to
+}
 
 # ============================================================================
 # 扇出优化
@@ -101,8 +104,10 @@ set _fanout_cnt [get_cells -quiet -hierarchical -filter {NAME =~ */u_maArray/u_c
 if {[llength $_fanout_cnt]} {
   set_property MAX_FANOUT 32 $_fanout_cnt
 }
-set_property REGISTER_DUPLICATION TRUE [current_design]
-set_property MAX_FANOUT 64 [current_design]
+# NOTE: REGISTER_DUPLICATION and MAX_FANOUT cannot be applied to [current_design] in XDC.
+# These are synthesis attributes; set them in the RTL or synth_design options instead.
+# set_property REGISTER_DUPLICATION TRUE [current_design]  <- removed
+# set_property MAX_FANOUT 64 [current_design]              <- removed
 
 set _dsp_cells [get_cells -quiet -hierarchical -filter {REF_NAME == DSP48E2 && NAME =~ */u_maArray/*}]
 if {[llength $_dsp_cells]} {
@@ -207,12 +212,12 @@ resize_pblock [get_pblocks pblock_group_0] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3
 
 # AXI 互连 + VPU + INST_Decoder + CDMA 放在 SLR0（与 Group 0 同层）
 create_pblock pblock_axi_vpu
-add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/axi_mem_smc/*}]
-add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/vpu_0/*}]
-add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/axi_cdma_0/*}]
-add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/inst_decoder/*}]
-add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/cdma_ctrl/*}]
-add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/inst_bram/*}]
+add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/axi_mem_smc/*}]
+add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
+add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/axi_cdma_0/*}]
+add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_decoder/*}]
+add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/cdma_ctrl/*}]
+add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_bram/*}]
 resize_pblock [get_pblocks pblock_axi_vpu] -add {CLOCKREGION_X4Y0:CLOCKREGION_X7Y4}
 set_property IS_SOFT FALSE [get_pblocks pblock_axi_vpu]
 
@@ -220,10 +225,10 @@ set_property IS_SOFT FALSE [get_pblocks pblock_axi_vpu]
 # SLR 分配 (lite: 所有逻辑在 SLR0)
 # ============================================================================
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ *gen_groups\[0\].u_group*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/vpu_0/*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/inst_decoder/*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/cdma_ctrl/*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ chip_i/inst_bram/*}]
+set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
+set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_decoder/*}]
+set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/cdma_ctrl/*}]
+set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_bram/*}]
 
 # ============================================================================
 # OBUF URAM cascade multicycle path

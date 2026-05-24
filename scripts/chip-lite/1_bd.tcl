@@ -20,7 +20,10 @@ if {[llength [get_files -quiet $bdFile]] != 0} {
     remove_files $bdFile
 }
 if {[file exists [file dirname $bdFile]]} {
-    file delete -force [file dirname $bdFile]
+    catch {file delete -force [file dirname $bdFile]}
+    if {[file exists [file dirname $bdFile]]} {
+        # Directory still exists (open file handles); do incremental update instead
+    }
 }
 
 create_bd_design -dir $bdDir $bdName
