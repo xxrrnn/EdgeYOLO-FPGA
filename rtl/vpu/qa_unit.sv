@@ -368,7 +368,7 @@ module qa_unit #(
             QA_LOAD_SCALE   : n_state  = QA_WAIT_SCALE;
             QA_WAIT_SCALE   : n_state  = QA_LOAD_X;
             QA_UPDATE       : n_state  = QA_LOAD_X;
-            QA_LOAD_X       : n_state  = (qa_rd_wait_cnt >= 9) ? QA_WAIT_X : QA_LOAD_X;
+            QA_LOAD_X       : n_state  = (qa_rd_wait_cnt >= 13) ? QA_WAIT_X : QA_LOAD_X;
             QA_WAIT_X       : n_state  = qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE;
             QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
