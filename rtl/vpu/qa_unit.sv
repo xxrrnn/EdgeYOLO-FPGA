@@ -253,15 +253,13 @@ module qa_unit #(
         end
     end
 
-    localparam [FP_WIDTH-1:0] QA_UINT8_ZERO_POINT_FP32 = 32'hc3000000;  // -128.0f
-
     assign fp_array_tvalid  = (c_state == QA_COMPUTE)? 1'b1 : 1'b0;
     assign fp_a_tdata       = (c_state == QA_COMPUTE)? qa_fp_in_reg: '0;
     assign fp_b_tdata       = (c_state == QA_COMPUTE)? {FP_CORE_NUM{qa_scale_reg}} : '0;
-    // Convert unsigned clamp [0,255] using signed INT8 converter:
-    //   signed_q = clamp(round(dqa*qscale - 128), -128, 127)
-    //   uint8_q  = signed_q + 128 (applied below as XOR 0x80 per byte)
-    assign fp_c_tdata       = (c_state == QA_COMPUTE)? {FP_CORE_NUM{QA_UINT8_ZERO_POINT_FP32}} : '0;
+    // Symmetric INT8 quantization: q = clamp(round(dqa * qscale), -128, 127)
+    // fp_mac computes a*b+c; set c=0 so output = dqa*qscale directly.
+    // fp32_to_int8 IP (C_FIXED_DATA_UNSIGNED=0) clamps to signed INT8 — no offset needed.
+    assign fp_c_tdata       = '0;
 
 
     /* FP2INT ARRAY*/
@@ -269,7 +267,7 @@ module qa_unit #(
     
     wire [FP_TRAN_NUM*FP_WIDTH-1:0]     s_axis_tdata;
     wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]         m_axis_int_tdata;
-    assign  s_axis_tvalid = (c_state == QA_INT); 
+    assign  s_axis_tvalid = (c_state == QA_INT);
     assign  s_axis_tdata  = qa_out_q_reg[qa_x_tran_cnt * FP_TRAN_NUM * FP_WIDTH +: FP_TRAN_NUM * FP_WIDTH];
 
     fp32_2_int8_array # (
@@ -293,94 +291,36 @@ module qa_unit #(
         end
     end
 
-    function automatic [7:0] qa_uint8_round_fp32;
-        input [31:0] signed_fp;
-        reg sign;
-        reg [7:0] exp;
-        reg [23:0] mant;
-        integer e;
-        integer shift;
-        integer rounded_abs;
-        integer int_part;
-        integer frac_part;
-        integer threshold;
-        begin
-            sign = signed_fp[31];
-            exp  = signed_fp[30:23];
-            mant = {1'b1, signed_fp[22:0]};
-
-            if (exp == 0) begin
-                rounded_abs = 0;
-            end else begin
-                e = exp - 127;
-                if (e < -1) begin
-                    rounded_abs = 0;
-                end else if (e < 0) begin
-                    rounded_abs = 1;  // |x| >= 0.5
-                end else if (e >= 8) begin
-                    rounded_abs = 256;
-                end else begin
-                    shift = 23 - e;
-                    int_part = mant >> shift;
-                    frac_part = mant & ((1 << shift) - 1);
-                    threshold = 1 << (shift - 1);
-                    rounded_abs = int_part + ((frac_part >= threshold) ? 1 : 0);
-                end
-            end
-
-            // signed_fp is (dqa*qscale - 128.0). Convert rounded signed value
-            // back to UINT8 with clamp.
-            if (sign) begin
-                if (rounded_abs >= 128) qa_uint8_round_fp32 = 8'h00;
-                else                    qa_uint8_round_fp32 = 8'((128 - rounded_abs) & 8'hff);
-            end else begin
-                if (rounded_abs >= 127) qa_uint8_round_fp32 = 8'hff;
-                else                    qa_uint8_round_fp32 = 8'((128 + rounded_abs) & 8'hff);
-            end
-        end
-    endfunction
-
-    // Combinational UINT8 quantization for current tran slice.
-    // qa_out_q_reg holds FP_CORE_NUM FP32 values; slice [qa_x_tran_cnt*FP_TRAN_NUM : +FP_TRAN_NUM]
-    // and convert each lane to UINT8 using qa_uint8_round_fp32.
-    reg [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data;
-    always_comb begin
-        integer qi;
-        for (qi = 0; qi < FP_TRAN_NUM; qi = qi + 1) begin
-            qa_quant_pack_data[qi*Q_INT_WIDTH_OUT +: Q_INT_WIDTH_OUT] =
-                qa_uint8_round_fp32(qa_out_q_reg[
-                    (qa_x_tran_cnt * FP_TRAN_NUM + qi) * FP_WIDTH +: FP_WIDTH]);
-        end
-    end
-
-    // Pipeline register to break timing: QA_INT latches the combinational result,
-    // QA_SAVE uses the registered value. This cuts the 23-level comb path in half.
+    // =========================================================================
+    // FP32→UINT8: 直接使用 Vivado fp32_to_int8 IP (C_LATENCY=6)
+    // QA_INT 时向 IP 送入数据，QA_INT_WAIT 等待 m_axis_int_tvalid（约 6 拍后）
+    // m_axis_int_tdata 即最终 INT8 结果，直接锁存给 pack_writer 使用
+    // 不再有任何自定义算术路径，彻底消除 CARRY8 级联时序违例
+    // =========================================================================
     reg [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data_reg;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            qa_quant_pack_data_reg <= '0;
-        else if (c_state == QA_INT)
-            qa_quant_pack_data_reg <= qa_quant_pack_data;
-    end
 
-    // INT8 conversion result capture (debug/legacy mirror; pack writer uses qa_quant_pack_data directly)
-    always_ff@(posedge clk or negedge rst_n) begin
-        if(!rst_n) begin
-            qa_x_tran_cnt <= '0;
-            qa_out_int_reg <= '0;
+    // INT8 result capture + tran counter
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            qa_x_tran_cnt        <= '0;
+            qa_out_int_reg       <= '0;
+            qa_int_wait_cnt      <= '0;
+            qa_quant_pack_data_reg <= '0;
+        end else if (c_state == IDLE) begin
+            qa_x_tran_cnt        <= '0;
+            qa_out_int_reg       <= '0;
+            qa_int_wait_cnt      <= '0;
+            qa_quant_pack_data_reg <= '0;
+        end else if (c_state == QA_INT) begin
             qa_int_wait_cnt <= '0;
-        end else if(c_state == IDLE) begin
-            qa_x_tran_cnt <= '0;
-            qa_out_int_reg <= '0;
-            qa_int_wait_cnt <= '0;
-        end else if(c_state == QA_INT) begin
-            qa_int_wait_cnt <= '0;
-        end else if(c_state == QA_INT_WAIT) begin
+        end else if (c_state == QA_INT_WAIT) begin
             qa_int_wait_cnt <= qa_int_wait_cnt + 1'b1;
-            if(m_axis_int_tvalid) begin
+            if (m_axis_int_tvalid) begin
+                // Symmetric INT8: IP output is signed INT8 [-128,127], use directly
+                qa_quant_pack_data_reg <= m_axis_int_tdata;
                 qa_x_tran_cnt  <= qa_x_tran_done ? '0 : qa_x_tran_cnt + 1'b1;
-                qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +: FP_TRAN_NUM * Q_INT_WIDTH_OUT]
-                    <= qa_quant_pack_data;
+                qa_out_int_reg[qa_x_tran_cnt * FP_TRAN_NUM * Q_INT_WIDTH_OUT +:
+                               FP_TRAN_NUM * Q_INT_WIDTH_OUT] <= m_axis_int_tdata;
             end
         end
     end
@@ -432,8 +372,8 @@ module qa_unit #(
             QA_WAIT_X       : n_state  = qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE;
             QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
-            QA_INT          : n_state = QA_SAVE;
-            QA_INT_WAIT     : n_state = QA_SAVE;
+            QA_INT          : n_state  = QA_INT_WAIT;
+            QA_INT_WAIT     : n_state  = m_axis_int_tvalid ? QA_SAVE : QA_INT_WAIT;
             QA_SAVE        : begin
                 if(qa_done) begin
                     n_state = IDLE;

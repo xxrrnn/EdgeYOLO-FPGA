@@ -1,12 +1,18 @@
 # ==============================================================================
-# hbm.tcl - lite version: minimal HBM (1 stack, 4GB, 1 AXI port)
+# hbm.tcl - lite version: 1 stack, 4GB, interleaved via SAXI_00
 #
-# VCU128 has HBM2 (2 stacks, 8GB total). Lite uses only 1 stack (4GB) with
-# a single AXI port for weight/activation storage. CDMA and XDMA can both
-# access HBM through the main SmartConnect.
+# VCU128 HBM2: 1 stack (4GB) with 8 MCs × 512MB = 4GB total.
+# Interleave 策略：SAXI_00 开启 USER_SWITCH_ENABLE，HBM 内部 switch 将
+# 地址哈希分发到所有 8 个 MC，使单端口能看到完整 4GB 地址空间，并充分
+# 利用多 MC 带宽。
+#
+# Address interleave 映射：
+#   SAXI_00 地址 [32:0] → HBM switch → MC00..MC07（各 512MB）
+#   单端口可寻址范围：0x0_0000_0000 ~ 0x0_FFFF_FFFF (4GB)
 #
 # Architecture:
-#   SmartConnect M05 → AXI Clock Converter → HBM SAXI_00 (4GB @ 0x0_0000_0000)
+#   SmartConnect M05 → AXI Clock Converter (250→450 MHz)
+#       → HBM SAXI_00 (switch interleaved, full 4GB view)
 # ==============================================================================
 
 # ==============================================================================
@@ -15,7 +21,7 @@
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 main_rst
 
 # ==============================================================================
-# 2. HBM IP (1 stack, 4GB, 1 AXI port)
+# 2. HBM IP (1 stack, 4GB, interleaved via SAXI_00 + internal switch)
 # ==============================================================================
 set hbm_0 [get_bd_cells -quiet hbm_0]
 if {$hbm_0 eq ""} {
@@ -23,25 +29,29 @@ if {$hbm_0 eq ""} {
 }
 
 set hbm_cfg [list \
-  CONFIG.USER_HBM_DENSITY {4GB} \
-  CONFIG.USER_HBM_STACK {1} \
-  CONFIG.USER_AXI_CLK_FREQ {450} \
-  CONFIG.USER_SWITCH_ENABLE_00 {false} \
-  CONFIG.USER_SWITCH_ENABLE_01 {false} \
-  CONFIG.USER_SAXI_00 {true} \
-  CONFIG.USER_MC_ENABLE_00 {TRUE} \
-  CONFIG.USER_PHY_ENABLE_00 {TRUE} \
-  CONFIG.USER_MC_ENABLE_APB_00 {false} \
-  CONFIG.USER_APB_EN {false} \
+  CONFIG.USER_HBM_DENSITY       {4GB} \
+  CONFIG.USER_HBM_STACK         {1} \
+  CONFIG.USER_AXI_CLK_FREQ      {450} \
+  CONFIG.USER_APB_EN            {false} \
+  CONFIG.USER_MC_ENABLE_APB_00  {false} \
+  CONFIG.USER_SAXI_00           {true} \
+  CONFIG.USER_SWITCH_ENABLE_00  {true} \
+  CONFIG.USER_SWITCH_ENABLE_01  {false} \
 ]
 
-# Disable all other AXI ports (only SAXI_00 used)
+# 只启用 SAXI_00，关闭其余所有端口
 for {set idx 1} {$idx < 32} {incr idx} {
   lappend hbm_cfg [format "CONFIG.USER_SAXI_%02d" $idx] {false}
 }
-# Disable unused memory controllers
-for {set idx 1} {$idx < 16} {incr idx} {
-  lappend hbm_cfg [format "CONFIG.USER_MC_ENABLE_%02d" $idx] {FALSE}
+
+# 启用全部 8 个 MC（1 stack），确保 interleave 能覆盖完整 4GB
+for {set idx 0} {$idx < 8} {incr idx} {
+  lappend hbm_cfg [format "CONFIG.USER_MC_ENABLE_%02d"  $idx] {TRUE}
+  lappend hbm_cfg [format "CONFIG.USER_PHY_ENABLE_%02d" $idx] {TRUE}
+}
+# 关闭 Stack1 的 MC（仅使用 Stack0）
+for {set idx 8} {$idx < 16} {incr idx} {
+  lappend hbm_cfg [format "CONFIG.USER_MC_ENABLE_%02d"  $idx] {FALSE}
   lappend hbm_cfg [format "CONFIG.USER_PHY_ENABLE_%02d" $idx] {FALSE}
 }
 
@@ -57,6 +67,10 @@ set_property -dict [list \
   CONFIG.USE_RESET {true} \
   CONFIG.RESET_TYPE {ACTIVE_HIGH} \
 ] [get_bd_cells hbm_ref_clk_wiz]
+
+# HBM APB domain reset (100 MHz)
+# APB_0_PRESET_N 必须连接有效的 active-low 复位信号
+create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 hbm_apb_rst
 
 # HBM AXI clock (450 MHz)
 create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 hbm_axi_clk_wiz

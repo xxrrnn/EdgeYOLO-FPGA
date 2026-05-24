@@ -253,3 +253,29 @@ set_multicycle_path 1 -hold \
   -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_rega_reg*}]
 
 # im2col S_INIT one-time precompute registers
+
+# ============================================================================
+# OBUF WRITE PATH: wea_reg2 → LUT decode → cross-SLR route → URAM CAS_IN_EN_B
+# post_place violation: -1.630ns
+# Path: gen_banks[0].wea_reg2_reg[6]/Q → LUT4+LUT6+LUT6 → 3.4ns SLR route →
+#       gen_banks[1].u_bank/mem_reg_uram_207/CAS_IN_EN_B
+#
+# Fix: 2-cycle multicycle path for the write-enable decode to URAM CAS_IN_EN
+# Functional safety: wea_reg2 is already 2 FF stages behind the input (wea→
+# wea_reg→wea_reg2), so the URAM CAS_IN_EN_B sees valid data one cycle early
+# (it samples on the cycle AFTER CAS_IN_EN is set). A 2-cycle setup exception
+# does not alter write semantics.
+# ============================================================================
+set _obuf_wea_src [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *u_obuf*gen_banks*.wea_reg2_reg*}]
+set _obuf_uram_dst [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *u_obuf*mem_reg_uram*}]
+if {[llength $_obuf_wea_src] && [llength $_obuf_uram_dst]} {
+  set_multicycle_path 2 -setup \
+    -from $_obuf_wea_src \
+    -to   $_obuf_uram_dst
+  set_multicycle_path 1 -hold \
+    -from $_obuf_wea_src \
+    -to   $_obuf_uram_dst
+  puts "INFO: OBUF wea→URAM MCP: [llength $_obuf_wea_src] src, [llength $_obuf_uram_dst] dst"
+}

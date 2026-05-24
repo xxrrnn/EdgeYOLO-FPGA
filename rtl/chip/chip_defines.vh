@@ -144,6 +144,8 @@
 // OBUF 物理参数（obuf.v 参数）
 `define DCIM_OBUF_NBPIPE        2
 `define DCIM_OBUF_NUM_BANKS     2
+// OBUF 读延迟 = IN_REG1(1) + IN_REG2(1) + IN_REG3(1) + memrega(1) + NBPIPE(2) + douta(1) = 7
+// VPU 单元 rd_wait_cnt >= 10 (等 11 拍含 LOAD_X 发地址那拍)
 
 // ── 统一 OBUF 外部地址扩展（lite: NUM_GROUPS=1，无 group select）─────────
 // 当 NUM_GROUPS=1 时，extended_addr 直接等于 OBUF 字地址，GROUP_BITS=0

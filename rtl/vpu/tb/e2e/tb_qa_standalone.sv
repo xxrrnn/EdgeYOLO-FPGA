@@ -156,8 +156,8 @@ module tb_qa_standalone;
 
         $display("[%0t] Starting QA: src=0x%h dst=0x%h c=%0d h=%0d w=%0d scale_addr=0x%h",
                  $time, qa_src_addr, qa_dst_addr, qa_src_c, qa_src_h, qa_src_w, qa_scale_addr);
-        $display("  Input FP32: [2.5, 5.7, 100.3, -3.0], Scale: 0.5");
-        $display("  Expected: 2.5*0.5=1, 5.7*0.5=3, 100.3*0.5=50, -3.0*0.5=-2 → INT8 = 1");
+        $display("  Input FP32: [2.5, 5.7, 100.3, -3.0], Scale(qscale): 0.5");
+        $display("  Symmetric INT8: round(x*0.5) clamp[-128,127] = [1, 3, 50, -2]");
 
         @(posedge clk);
         qa_unit_start = 1;
@@ -183,15 +183,16 @@ module tb_qa_standalone;
         join
 
         // Check output
-        $display("[%0t] OBUF[0x10] = 0x%032h (QA INT8 output)", $time, obuf_mem[16]);
-        // Expected: INT8(1) packed = 0x01010101 (4 channels each = 1)
-        $display("  QA output bytes: [%0d, %0d, %0d, %0d]", 
+        $display("[%0t] OBUF[0x10] = 0x%032h (QA INT8 output, symmetric)", $time, obuf_mem[16]);
+        $display("  QA output bytes (signed): [%0d, %0d, %0d, %0d]", 
                  $signed(obuf_mem[16][7:0]), $signed(obuf_mem[16][15:8]),
                  $signed(obuf_mem[16][23:16]), $signed(obuf_mem[16][31:24]));
-        if (obuf_mem[16][7:0] == 8'd1 && obuf_mem[16][15:8] == 8'd3 && obuf_mem[16][23:16] == 8'd50)
-            $display("PASS: QA output matches expected [1, 3, 50, -2]");
+        // Symmetric INT8: round(2.5*0.5)=1, round(5.7*0.5)=3, round(100.3*0.5)=50, round(-3.0*0.5)=-2
+        if (obuf_mem[16][7:0] == 8'sd1 && obuf_mem[16][15:8] == 8'sd3 && obuf_mem[16][23:16] == 8'sd50
+            && obuf_mem[16][31:24] == 8'hfe)  // -2 in two's complement = 0xFE
+            $display("PASS: QA output matches expected [1, 3, 50, -2] (symmetric INT8)");
         else
-            $display("FAIL: Expected [1, 3, 50, -2]");
+            $display("FAIL: Expected [1, 3, 50, -2] (symmetric INT8)");
 
         $finish;
     end

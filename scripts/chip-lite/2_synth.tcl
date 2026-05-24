@@ -102,7 +102,9 @@ report_utilization -hierarchical -hierarchical_depth 5 \
     -file [file normalize "$chipDiagDir/area_report_hierarchical.rpt"]
 
 set launchDir [pwd]
-cd $ImplOutputDir
+# Must cd to the Vivado project directory (not ImplOutputDir) before place_design
+# so that Vivado's placer can create its 'cong' congestion-analysis subdirectory.
+cd $projPath
 
 opt_design -directive $optDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_opt.dcp"]

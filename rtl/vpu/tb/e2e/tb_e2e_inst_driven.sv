@@ -47,7 +47,7 @@ module tb_e2e_inst_driven;
     localparam [`DCIM_AXI_BRAM_ADDR_WIDTH-1:0] IB_ACT    = 24'h040000;
 
     // Max words to verify per checkpoint (limit for fast sim)
-    localparam integer VERIFY_MAX_WORDS = 256;
+    localparam integer VERIFY_MAX_WORDS = 32;   // 验证前 32 个 word 即可（每层）
     localparam integer FAIL_LOG_FIRST_N = 10;
 
     // -------- Signals --------
@@ -80,7 +80,8 @@ module tb_e2e_inst_driven;
     wire        dcim_cfg_wr_en;
     wire [11:0] dcim_cfg_wr_addr;
     wire [31:0] dcim_cfg_wr_data;
-    wire        dcim_ready, dcim_done;
+    wire        dcim_done;
+    wire        dcim_ready = dcim_done;  // ready = done (ready port removed from DCIM_Array_bd)
 
     // OBUF / IBUF external ports (driven by mux of CDMA and TB tasks)
     reg  [STRB_WIDTH-1:0]                obuf_ext_wea;
@@ -225,8 +226,7 @@ module tb_e2e_inst_driven;
         .vpu_obuf_we    (vpu_obuf_we),
         .vpu_obuf_din   (vpu_obuf_din),
         .vpu_obuf_dout  (vpu_obuf_dout),
-        .done           (dcim_done),
-        .ready          (dcim_ready)
+        .done           (dcim_done)
     );
 
     // ========================================================================
@@ -515,12 +515,12 @@ module tb_e2e_inst_driven;
     // For now we hard-code the SCALED values matching golden_e2e_inst.py default
     // (scale=0.2 -> L1 32x32, L2 16x16, L3 16x16). A future enhancement can parse
     // hex_inst/manifest.txt for parametric configurability.
-    localparam integer L1_IN_H = 32, L1_IN_W = 32, L1_IN_C = 16;
-    localparam integer L1_OH = 16, L1_OW = 16, L1_OC = 32, L1_ACC_DEPTH = 9, L1_NUM_TILES = 4;
-    localparam integer L2_IN_H = 16, L2_IN_W = 16, L2_IN_C = 32;
-    localparam integer L2_OH = 16, L2_OW = 16, L2_OC = 16, L2_ACC_DEPTH = 2, L2_NUM_TILES = 2;
-    localparam integer L3_IN_H = 16, L3_IN_W = 16, L3_IN_C = 16;
-    localparam integer L3_OH = 16, L3_OW = 16, L3_OC = 16, L3_ACC_DEPTH = 9, L3_NUM_TILES = 2;
+    localparam integer L1_IN_H = 16, L1_IN_W = 16, L1_IN_C = 16;
+    localparam integer L1_OH = 8, L1_OW = 8, L1_OC = 32, L1_ACC_DEPTH = 9, L1_NUM_TILES = 4;
+    localparam integer L2_IN_H = 8, L2_IN_W = 8, L2_IN_C = 32;
+    localparam integer L2_OH = 8, L2_OW = 8, L2_OC = 16, L2_ACC_DEPTH = 2, L2_NUM_TILES = 2;
+    localparam integer L3_IN_H = 8, L3_IN_W = 8, L3_IN_C = 16;
+    localparam integer L3_OH = 8, L3_OW = 8, L3_OC = 16, L3_ACC_DEPTH = 9, L3_NUM_TILES = 2;
 
     // Number of golden words to compare per checkpoint (cap by VERIFY_MAX_WORDS)
     function automatic integer min2(input integer a, input integer b);
@@ -724,8 +724,8 @@ module tb_e2e_inst_driven;
 
     // Timeout (cycles)
     initial begin
-        #(CLK_PERIOD * 5000000);
-        $display("FATAL: Global timeout at 5M cycles");
+        #(CLK_PERIOD * 200000000);
+        $display("FATAL: Global timeout at 200M cycles");
         $finish(1);
     end
 

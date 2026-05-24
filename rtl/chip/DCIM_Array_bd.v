@@ -95,8 +95,7 @@ module DCIM_Array_bd #(
     // =========================================================================
     // 状态输出
     // =========================================================================
-    output wire done,
-    output wire ready
+    output wire done
 );
 
     // =========================================================================
@@ -315,9 +314,7 @@ module DCIM_Array_bd #(
         .clk             (clk),
         .rst_n           (rst_n),
         .start           (cfg_start),
-        .done            (done),
-        .ready           (ready),
-        .mode            (cfg_mode),
+        .done            (done),        .mode            (cfg_mode),
         .acc_depth       (cfg_acc_depth),
         .act_base_addr   (cfg_act_base_addr),
         .wei_base_addrs  (cfg_wei_base_addrs),

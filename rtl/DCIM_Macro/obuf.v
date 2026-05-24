@@ -158,11 +158,11 @@ endgenerate
 // Bank 选择流水线（相比 v1 多 1 拍，匹配新增的 reg2）
 // ============================================================================
 // 读路径总延迟（端到端）：
-//   IN_REG1 (1) + IN_REG2 (1) + memrega (1) + NBPIPE + douta (1) = NBPIPE + 4
+//   IN_REG1 (1) + IN_REG2 (1) + IN_REG3 (1, obuf_bank内新增) + memrega (1) + NBPIPE + douta (1) = NBPIPE + 5
 // bank_sel pipe 用于追踪某个读请求最后落在哪个 bank 的输出 mux 上：
-//   IN_REG1 已用 bank_sel_a_q1（来自 addra_reg），后续需要再 pipe NBPIPE+3 拍
+//   IN_REG1 已用 bank_sel_a_q1（来自 addra_reg），后续需要再 pipe NBPIPE+4 拍
 //   到达最终 output mux（douta）
-localparam TOTAL_PIPE = NBPIPE + 3;
+localparam TOTAL_PIPE = NBPIPE + 4;
 
 (* shreg_extract = "no" *) reg [BANK_BITS-1:0] bank_sel_a_pipe [0:TOTAL_PIPE-1];
 (* shreg_extract = "no" *) reg [BANK_BITS-1:0] bank_sel_b_pipe [0:TOTAL_PIPE-1];

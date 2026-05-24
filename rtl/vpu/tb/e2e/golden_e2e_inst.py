@@ -20,7 +20,7 @@ Address map (OBUF, byte addresses; OBUF is 16MB):
   L1 im2col output        : 0x100000
   L1 DCIM accum (INT32)   : 0x200000
   L1 DQA output (FP32)    : 0x300000
-  L1 QA output (UINT8)    : 0x400000
+  L1 QA output (INT8, symmetric)    : 0x400000
   L2 im2col output        : 0x500000
   L2 DCIM accum           : 0x600000
   L2 DQA output           : 0x700000
@@ -203,9 +203,9 @@ class ConvLayer:
         return x * self.dqa_scale[None, :] + self.dqa_bias[None, :]
 
     def compute_qa(self, dqa):
-        """dqa FP32 -> UINT8: clamp(round(x / act_scale), 0, 255)."""
+        """dqa FP32 -> INT8: clamp(round(x / act_scale), -128, 127). Symmetric quantization."""
         scaled = dqa / self.act_scale
-        return np.clip(np.round(scaled), 0, 255).astype(np.uint8)
+        return np.clip(np.round(scaled), -128, 127).astype(np.int8)
 
     def forward(self, feat_int8):
         im2col = self.compute_im2col(feat_int8)
@@ -285,8 +285,8 @@ def bytes_to_128_words(byte_blob):
 
 
 def write_feature_hex(path, feat_arr):
-    """Flatten in NHWC byte order and write 128-bit words."""
-    flat = feat_arr.astype(np.uint8).tobytes()
+    """Flatten in NHWC byte order and write 128-bit words. Symmetric INT8: store as signed bytes."""
+    flat = feat_arr.astype(np.int8).tobytes()
     write_hex(path, bytes_to_128_words(flat))
 
 
@@ -636,27 +636,26 @@ def main():
                       ly.oh, ly.ow, ly.out_ch,
                       ly.acc_depth, ly.num_tiles))
 
-    # ---- Random input feature ----
+    # ---- Random input feature (symmetric INT8, range [-128, 127]) ----
     np.random.seed(args.seed)
-    input_feat = np.random.randint(0, 256, size=(L1_H, L1_W, 16), dtype=np.uint8)
-    input_feat_int8 = input_feat.view(np.int8)  # treat as signed for matmul
+    input_feat = np.random.randint(-128, 128, size=(L1_H, L1_W, 16), dtype=np.int8)
 
     # ---- Forward all 3 layers ----
-    feats = [input_feat_int8]
+    feats = [input_feat]
     intermediates_all = []
     for ly in layers:
         cur_feat = feats[-1]
         # Channel count consistency check
         assert cur_feat.shape[2] == ly.in_ch, \
             'Layer {} expects in_ch={} but got {}'.format(ly.name, ly.in_ch, cur_feat.shape[2])
-        out_uint8, mid = ly.forward(cur_feat)
+        out_int8, mid = ly.forward(cur_feat)
         intermediates_all.append(mid)
-        feats.append(out_uint8.view(np.int8))  # carry as signed for next layer
+        feats.append(out_int8)
         print('  {} accum range=[{}, {}]  dqa range=[{:.3f}, {:.3f}]  out nonzero={:.1%}'.format(
             ly.name,
             int(mid['accum'].min()), int(mid['accum'].max()),
             float(mid['dqa'].min()), float(mid['dqa'].max()),
-            (out_uint8 != 0).mean()))
+            (out_int8 != 0).mean()))
 
     # ---- Address map for OBUF (per layer triplet) ----
     obuf_in    = [OBUF_L1_INPUT,  OBUF_L1_OUTPUT, OBUF_L2_OUTPUT]

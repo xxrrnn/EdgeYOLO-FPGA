@@ -41,7 +41,7 @@ connect_bd_net [get_bd_pins util_ds_buf/IBUF_DS_ODIV2] [get_bd_pins xdma_0/sys_c
 connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 
 # ==============================================================================
-# SmartConnect: NUM_SI=2, NUM_MI=6 (lite+HBM: added M05 for HBM)
+# SmartConnect: NUM_SI=2, NUM_MI=6 (lite+HBM: added M05 for HBM interleave)
 #   S00 = XDMA M_AXI
 #   S01 = CDMA M_AXI
 #   M00 = dcim_ibuf_smc (→ 1 IBUF controller, 2MB)
@@ -49,7 +49,7 @@ connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 #   M02 = vpu_wb_ctrl   (32KB)
 #   M03 = inst_bram/s_axi
 #   M04 = vpu_regs/s_axi
-#   M05 = hbm_axi_cc    (→ HBM SAXI_00, 4GB)
+#   M05 = hbm_axi_cc    (→ HBM SAXI_00, interleaved 4GB view)
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_mem_smc
 set_property -dict [list \
@@ -240,7 +240,8 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins inst_decoder/clk]
 connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins inst_decoder/rst_n]
 
 # ==============================================================================
-# HBM Clock/Reset/AXI connections (1 stack, 1 AXI port)
+# HBM Clock/Reset/AXI connections (1 stack, interleaved via SAXI_00)
+# APB_0_PCLK 必须连接 ref clock (100 MHz)，否则 BD 41-758 warning
 # ==============================================================================
 
 # Clock wizard inputs (250 MHz from XDMA → 100 MHz ref + 450 MHz AXI)
@@ -249,15 +250,26 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins hbm_axi_clk_wiz/clk_in
 connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_ref_clk_wiz/reset]
 connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_axi_clk_wiz/reset]
 
-# HBM reference clock (100 MHz)
+# HBM reference clock (100 MHz) → HBM_REF_CLK_0
 connect_bd_net [get_bd_pins hbm_ref_clk_wiz/clk_out1] [get_bd_pins hbm_0/HBM_REF_CLK_0]
+
+# APB_0_PCLK: HBM APB 监控时钟，必须连接 ref clock（100 MHz）
+# 即使 USER_APB_EN=false，该时钟引脚仍然存在，不连接会触发 BD 41-758
+connect_bd_net [get_bd_pins hbm_ref_clk_wiz/clk_out1] [get_bd_pins hbm_0/APB_0_PCLK]
+
+# APB_0_PRESET_N: HBM APB 复位（active-low），必须连接，否则 BD 41-759
+# hbm_apb_rst 使用 ref clock (100 MHz)，locked 来自 hbm_ref_clk_wiz
+connect_bd_net [get_bd_pins hbm_ref_clk_wiz/clk_out1]  [get_bd_pins hbm_apb_rst/slowest_sync_clk]
+connect_bd_net [get_bd_ports cpu_reset]                 [get_bd_pins hbm_apb_rst/ext_reset_in]
+connect_bd_net [get_bd_pins hbm_ref_clk_wiz/locked]    [get_bd_pins hbm_apb_rst/dcm_locked]
+connect_bd_net [get_bd_pins hbm_apb_rst/peripheral_aresetn] [get_bd_pins hbm_0/APB_0_PRESET_N]
 
 # HBM domain reset (driven by 450 MHz AXI clock)
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_rst/slowest_sync_clk]
 connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_rst/ext_reset_in]
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/locked] [get_bd_pins hbm_rst/dcm_locked]
 
-# HBM AXI port 0 clock and reset
+# HBM AXI port 0 clock and reset (interleaved port: sees all 4GB)
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_0/AXI_00_ACLK]
 connect_bd_net [get_bd_pins hbm_rst/peripheral_aresetn] [get_bd_pins hbm_0/AXI_00_ARESET_N]
 
@@ -267,6 +279,6 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins hbm_axi_cc/s_axi_ar
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_axi_cc/m_axi_aclk]
 connect_bd_net [get_bd_pins hbm_rst/peripheral_aresetn] [get_bd_pins hbm_axi_cc/m_axi_aresetn]
 
-# SmartConnect M05 → AXI Clock Converter → HBM SAXI_00
+# SmartConnect M05 → AXI Clock Converter → HBM SAXI_00 (interleaved, full 4GB)
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M05_AXI] [get_bd_intf_pins hbm_axi_cc/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hbm_axi_cc/M_AXI] [get_bd_intf_pins hbm_0/SAXI_00]

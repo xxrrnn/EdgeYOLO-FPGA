@@ -67,7 +67,8 @@ module DCIM_Array_Group #(
     wire [TILES_PER_GROUP-1:0] tile_done;
     wire [TILES_PER_GROUP-1:0] tile_ready;
     
-    assign done  = &tile_done;
+    // disabled tile 的 done 强制为 1（永不阻塞 AND）
+    assign done  = &(tile_done | ~tile_mask);
     assign ready = &tile_ready;
     
     // ========================================================================

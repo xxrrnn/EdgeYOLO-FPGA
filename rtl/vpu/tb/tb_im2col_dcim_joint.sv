@@ -98,7 +98,8 @@ module tb_im2col_dcim_joint;
     wire [BUF_DATA_WIDTH-1:0]   vpu_obuf_din;
     wire [BUF_DATA_WIDTH-1:0]   vpu_obuf_dout;
 
-    wire dcim_done, dcim_ready;
+    wire dcim_done;
+    wire dcim_ready = dcim_done;  // ready port removed from DCIM_Array_bd
 
     // im2col_unit 接口
     reg  im2col_start;
@@ -158,8 +159,7 @@ module tb_im2col_dcim_joint;
         .vpu_obuf_we    (vpu_obuf_we),
         .vpu_obuf_din   (vpu_obuf_din),
         .vpu_obuf_dout  (vpu_obuf_dout),
-        .done           (dcim_done),
-        .ready          (dcim_ready)
+        .done           (dcim_done)
     );
 
     // =========================================================================
@@ -402,23 +402,10 @@ module tb_im2col_dcim_joint;
         dcim_cfg_write(`DCIM_REG_CTRL, 32'h1);
 
         // 等待 DCIM 完成（ready 会先降后升，或 done 脉冲）
-        $display("[%0t] Waiting for DCIM... ready=%b done=%b", $time, dcim_ready, dcim_done);
-        // DCIM 启动后 ready 降低，计算完成后 done 脉冲 + ready 恢复
-        // 由于 cfg_start 有 1 cycle pipeline delay，需要等几周期让 start 传播
+        $display("[%0t] Waiting for DCIM done...", $time);
         repeat(5) @(posedge clk);
-        $display("[%0t]   After start propagate: ready=%b done=%b", $time, dcim_ready, dcim_done);
-
-        if (!dcim_ready) begin
-            // DCIM 确实在计算中，等待完成
-            wait(dcim_ready == 1);
-        end else begin
-            // DCIM 可能没有启动（ready 一直为 1 = idle）
-            // 等一个 done 脉冲
-            @(posedge dcim_done or posedge dcim_ready);
-            repeat(10) @(posedge clk);
-        end
-
-        repeat(10) @(posedge clk);
+        wait(dcim_done == 1);
+        repeat(20) @(posedge clk);  // extra cycles for last write to settle in OBUF
         $display("[%0t] Phase 5 done: DCIM computation complete (ready=%b done=%b)", $time, dcim_ready, dcim_done);
 
         // =====================================================================
