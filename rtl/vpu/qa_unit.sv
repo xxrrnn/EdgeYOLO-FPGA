@@ -353,6 +353,16 @@ module qa_unit #(
         end
     end
 
+    // Pipeline register to break timing: QA_INT latches the combinational result,
+    // QA_SAVE uses the registered value. This cuts the 23-level comb path in half.
+    reg [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data_reg;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            qa_quant_pack_data_reg <= '0;
+        else if (c_state == QA_INT)
+            qa_quant_pack_data_reg <= qa_quant_pack_data;
+    end
+
     // INT8 conversion result capture (debug/legacy mirror; pack writer uses qa_quant_pack_data directly)
     always_ff@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
@@ -449,7 +459,7 @@ module qa_unit #(
         .clk(clk),
         .rst_n(rst_n),
         .pack_valid(c_state == QA_SAVE),
-        .pack_data(qa_quant_pack_data),
+        .pack_data(qa_quant_pack_data_reg),
         .pack_base_addr(qa_dst_addr_reg >> BYTE_ADDR_SHIFT),
         .pack_last(qa_done),
         .pack_reset(c_state == IDLE),
