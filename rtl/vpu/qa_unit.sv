@@ -332,22 +332,26 @@ module qa_unit #(
             // back to UINT8 with clamp.
             if (sign) begin
                 if (rounded_abs >= 128) qa_uint8_round_fp32 = 8'h00;
-                else                    qa_uint8_round_fp32 = 8'(128 - rounded_abs);
+                else                    qa_uint8_round_fp32 = 8'((128 - rounded_abs) & 8'hff);
             end else begin
                 if (rounded_abs >= 127) qa_uint8_round_fp32 = 8'hff;
-                else                    qa_uint8_round_fp32 = 8'(128 + rounded_abs);
+                else                    qa_uint8_round_fp32 = 8'((128 + rounded_abs) & 8'hff);
             end
         end
     endfunction
 
-    wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data;
-    generate
-        genvar qg;
-        for (qg = 0; qg < FP_TRAN_NUM; qg = qg + 1) begin : gen_qa_quant_pack
-            assign qa_quant_pack_data[qg*Q_INT_WIDTH_OUT +: Q_INT_WIDTH_OUT] =
-                qa_uint8_round_fp32(qa_out_q_reg[qg*FP_WIDTH +: FP_WIDTH]);
+    // Combinational UINT8 quantization for current tran slice.
+    // qa_out_q_reg holds FP_CORE_NUM FP32 values; slice [qa_x_tran_cnt*FP_TRAN_NUM : +FP_TRAN_NUM]
+    // and convert each lane to UINT8 using qa_uint8_round_fp32.
+    reg [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0] qa_quant_pack_data;
+    always_comb begin
+        integer qi;
+        for (qi = 0; qi < FP_TRAN_NUM; qi = qi + 1) begin
+            qa_quant_pack_data[qi*Q_INT_WIDTH_OUT +: Q_INT_WIDTH_OUT] =
+                qa_uint8_round_fp32(qa_out_q_reg[
+                    (qa_x_tran_cnt * FP_TRAN_NUM + qi) * FP_WIDTH +: FP_WIDTH]);
         end
-    endgenerate
+    end
 
     // INT8 conversion result capture (debug/legacy mirror; pack writer uses qa_quant_pack_data directly)
     always_ff@(posedge clk or negedge rst_n) begin
