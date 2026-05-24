@@ -323,7 +323,6 @@ nn_lut_unit #(
       .gb_web(qa_gb_web),   
       .gb_enb(qa_gb_enb),    
       .gb_doutb(gb_doutb),
-      .gb_rd_valid(obuf_rd_valid),
 
       // --- Weight Buffer (WB) Ports (Simple Dual-Port BRAM-like interface) ---
       .wb_addrb(qa_wb_addrb),

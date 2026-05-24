@@ -41,7 +41,6 @@ module qa_unit #(
     output logic [GB_BANDWIDTH/8-1:0]   gb_web,   
     output logic                        gb_enb,    
     input  wire [GB_BANDWIDTH-1:0]      gb_doutb,
-    input  wire                         gb_rd_valid,  // OBUF 读数据有效（ready/valid）
 
     output reg [WB_ADDR_WIDTH-1:0]      wb_addrb,
     output reg [WB_BANDWIDTH-1:0]       wb_dinb,
@@ -66,7 +65,6 @@ module qa_unit #(
         QA_UPDATE,
         QA_LOAD_X,
         QA_WAIT_X,
-        QA_SAMPLE_X,    // 等 gb_rd_valid 后 1 拍采样（douta 稳定后再读）
         QA_COMPUTE,
         QA_COMPUTE_WAIT,
         QA_INT,
@@ -80,7 +78,15 @@ module qa_unit #(
     // dqa signals
     reg     [FP_WIDTH - 1 : 0]                            qa_scale_reg;
     
-    // OBUF 读延迟通过 gb_rd_valid 握手处理，无需硬编码计数器
+    // OBUF 读延迟计数器：等待 TOTAL_PIPE+2 拍确保数据稳定
+    // （包含 wea_reg 残留清零时间 + OBUF 流水线延迟）
+    reg [4:0] qa_rd_wait_cnt;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) qa_rd_wait_cnt <= 0;
+        else if (c_state == QA_LOAD_X) qa_rd_wait_cnt <= 1;
+        else if (c_state == QA_WAIT_X) qa_rd_wait_cnt <= qa_rd_wait_cnt + 1;
+        else qa_rd_wait_cnt <= 0;
+    end
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_fp_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              qa_out_q_reg;
     reg     [FP_CORE_NUM * Q_INT_WIDTH_OUT - 1 : 0]       qa_out_int_reg;
@@ -205,12 +211,14 @@ module qa_unit #(
                 IDLE: begin
                     qa_save_cnt <= '0;
                 end
-                QA_SAMPLE_X: begin
-                    // douta 在前一拍（gb_rd_valid=1）已稳定，此拍采样
-                    if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
-                        qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
-                    else
-                        qa_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
+                QA_WAIT_X: begin
+                    // 硬延迟等待 8 拍后采样（第 8 拍时数据已在 gb_doutb 上稳定）
+                    if (qa_rd_wait_cnt == 8) begin
+                        if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
+                            qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                        else
+                            qa_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
+                    end
                 end
                 QA_SAVE: begin
                     qa_save_cnt <= qa_save_cnt + 1;
@@ -365,8 +373,8 @@ module qa_unit #(
             QA_WAIT_SCALE   : n_state  = QA_LOAD_X;
             QA_UPDATE       : n_state  = QA_LOAD_X;
             QA_LOAD_X       : n_state  = QA_WAIT_X;
-            QA_WAIT_X       : n_state  = gb_rd_valid ? QA_SAMPLE_X : QA_WAIT_X;
-            QA_SAMPLE_X     : n_state  = qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE;            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
+            // 等 TOTAL_PIPE+2=8 拍后数据稳定（6拍OBUF流水 + 2拍wea_reg残留余量）
+            QA_WAIT_X       : n_state  = (qa_rd_wait_cnt >= 8) ? (qa_x_load_block_done ? QA_COMPUTE : QA_UPDATE) : QA_WAIT_X;            QA_COMPUTE      : n_state  = fp_array_tready? QA_COMPUTE_WAIT :QA_COMPUTE;
             QA_COMPUTE_WAIT : n_state  = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT          : n_state  = QA_INT_WAIT;
             QA_INT_WAIT     : n_state  = m_axis_int_tvalid ? QA_SAVE : QA_INT_WAIT;
