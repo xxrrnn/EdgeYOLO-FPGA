@@ -181,9 +181,10 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_act_stride;
     reg [31:0] dcim_layer_out_stride;
     reg [31:0] dcim_layer_act_current;
+    reg [31:0] dcim_layer_out_offset;
     reg [31:0] dcim_layer_wei_base [0:DCIM_NUM_TILES_L-1];
     reg [31:0] dcim_layer_out_base [0:DCIM_NUM_TILES_L-1];
-    reg [31:0] dcim_layer_out_current [0:DCIM_NUM_TILES_L-1];
+    reg [31:0] dcim_layer_out_current;
     reg [DCIM_TILE_IDX_W-1:0] dcim_layer_tile_idx;
     reg        dcim_layer_seen_busy;
     
@@ -502,8 +503,8 @@ module INST_Decoder #(
             for (int i = 0; i < DCIM_NUM_TILES_L; i++) begin
                 dcim_layer_wei_base[i] <= '0;
                 dcim_layer_out_base[i] <= '0;
-                dcim_layer_out_current[i] <= '0;
             end
+            dcim_layer_out_current <= '0;
             dcim_layer_num_pixels <= '0;
             dcim_layer_pixel_idx <= '0;
             dcim_layer_mode_reg <= '0;
@@ -511,6 +512,7 @@ module INST_Decoder #(
             dcim_layer_act_base <= '0;
             dcim_layer_act_stride <= '0;
             dcim_layer_act_current <= '0;
+            dcim_layer_out_offset <= '0;
             dcim_layer_out_stride <= '0;
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
@@ -734,9 +736,10 @@ module INST_Decoder #(
                     for (int i = 0; i < DCIM_NUM_TILES_L; i++) begin
                         dcim_layer_wei_base[i] <= body_buffer[8 + i];
                         dcim_layer_out_base[i] <= body_buffer[8 + DCIM_NUM_TILES_L + i];
-                        dcim_layer_out_current[i] <= body_buffer[8 + DCIM_NUM_TILES_L + i];
                     end
+                    dcim_layer_out_current <= body_buffer[8 + DCIM_NUM_TILES_L];
                     dcim_layer_act_current <= body_buffer[4];
+                    dcim_layer_out_offset <= '0;
                     dcim_layer_pixel_idx <= '0;
                     dcim_layer_tile_idx <= '0;
                     dcim_layer_seen_busy <= 1'b0;
@@ -774,13 +777,16 @@ module INST_Decoder #(
                     dcim_cfg_wr_addr <= `DCIM_REG_ACT_BASE;
                     dcim_cfg_wr_data <= dcim_layer_act_current;
                     dcim_layer_tile_idx <= '0;
+                    dcim_layer_out_current <= dcim_layer_out_base[0] + dcim_layer_out_offset;
                 end
 
                 S_DCIM_LAYER_CFG_OUT: begin
                     dcim_cfg_wr_en <= 1'b1;
                     dcim_cfg_wr_addr <= `DCIM_REG_OUT_BASE + {dcim_layer_tile_idx, 2'b00};
-                    dcim_cfg_wr_data <= dcim_layer_out_current[dcim_layer_tile_idx];
+                    dcim_cfg_wr_data <= dcim_layer_out_current;
                     dcim_layer_tile_idx <= dcim_layer_tile_idx + 1'b1;
+                    if (dcim_layer_tile_idx < DCIM_NUM_TILES_L[DCIM_TILE_IDX_W-1:0] - 1'b1)
+                        dcim_layer_out_current <= dcim_layer_out_base[dcim_layer_tile_idx + 1'b1] + dcim_layer_out_offset;
                 end
 
                 S_DCIM_LAYER_START: begin
@@ -805,8 +811,7 @@ module INST_Decoder #(
                 S_DCIM_LAYER_NEXT: begin
                     dcim_layer_pixel_idx <= dcim_layer_pixel_idx + 1'b1;
                     dcim_layer_act_current <= dcim_layer_act_current + dcim_layer_act_stride;
-                    for (int i = 0; i < DCIM_NUM_TILES_L; i++)
-                        dcim_layer_out_current[i] <= dcim_layer_out_current[i] + dcim_layer_out_stride;
+                    dcim_layer_out_offset <= dcim_layer_out_offset + dcim_layer_out_stride;
                 end
                 
                 S_NEXT_INST: begin

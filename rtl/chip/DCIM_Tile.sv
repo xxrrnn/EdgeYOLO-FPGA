@@ -151,6 +151,7 @@ module DCIM_Tile #(
     localparam [31:0] EXPECTED_OUTPUTS = 32'd1;
     localparam integer MAX_ROWS_PER_CHUNK_INT = SRAM_DP / CYCLE;
     localparam [ACC_UBD_WD-1:0] MAX_ROWS_PER_CHUNK = MAX_ROWS_PER_CHUNK_INT[ACC_UBD_WD-1:0];
+    localparam integer CYCLE_SHIFT = $clog2(CYCLE);
     
     (* max_fanout = 16 *) reg is_int16_reg;
     wire is_int16 = is_int16_reg;
@@ -183,6 +184,21 @@ module DCIM_Tile #(
     (* max_fanout = 8 *) reg ppcache_finished;
     (* max_fanout = 8 *) reg all_rows_processed;
     (* max_fanout = 8 *) reg all_results_collected;
+    reg [9:0] chunk_words;
+    reg [BUF_ADDR_WIDTH-1:0] chunk_wei_base;
+    reg [BUF_ADDR_WIDTH-1:0] chunk_act_base;
+    reg [BUF_ADDR_WIDTH-1:0] row_wei_base;
+    reg [BUF_ADDR_WIDTH-1:0] row_act_addr;
+    wire [BUF_ADDR_WIDTH-1:0] result_word0_addr = out_base_addr_reg + { {(BUF_ADDR_WIDTH-2){1'b0}}, result_cnt, 1'b0 };
+    wire [BUF_ADDR_WIDTH-1:0] result_word1_addr = result_word0_addr + 1'b1;
+
+    function automatic [ACC_UBD_WD-1:0] calc_chunk_rows(input [ACC_UBD_WD-1:0] start_row);
+        reg [ACC_UBD_WD-1:0] rows_left;
+        begin
+            rows_left = acc_reg - start_row;
+            calc_chunk_rows = (rows_left > MAX_ROWS_PER_CHUNK) ? MAX_ROWS_PER_CHUNK : rows_left;
+        end
+    endfunction
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -196,8 +212,8 @@ module DCIM_Tile #(
         end else begin
             ibuf_handshake_done <= (ibuf_rd_valid && ibuf_rd_ready);
             ibuf_data_received <= ibuf_rd_data_valid;
-            wei_load_finished <= (wei_load_cnt >= chunk_rows * CYCLE - 1);
-            ppcache_finished <= (state == ST_LOAD_PPCACHE) && ((row_cnt == 0) ? (ppcache_cnt >= 4 * CYCLE) : (ppcache_cnt >= 2 * CYCLE));
+            wei_load_finished <= (wei_load_cnt >= chunk_words - 1'b1);
+            ppcache_finished <= (state == ST_LOAD_PPCACHE) && ((row_cnt == 0) ? (ppcache_cnt >= (CYCLE << 2)) : (ppcache_cnt >= (CYCLE << 1)));
             all_rows_processed <= (row_cnt >= chunk_rows - 1);
             result_cnt_nonzero <= (result_cnt != 2'd0);
             all_results_collected <= result_cnt_nonzero || chunk_continue_req;
@@ -302,6 +318,11 @@ module DCIM_Tile #(
             act_buf_lo <= 0;
             conv_sent_reg <= 0;
             compute_phase_cnt <= 0;
+            chunk_words <= 0;
+            chunk_wei_base <= 0;
+            chunk_act_base <= 0;
+            row_wei_base <= 0;
+            row_act_addr <= 0;
         end else begin
             dcim_wr_wei <= 0;
             dcim_load_wei <= 0;
@@ -312,6 +333,11 @@ module DCIM_Tile #(
                 ST_IDLE: begin
                     wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
                     chunk_base <= 0;
+                    chunk_words <= 0;
+                    chunk_wei_base <= wei_base_addr_reg;
+                    chunk_act_base <= act_base_addr_reg;
+                    row_wei_base <= wei_base_addr_reg;
+                    row_act_addr <= act_base_addr_reg;
                     ibuf_rd_valid <= 0;
                     conv_sent_reg <= 0;
                     compute_phase_cnt <= 0;
@@ -323,6 +349,19 @@ module DCIM_Tile #(
                     row_cnt <= 0;
                     if (chunk_continue_req) begin
                         chunk_base <= chunk_base + chunk_rows;
+                        chunk_words <= calc_chunk_rows(chunk_base + chunk_rows) << CYCLE_SHIFT;
+                        chunk_wei_base <= wei_base_addr_reg + ((chunk_base + chunk_rows) << CYCLE_SHIFT);
+                        chunk_act_base <= is_int16 ? (act_base_addr_reg + ((chunk_base + chunk_rows) << 1))
+                                                   : (act_base_addr_reg + chunk_base + chunk_rows);
+                        row_wei_base <= wei_base_addr_reg + ((chunk_base + chunk_rows) << CYCLE_SHIFT);
+                        row_act_addr <= is_int16 ? (act_base_addr_reg + ((chunk_base + chunk_rows) << 1))
+                                                 : (act_base_addr_reg + chunk_base + chunk_rows);
+                    end else begin
+                        chunk_wei_base <= wei_base_addr_reg;
+                        chunk_act_base <= act_base_addr_reg;
+                        chunk_words <= calc_chunk_rows('0) << CYCLE_SHIFT;
+                        row_wei_base <= wei_base_addr_reg;
+                        row_act_addr <= act_base_addr_reg;
                     end
                     ibuf_rd_valid <= 0;
                     conv_sent_reg <= 0;
@@ -335,7 +374,7 @@ module DCIM_Tile #(
                 // ==============================================================
                 ST_LOAD_WEI_REQ: begin
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= wei_base_addr_reg + chunk_base * CYCLE + wei_load_cnt;
+                    ibuf_rd_addr <= row_wei_base + wei_load_cnt;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
@@ -357,7 +396,7 @@ module DCIM_Tile #(
                 // ppCache 加载
                 // ==============================================================
                 ST_PREP_PPCACHE: begin
-                    dcim_addr_wei <= row_cnt * CYCLE;
+                    dcim_addr_wei <= row_cnt << CYCLE_SHIFT;
                     ppcache_cnt <= 0;
                 end
                 
@@ -382,8 +421,7 @@ module DCIM_Tile #(
                     conv_sent_reg <= 0;
                     compute_phase_cnt <= 0;
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= is_int16 ? (act_base_addr_reg + (chunk_base + row_cnt) * 2)
-                                             : (act_base_addr_reg + chunk_base + row_cnt);
+                    ibuf_rd_addr <= row_act_addr;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
@@ -403,7 +441,7 @@ module DCIM_Tile #(
                 
                 ST_LOAD_ACT2_REQ: begin
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= act_base_addr_reg + (chunk_base + row_cnt) * 2 + 1;
+                    ibuf_rd_addr <= row_act_addr + 1'b1;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
@@ -431,6 +469,8 @@ module DCIM_Tile #(
                         conv_sent_reg <= 1'b0;
                         compute_phase_cnt <= 0;
                         row_cnt <= row_cnt + 1;
+                        row_wei_base <= row_wei_base + CYCLE;
+                        row_act_addr <= is_int16 ? (row_act_addr + 2'd2) : (row_act_addr + 1'b1);
                     end
                 end
                 
@@ -574,7 +614,7 @@ module DCIM_Tile #(
                                 obuf_wr_addr <= out_base_addr_reg + result_cnt;
                                 obuf_wr_data <= int16_accum_packed_comb;
                             end else begin
-                                obuf_wr_addr <= out_base_addr_reg + result_cnt * 2;
+                                obuf_wr_addr <= result_word0_addr;
                                 obuf_wr_data <= int8_accum_packed_comb[127:0];
                             end
                             save_phase <= 3'd3;
@@ -602,7 +642,7 @@ module DCIM_Tile #(
                         // Only check ready when our own valid is asserted.
                         obuf_wr_valid <= 1'b1;
                         obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
-                        obuf_wr_addr  <= out_base_addr_reg + result_cnt * 2 + 1;
+                        obuf_wr_addr  <= result_word1_addr;
                         obuf_wr_data  <= int8_packed_reg[255:128];
                         if (obuf_wr_valid && obuf_wr_ready) begin
                             obuf_wr_valid <= 0;

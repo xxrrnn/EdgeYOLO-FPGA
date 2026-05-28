@@ -4,8 +4,9 @@
 // ibuf_rd_arbiter - 时序友好的 IBUF 读仲裁器
 // ============================================================================
 // 多个 Tile 共享一个 IBUF 读端口。为了支持 64 Tile 且优先满足 250MHz 时序，
-// 不再使用单周期全宽 round-robin 优先级编码，而是每拍只检查一个 Tile。
-// 最坏仲裁延迟增加到 NUM_TILES 拍，但避免 64 路组合取模/优先级链。
+// 不使用单周期全宽 round-robin 优先级编码，而是每拍只检查一个 Tile。
+// 命中后先锁存 tile/address，下一拍再 grant，避免 scan_idx 可变 part-select
+// 与 IBUF 输出寄存器处于同一条组合路径。
 // ============================================================================
 
 module ibuf_rd_arbiter #(
@@ -34,12 +35,14 @@ module ibuf_rd_arbiter #(
 
     typedef enum logic [1:0] {
         ARB_SCAN,
+        ARB_GRANT,
         ARB_WAIT_DATA
     } arb_state_t;
 
     arb_state_t arb_state;
     reg [TILE_IDX_W-1:0] scan_idx;
     reg [TILE_IDX_W-1:0] active_tile;
+    reg [ADDR_WIDTH-1:0] active_addr;
     reg [3:0] latency_cnt;
     reg [NUM_TILES-1:0] tile_rd_ready_reg;
 
@@ -60,6 +63,7 @@ module ibuf_rd_arbiter #(
             arb_state <= ARB_SCAN;
             scan_idx <= '0;
             active_tile <= '0;
+            active_addr <= '0;
             latency_cnt <= '0;
             ibuf_en <= 1'b0;
             ibuf_addr <= '0;
@@ -74,15 +78,20 @@ module ibuf_rd_arbiter #(
                 ARB_SCAN: begin
                     if (tile_rd_valid[scan_idx]) begin
                         active_tile <= scan_idx;
-                        ibuf_en <= 1'b1;
-                        ibuf_addr <= tile_rd_addr[scan_idx*ADDR_WIDTH +: ADDR_WIDTH];
-                        tile_rd_ready_reg[scan_idx] <= 1'b1;
-                        latency_cnt <= 4'd1;
+                        active_addr <= tile_rd_addr[scan_idx*ADDR_WIDTH +: ADDR_WIDTH];
                         scan_idx <= inc_idx(scan_idx);
-                        arb_state <= ARB_WAIT_DATA;
+                        arb_state <= ARB_GRANT;
                     end else begin
                         scan_idx <= inc_idx(scan_idx);
                     end
+                end
+
+                ARB_GRANT: begin
+                    ibuf_en <= 1'b1;
+                    ibuf_addr <= active_addr;
+                    tile_rd_ready_reg[active_tile] <= 1'b1;
+                    latency_cnt <= 4'd1;
+                    arb_state <= ARB_WAIT_DATA;
                 end
 
                 ARB_WAIT_DATA: begin

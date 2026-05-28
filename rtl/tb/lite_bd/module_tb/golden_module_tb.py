@@ -974,7 +974,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_AUX,
                          encode_addr_break(meta), oh, ow)
     fast_inst += dcim_layer_inst(meta, oh * ow, OBUF_AUX, OBUF_SRC1, IBUF_ACT, IBUF_WEI)
-    fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, meta.out_ch, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX)
+    fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, meta.out_ch, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x1)
     fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, meta.out_ch, oh, ow, 0, WB_QSCALE, OBUF_DST)
     fast_inst += [header(OP_END, 0, 0)]
     fast_loads = [

@@ -107,6 +107,7 @@ module DCIM_Array_bd #(
     localparam ACC_UBD_WD     = $clog2(ACC + 1);
     localparam IBUF_ADDR_W    = IBUF_ADDR_WIDTH;
     localparam OBUF_ADDR_W    = OBUF_ADDR_WIDTH;
+    localparam TILE_IDX_W     = (NUM_TILES <= 1) ? 1 : $clog2(NUM_TILES);
     // DCIM_Array 内部统一用 OBUF_ADDR_WIDTH (较大者)，IBUF 信号高位补 0
     localparam INT_ADDR_W     = OBUF_ADDR_WIDTH;
 
@@ -139,9 +140,16 @@ module DCIM_Array_bd #(
     reg [2:0]                            cfg_mode;
     reg [ACC_UBD_WD-1:0]                 cfg_acc_depth;
     reg [INT_ADDR_W-1:0]                 cfg_act_base_addr;  // 全局统一激活基址
-    reg [NUM_TILES*INT_ADDR_W-1:0]       cfg_wei_base_addrs; // 8 Tile 各自权重基址
-    reg [NUM_TILES*INT_ADDR_W-1:0]       cfg_out_base_addrs; // 8 Tile 各自输出基址
+    reg [NUM_TILES*INT_ADDR_W-1:0]       cfg_wei_base_addrs; // 64 Tile 各自权重基址
+    reg [NUM_TILES*INT_ADDR_W-1:0]       cfg_out_base_addrs; // 64 Tile 各自输出基址
     reg [NUM_TILES-1:0]                  cfg_tile_mask;      // 每 bit 控制对应 Tile 是否启用
+
+    wire cfg_wr_wei_range = (cfg_wr_addr_d >= `DCIM_REG_WEI_BASE) &&
+                            (cfg_wr_addr_d < (`DCIM_REG_WEI_BASE + (NUM_TILES << 2)));
+    wire cfg_wr_out_range = (cfg_wr_addr_d >= `DCIM_REG_OUT_BASE) &&
+                            (cfg_wr_addr_d < (`DCIM_REG_OUT_BASE + (NUM_TILES << 2)));
+    wire [TILE_IDX_W-1:0] cfg_wr_wei_tile_idx = (cfg_wr_addr_d - `DCIM_REG_WEI_BASE) >> 2;
+    wire [TILE_IDX_W-1:0] cfg_wr_out_tile_idx = (cfg_wr_addr_d - `DCIM_REG_OUT_BASE) >> 2;
 
     integer _i;
 
@@ -166,24 +174,12 @@ module DCIM_Array_bd #(
                     cfg_acc_depth <= cfg_wr_data_d[8 +: ACC_UBD_WD];
                 end else if (cfg_wr_addr_d == `DCIM_REG_ACT_BASE) begin
                     cfg_act_base_addr <= { {(INT_ADDR_W-IBUF_ADDR_W){1'b0}}, cfg_wr_data_d[IBUF_ADDR_W-1:0] };
-                end else if (cfg_wr_addr_d >= `DCIM_REG_WEI_BASE &&
-                             cfg_wr_addr_d < `DCIM_REG_OUT_BASE) begin
-                    begin : wei_decode
-                        integer t;
-                        t = (cfg_wr_addr_d - `DCIM_REG_WEI_BASE) >> 2;
-                        if (t < NUM_TILES)
-                            cfg_wei_base_addrs[t*INT_ADDR_W +: INT_ADDR_W]
-                                <= { {(INT_ADDR_W-IBUF_ADDR_W){1'b0}}, cfg_wr_data_d[IBUF_ADDR_W-1:0] };
-                    end
-                end else if (cfg_wr_addr_d >= `DCIM_REG_OUT_BASE &&
-                             cfg_wr_addr_d < (`DCIM_REG_OUT_BASE + NUM_TILES*4)) begin
-                    begin : out_decode
-                        integer t2;
-                        t2 = (cfg_wr_addr_d - `DCIM_REG_OUT_BASE) >> 2;
-                        if (t2 < NUM_TILES)
-                            cfg_out_base_addrs[t2*INT_ADDR_W +: INT_ADDR_W]
-                                <= cfg_wr_data_d[INT_ADDR_W-1:0];
-                    end
+                end else if (cfg_wr_wei_range) begin
+                    cfg_wei_base_addrs[cfg_wr_wei_tile_idx*INT_ADDR_W +: INT_ADDR_W]
+                        <= { {(INT_ADDR_W-IBUF_ADDR_W){1'b0}}, cfg_wr_data_d[IBUF_ADDR_W-1:0] };
+                end else if (cfg_wr_out_range) begin
+                    cfg_out_base_addrs[cfg_wr_out_tile_idx*INT_ADDR_W +: INT_ADDR_W]
+                        <= cfg_wr_data_d[INT_ADDR_W-1:0];
                 end else if (cfg_wr_addr_d == `DCIM_REG_TILE_MASK) begin
                     for (_i = 0; _i < NUM_TILES; _i = _i + 1) begin
                         if (_i < 32)

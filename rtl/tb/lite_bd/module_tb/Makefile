@@ -84,6 +84,8 @@
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║  六、选项开关                                                                  ║
 # ║    FAST=1（默认）  跳过 -debug_access（快），FAST=0 保留（Verdi 调试用）         ║
+# ║    VCS_JOBS=64（默认） VCS/vlogan 编译并行核数；可设 96/128 或 1 关闭并行     ║
+# ║    SIMV_JOBS=32（默认） simv 运行并行核数；若 license 不支持可设 0/1 关闭      ║
 # ║    STOP_ON_FAIL=1（默认）  批量遇 FAIL 立刻停，STOP_ON_FAIL=0 跑完全部         ║
 # ║    MODULE_VERIFY_WORDS=N   只校验前 N 个 128-bit 输出 word（0=全量，默认全量）   ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -101,8 +103,11 @@ BATCH_SUITE ?=
 MODULE_VARIANTS ?=
 LOG ?= 0
 FAST ?= 1
+VCS_JOBS ?= 64
+SIMV_JOBS ?= 32
 # LOG=1 同时写 sim_batch.log（默认只打屏）
 # FAST=1 快速（跳过 -debug_access），FAST=0 保留（Verdi 需要）
+# VCS_JOBS/SIMV_JOBS 默认启用多核；若 VCS license 不支持运行期 -j，可用 SIMV_JOBS=0 关闭
 WATCH_INTERVAL ?= 5
 
 MODULE_TB_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
@@ -151,24 +156,24 @@ export:
 		-source $(REPO_ROOT)/scripts/chip-lite/4_export_sim.tcl
 
 compile: check-export
-	ACTION=compile COMPILE_DIR=$(COMPILE_DIR) FAST=$(FAST) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	ACTION=compile COMPILE_DIR=$(COMPILE_DIR) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 run: check-export
 	ACTION=run COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 sim: check-export
 	ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 sim-export: export sim
 
 fsdb: check-export
 	ACTION=rebuild-sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=0 FSDB=1 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=0 VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=1 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 fsdb-export: export fsdb
 
@@ -192,7 +197,7 @@ data-suite:
 
 run-suite: check-export
 	ACTION=run-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
-		FAST=$(FAST) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 sim-suite: check-export
 	@variants="$(MODULE_VARIANTS)"; \
@@ -200,7 +205,7 @@ sim-suite: check-export
 	[ -n "$$variants" ] || { echo "用法: make sim-suite BATCH_SUITE=dcim_int8"; echo "      make list-suites"; exit 1; }; \
 	ACTION=sim-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
 		MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-		FAST=$(FAST) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 rebuild-suite: check-export
 	@variants="$(MODULE_VARIANTS)"; \
@@ -208,7 +213,7 @@ rebuild-suite: check-export
 	[ -n "$$variants" ] || { echo "用法: make rebuild-suite BATCH_SUITE=dcim_int8"; echo "      make list-suites"; exit 1; }; \
 	ACTION=rebuild-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
 		MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-		FAST=$(FAST) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
 
 list-cases:
 	python3 $(GOLDEN_PY) --module $(MODULE_CASE) --case list
@@ -265,11 +270,11 @@ _sim_batch_run:
 			echo "    log → $$log"; \
 			( ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR="$$bd" \
 				MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$$v MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-				FAST=$(FAST) RUN_EXPORT=0 bash $(RUN_SCRIPT) 2>&1 | tee -a "$$log" ); rc=$${PIPESTATUS[0]}; \
+				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) RUN_EXPORT=0 bash $(RUN_SCRIPT) 2>&1 | tee -a "$$log" ); rc=$${PIPESTATUS[0]}; \
 		else \
 			( ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR="$$bd" \
 				MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$$v MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-				FAST=$(FAST) RUN_EXPORT=0 bash $(RUN_SCRIPT) 2>&1 ); rc=$$?; \
+				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) RUN_EXPORT=0 bash $(RUN_SCRIPT) 2>&1 ); rc=$$?; \
 		fi; \
 		if [ $$rc -eq 0 ]; then \
 			passed=$$((passed+1)); echo "    PASS ✓"; \
@@ -351,4 +356,4 @@ help:
 	@echo "  make clean"
 	@echo ""
 	@echo "变量:  MODULE_CASE=$(MODULE_CASE)  MODULE_VARIANT=$(MODULE_VARIANT)"
-	@echo "       BATCH_SUITE=$(BATCH_SUITE)  FAST=$(FAST)  STOP_ON_FAIL=$(STOP_ON_FAIL)"
+	@echo "       BATCH_SUITE=$(BATCH_SUITE)  FAST=$(FAST)  VCS_JOBS=$(VCS_JOBS)  SIMV_JOBS=$(SIMV_JOBS)  STOP_ON_FAIL=$(STOP_ON_FAIL)"

@@ -20,6 +20,8 @@ MODULE_VERIFY_WORDS="${MODULE_VERIFY_WORDS:-0}"
 FSDB="${FSDB:-0}"
 RUN_EXPORT="${RUN_EXPORT:-0}"
 FAST="${FAST:-1}"
+VCS_JOBS="${VCS_JOBS:-64}"
+SIMV_JOBS="${SIMV_JOBS:-32}"
 ACTION="${ACTION:-sim}"
 SKIP_LITE_COMPILE="${SKIP_LITE_COMPILE:-1}"
 TB_TOP="tb_lite_bd_module"
@@ -77,6 +79,10 @@ compile_simv() {
   export SYNOPSYS_SIM_SETUP="$EXPORT_VCS_DIR/synopsys_sim.setup"
 
   VERDI_PLI_DIR="/home/EDAtools/synopsys/verdi/V-2023.12-SP1/share/PLI/VCS/LINUX64"
+  vcs_parallel_opts=()
+  if [[ "$VCS_JOBS" =~ ^[0-9]+$ && "$VCS_JOBS" -gt 1 ]]; then
+    vcs_parallel_opts=(-j"$VCS_JOBS")
+  fi
   vcs_elab_opts=(-full64 -ignore initializer_driver_checks +notimingcheck +nospecify -t ps
                  -P "$VERDI_PLI_DIR/novas.tab" "$VERDI_PLI_DIR/pli.a")
   if [[ "$FAST" == "0" || "$FSDB" == "1" ]]; then
@@ -102,13 +108,13 @@ compile_simv() {
   EXTRA_FL="$COMPILE_DIR/rtl_extra.f"
   bash "$BD_SIM_DIR/gen_bd_rtl_extra.sh" "$EXTRA_FL"
   (cd "$EXPORT_VCS_DIR"
-    "$VLOGAN" -full64 -sverilog +v2k "${inc[@]}" -work xil_defaultlib \
+    "$VLOGAN" "${vcs_parallel_opts[@]}" -full64 -sverilog +v2k "${inc[@]}" -work xil_defaultlib \
       -f "$EXTRA_FL" -l "$COMPILE_DIR/vlogan_rtl_extra.log")
 
   echo "=== Vlogan module TB (work) ==="
   (cd "$EXPORT_VCS_DIR"
     mkdir -p vcs_lib/work
-    "$VLOGAN" -full64 -sverilog +v2k "${inc[@]}" -work work \
+    "$VLOGAN" "${vcs_parallel_opts[@]}" -full64 -sverilog +v2k "${inc[@]}" -work work \
       "$LITE_BD_DIR/lite_xdma_constant_stub.v" \
       "$LITE_BD_DIR/host_axi_master_bfm.sv" \
       "$MODULE_TB_DIR/tb_lite_bd_module.sv" \
@@ -116,7 +122,7 @@ compile_simv() {
 
   echo "=== VCS elaborate module TB + lite ==="
   (cd "$EXPORT_VCS_DIR"
-    "$VCS" "${vcs_elab_opts[@]}" \
+    "$VCS" "${vcs_parallel_opts[@]}" "${vcs_elab_opts[@]}" \
       work."$TB_TOP" xil_defaultlib.lite xil_defaultlib.glbl \
       -o "$SIMV" -l "$COMPILE_DIR/compile.log")
 }
@@ -148,6 +154,9 @@ run_simv() {
     exit 1
   }
   sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$RUN_DIR")
+  if [[ "$SIMV_JOBS" =~ ^[0-9]+$ && "$SIMV_JOBS" -gt 1 ]]; then
+    sim_opts=(-j"$SIMV_JOBS" "${sim_opts[@]}")
+  fi
   if [[ "$FSDB" == "1" ]]; then
     sim_opts+=(+FSDB)
   fi
@@ -191,6 +200,9 @@ run_suite_simv() {
     exit 1
   }
   sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$SUITE_DIR" "+SUITE_FILE=$SUITE_DIR/suite.txt")
+  if [[ "$SIMV_JOBS" =~ ^[0-9]+$ && "$SIMV_JOBS" -gt 1 ]]; then
+    sim_opts=(-j"$SIMV_JOBS" "${sim_opts[@]}")
+  fi
   if [[ "$FSDB" == "1" ]]; then
     sim_opts+=(+FSDB)
   fi
