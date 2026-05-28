@@ -24,13 +24,29 @@ if {![file exists $bdFile]} {
     error "BD not found: $bdFile"
 }
 
-# Ensure functional sim netlist for top BD exists (generate_target sim)
-set bdSimV [file normalize "$bdDir/$bdName/sim/$bdName.v"]
-if {![file exists $bdSimV]} {
-    puts "INFO: generate_target simulation for $bdName"
-    generate_target {simulation} [get_files $bdFile]
-    export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
+# Apply DCIM module_ref parameters before exporting.  Vivado freezes module_ref
+# parameters into lite_dcim_array_0_0.v, so changing chip_defines.vh alone is not enough.
+open_bd_design $bdFile
+set dcimCell [get_bd_cells -quiet dcim_array_0]
+if {[llength $dcimCell] == 0} {
+    set dcimCell [get_bd_cells -quiet -filter {VLNV =~ "*DCIM_Array_bd*"}]
 }
+if {[llength $dcimCell] == 0} {
+    puts "ERROR: available BD cells: [get_bd_cells -quiet]"
+    error "BD cell dcim_array_0 / DCIM_Array_bd not found"
+}
+set_property -dict [list \
+    CONFIG.NUM_GROUPS {1} \
+    CONFIG.TILES_PER_GROUP {64} \
+    CONFIG.NUM_TILES {64} \
+] $dcimCell
+save_bd_design
+
+# Ensure functional sim netlist for top BD is regenerated after parameter changes.
+set bdSimV [file normalize "$bdDir/$bdName/sim/$bdName.v"]
+puts "INFO: regenerate simulation target for $bdName"
+generate_target {simulation} [get_files $bdFile] -force
+export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
 puts "INFO: export_simulation -> $exportDir"
 if {[file exists $exportDir]} {

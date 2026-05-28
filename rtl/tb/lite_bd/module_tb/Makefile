@@ -35,6 +35,7 @@
 # ║  三、批量仿真（BATCH_SUITE）                                                   ║
 # ║    make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_int8              ║
 # ║    make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_int16             ║
+# ║    make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small     ║
 # ║    make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all               ║
 # ║    make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network           ║
 # ║    make sim-batch MODULE_CASE=qa          BATCH_SUITE=qa_all                 ║
@@ -125,6 +126,7 @@ SUITE_DIR     := $(SIM_DIR)/suite_$(MODULE_CASE)
 # ── DCIM 矩阵乘 ──────────────────────────────────────────────────────────────
 BATCH_SUITE_dcim_int8       := dcim_tiny_1x1 conv6_s2_c3_to16 conv3_s2_c32_to64 conv1_c64_to32 conv3_c128_to128
 BATCH_SUITE_dcim_int16      := int16_tiny_1x1 int16_conv3_c32_c64 int16_conv1_c128
+BATCH_SUITE_dcim_extreme_small := extreme_int8_1x1_c512_to512 extreme_int8_3x3_c128_to512 extreme_int8_6x6_c3_to64 extreme_int16_3x3_c128
 BATCH_SUITE_dcim_all        := dcim_tiny_1x1 conv6_s2_c3_to16 conv3_s2_c32_to64 conv1_c64_to32 conv3_c128_to128 int16_tiny_1x1 int16_conv3_c32_c64 int16_conv1_c128
 BATCH_SUITE_dcim_network    := dcim_model_3_conv dcim_model_5_conv dcim_model_7_conv
 # ── VPU 单元 ────────────────────────────────────────────────────────────────
@@ -215,6 +217,7 @@ list-suites:
 	@echo "BATCH_SUITE 名称：make sim-batch MODULE_CASE=<模块> BATCH_SUITE=<名称>"
 	@echo "  dcim_int8        5 个 INT8 用例                         MODULE_CASE=dcim_matmul"
 	@echo "  dcim_int16       3 个 INT16 用例                        MODULE_CASE=dcim_matmul"
+	@echo "  dcim_extreme_small 4 个小规模极限/64 Tile 用例           MODULE_CASE=dcim_matmul"
 	@echo "  dcim_all         INT8 + INT16 全部 8 个                 MODULE_CASE=dcim_matmul"
 	@echo "  dcim_network     3 个网络真实尺寸                       MODULE_CASE=dcim_matmul"
 	@echo "  qa_all           3 个 QA 用例                           MODULE_CASE=qa"

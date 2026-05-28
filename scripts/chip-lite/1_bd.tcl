@@ -121,6 +121,11 @@ set_property verilog_define [list \
 # 创建计算引擎 BD cells
 # ============================================================================
 create_bd_cell -type module -reference DCIM_Array_bd dcim_array_0
+set_property -dict [list \
+    CONFIG.NUM_GROUPS {1} \
+    CONFIG.TILES_PER_GROUP {64} \
+    CONFIG.NUM_TILES {64} \
+] [get_bd_cells dcim_array_0]
 create_bd_cell -type module -reference Global_VPU_top vpu_0
 
 # ============================================================================

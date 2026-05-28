@@ -16,7 +16,7 @@
 
 ## 快速开始
 
-第一次或 BD/IP 改动后：
+第一次或 BD/IP 改动后（包括 `chip_defines.vh` 中 DCIM Tile/Group 数变化）：
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
@@ -237,6 +237,7 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 |-------------|-------------|----------|
 | `dcim_int8` | `dcim_matmul` | `dcim_tiny_1x1`、`conv6_s2_c3_to16`、`conv3_s2_c32_to64`、`conv1_c64_to32`、`conv3_c128_to128` |
 | `dcim_int16` | `dcim_matmul` | `int16_tiny_1x1`、`int16_conv3_c32_c64`、`int16_conv1_c128` |
+| `dcim_extreme_small` | `dcim_matmul` | `extreme_int8_1x1_c512_to512`、`extreme_int8_3x3_c128_to512`、`extreme_int8_6x6_c3_to64`、`extreme_int16_3x3_c128` |
 | `dcim_all` | `dcim_matmul` | `dcim_int8` + `dcim_int16` |
 | `dcim_network` | `dcim_matmul` | `dcim_model_3_conv`、`dcim_model_5_conv`、`dcim_model_7_conv` |
 | `qa_all` | `qa` | `qa_c16_signed`、`qa_c64_clip`、`qa_c128_dense` |
@@ -249,6 +250,24 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 ---
 
 ## 当前验证状态（2026-05-28）
+
+硬件拓扑策略更新：DCIM lite 目标为 **1 group × 64 Tile**，共享一套 2MB IBUF 和一套 16MB OBUF。不要把 `NUM_GROUPS` 扩成 8 个物理 group；当前 RTL 的 group 会实例化独立 IBUF/OBUF，直接复制大容量 URAM，不适合容量约束。等效 64 个 DCIM 通过单 group 内 64 Tile 实现，映射更简单。
+
+注意：Vivado module_ref wrapper 会把 `NUM_GROUPS/TILES_PER_GROUP/NUM_TILES` 固化到 `lite_dcim_array_0_0.v`。修改拓扑后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`；否则仿真仍可能使用旧的 8 Tile wrapper，表现为 64 Tile 用例只有前 8 Tile 有输出。
+
+验证策略更新：RTL 仿真不再把完整网络大尺寸层作为常规回归目标。常规 RTL 重点跑小规模但极端的 `dcim_extreme_small`，覆盖 64 Tile 配置、高 acc_depth、INT8/INT16 和 1×1/3×3/6×6 kernel；完整网络/60 层端到端主要留给综合实现后上板验证。
+
+推荐命令：
+
+```bash
+make sim-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small
+```
+
+如果刚改过 RTL，需要强制重编：
+
+```bash
+make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small
+```
 
 状态说明：
 
@@ -461,10 +480,10 @@ make sim MODULE_CASE=large_channel_pressure MODULE_VARIANT=qa_c256_pressure
 
 仍建议优先补跑：
 
-1. **DCIM 网络真实尺寸 smoke**：确认 `dcim_model_3/5/7_conv` 这类从网络层抽取的真实配置。
+1. **DCIM 小规模极限回归**：这是当前 RTL 阶段优先级最高的 DCIM 验证，覆盖 64 Tile 配置路径、INT8/INT16、不同 kernel 和较高 acc_depth，但保持 M 很小，避免完整网络 RTL 仿真过重。
 
 ```bash
-timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small STOP_ON_FAIL=0 LOG=1
 ```
 
 2. **完整 conv pipeline**：覆盖 `im2col + CDMA + DCIM + DQA/QA` 的组合路径，是单元都 PASS 后最关键的链路测试。
@@ -473,7 +492,13 @@ timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network S
 timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all STOP_ON_FAIL=0 LOG=1
 ```
 
-3. **可选重跑 VPU 单元回归**：如果最近改过 VPU/OBUF 接口，可重跑以下 suite 做回归。
+3. **DCIM 网络真实尺寸 smoke（可选，不作为常规 RTL 回归）**：`dcim_model_3/5/7_conv` 这类真实网络层 M 大，即使用 `OP_DCIM_LAYER` 压缩指令后，RTL 逐周期仿真仍会很慢；主要用于必要时抽查，完整 60 层建议放到 bitstream/板上验证。
+
+```bash
+timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network STOP_ON_FAIL=0 LOG=1
+```
+
+4. **可选重跑 VPU 单元回归**：如果最近改过 VPU/OBUF 接口，可重跑以下 suite 做回归。
 
 ```bash
 timeout 2h make rebuild-suite MODULE_CASE=im2col BATCH_SUITE=im2col_all STOP_ON_FAIL=0 LOG=1

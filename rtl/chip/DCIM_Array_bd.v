@@ -132,8 +132,8 @@ module DCIM_Array_bd #(
 
     // =========================================================================
     // 配置寄存器（由 INST_Decoder 写入，经 1 级流水后解码）
-    // lite: NUM_TILES=8, 只需 8 个 weight/out base addr
-    // 内部统一用 INT_ADDR_W (=OBUF_ADDR_W)，IBUF 类的寄存器高位补 0
+    // 当前 lite 配置：1 组 × 64 Tile，共享 1 套 IBUF/OBUF。
+    // 多 group 会复制大容量 IBUF/OBUF，不适合 URAM 受限实现。
     // =========================================================================
     reg                                  cfg_start;
     reg [2:0]                            cfg_mode;
@@ -185,7 +185,17 @@ module DCIM_Array_bd #(
                                 <= cfg_wr_data_d[INT_ADDR_W-1:0];
                     end
                 end else if (cfg_wr_addr_d == `DCIM_REG_TILE_MASK) begin
-                    cfg_tile_mask <= cfg_wr_data_d[NUM_TILES-1:0];
+                    for (_i = 0; _i < NUM_TILES; _i = _i + 1) begin
+                        if (_i < 32)
+                            cfg_tile_mask[_i] <= cfg_wr_data_d[_i];
+                        else
+                            cfg_tile_mask[_i] <= 1'b0;
+                    end
+                end else if (cfg_wr_addr_d == `DCIM_REG_TILE_MASK_HI) begin
+                    for (_i = 0; _i < NUM_TILES; _i = _i + 1) begin
+                        if (_i >= 32)
+                            cfg_tile_mask[_i] <= cfg_wr_data_d[_i-32];
+                    end
                 end
             end
         end

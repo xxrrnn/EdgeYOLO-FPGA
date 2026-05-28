@@ -110,9 +110,9 @@
 // ============================================================================
 
 // ── 阵列拓扑 ──────────────────────────────────────────────────────────────
-`define DCIM_NUM_GROUPS         1       // 组数（lite: 缩减到 1 组）
-`define DCIM_TILES_PER_GROUP    8       // 每组 Tile 数
-`define DCIM_NUM_TILES          8       // 总 Tile 数 = NUM_GROUPS × TILES_PER_GROUP
+`define DCIM_NUM_GROUPS         1       // 单组共享 IBUF/OBUF，避免复制大容量 URAM
+`define DCIM_TILES_PER_GROUP    64      // 单组内 64 Tile，等效 64 个 DCIM
+`define DCIM_NUM_TILES          64      // 总 Tile 数 = NUM_GROUPS × TILES_PER_GROUP
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
@@ -156,10 +156,10 @@
 `define DCIM_REG_CTRL           12'h000  // [0] start (W1S, 自清)
 `define DCIM_REG_MODE           12'h008  // [15:8] acc_depth | [2:0] mode
 `define DCIM_REG_ACT_BASE       12'h010  // 全局激活基址（1 个，广播到所有 Group）
-`define DCIM_REG_WEI_BASE       12'h040  // WEI_BASE[0..7]: 每 Tile 权重基址 (+4 per tile, lite: 8 tiles)
-`define DCIM_REG_OUT_BASE       12'h140  // OUT_BASE[0..7]: 每 Tile 输出基址 (+4 per tile, lite: 8 tiles)
-`define DCIM_REG_TILE_MASK      12'h240  // TILE_MASK[7:0]: 每 bit 控制对应 Tile 是否响应 DCIM_EXEC
-                                         // 1=enabled, 0=IDLE (default all 1's for legacy compat)
+`define DCIM_REG_WEI_BASE       12'h040  // WEI_BASE[0..63]: 每 Tile 权重基址 (+4 per tile)
+`define DCIM_REG_OUT_BASE       12'h140  // OUT_BASE[0..63]: 每 Tile 输出基址 (+4 per tile)
+`define DCIM_REG_TILE_MASK      12'h240  // TILE_MASK[31:0]: 低 32 个 Tile 使能
+`define DCIM_REG_TILE_MASK_HI   12'h244  // TILE_MASK[63:32]: 高 32 个 Tile 使能
 
 // ── 向后兼容：CHIP_ 前缀别名（对应旧 chip_defs.vh）────────────────────────
 `define CHIP_BUF_ADDR_WIDTH     `DCIM_BUF_ADDR_WIDTH

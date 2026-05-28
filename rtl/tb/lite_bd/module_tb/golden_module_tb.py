@@ -33,7 +33,7 @@ WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'weights')
 OBUF_WORD_BYTES = 16
 IBUF_WORD_BYTES = 16
 WB_SIZE_BYTES = 0x8000
-NUM_TILES = 8
+NUM_TILES = 64
 DCIM_CH_IN = 16
 DCIM_CYCLE = 8
 MODE_INT8  = 0b110    # chip_defines.vh: MODE_INT8  = 3'b110
@@ -87,6 +87,7 @@ DCIM_REG_ACT_BASE = 0x010
 DCIM_REG_WEI_BASE = 0x040
 DCIM_REG_OUT_BASE = 0x140
 DCIM_REG_TILE_MASK = 0x240
+DCIM_REG_TILE_MASK_HI = 0x244
 
 # Curated dcim_matmul cases (optional in_hw override for fast smoke tests).
 DCIM_MATMUL_CURATED = [
@@ -100,6 +101,11 @@ DCIM_MATMUL_CURATED = [
     {'name': 'int16_tiny_1x1',      'layer': 'model.2.cv1.conv',      'in_hw': (2, 2),  'int16': True},
     {'name': 'int16_conv3_c32_c64', 'layer': 'model.3.conv',           'in_hw': (4, 4),  'int16': True},
     {'name': 'int16_conv1_c128',    'layer': 'model.6.cv1.conv',       'in_hw': (4, 4),  'int16': True},
+    # 64 Tile/极限维度小规模 RTL 用例：覆盖配置路径与 acc_depth 边界，避免跑完整网络尺寸
+    {'name': 'extreme_int8_1x1_c512_to512', 'layer': 'model.9.cv2.conv',       'in_hw': (1, 1),  'synthetic_out_ch': 512},
+    {'name': 'extreme_int8_3x3_c128_to512', 'layer': 'model.10.conv',          'in_hw': (3, 3),  'synthetic_out_ch': 512},
+    {'name': 'extreme_int8_6x6_c3_to64',    'layer': 'model.0.conv',           'in_hw': (8, 8),  'out_ch_limit': 64},
+    {'name': 'extreme_int16_3x3_c128',      'layer': 'model.10.conv',          'in_hw': (3, 3),  'synthetic_out_ch': 256, 'int16': True},
 ]
 
 MODULE_CASES = {
@@ -198,7 +204,7 @@ class ConvMeta:
 
     @property
     def num_tiles(self) -> int:
-        return (self.out_ch + DCIM_CYCLE - 1) // DCIM_CYCLE
+        return min(NUM_TILES, (self.out_ch + DCIM_CYCLE - 1) // DCIM_CYCLE)
 
 
 @dataclass
@@ -678,13 +684,17 @@ def dcim_layer_op(num_pixels: int, mode_reg: int, tile_mask: int, act_base_word:
                   wei_base_words: Sequence[int], out_base_words: Sequence[int]) -> List[int]:
     assert len(wei_base_words) == NUM_TILES
     assert len(out_base_words) == NUM_TILES
+    tile_mask_lo = tile_mask & 0xFFFFFFFF
+    tile_mask_hi = (tile_mask >> 32) & 0xFFFFFFFF
     body = [
         num_pixels,
         mode_reg,
-        tile_mask,
+        tile_mask_lo,
+        tile_mask_hi,
         act_base_word,
         act_stride_words,
         out_stride_words,
+        0,
     ] + list(wei_base_words) + list(out_base_words)
     return [header(OP_DCIM_LAYER, 0, len(body) * 4)] + [w & 0xFFFFFFFF for w in body]
 
@@ -816,10 +826,14 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
                    shapes: Dict[str, ConvIm2colShape]) -> dict:
     use_int16 = spec.get('int16', False)
     meta = conv_meta(net, spec['layer'])
+    if 'synthetic_out_ch' in spec:
+        meta.out_ch = min(NUM_TILES * DCIM_CYCLE, int(spec['synthetic_out_ch']))
     h, w, oh, ow, hw_note = resolve_dcim_in_hw(spec, shapes, meta)
     matmul_m = oh * ow
     weights = load_layer_npz_checked(meta, net)['weight_int8']
-    if 'out_ch_limit' in spec:
+    if 'synthetic_out_ch' in spec:
+        weights = rng.integers(-8, 8, size=(meta.out_ch, meta.in_ch, meta.kh, meta.kw), dtype=np.int16).astype(np.int8)
+    elif 'out_ch_limit' in spec:
         meta.out_ch = min(meta.out_ch, int(spec['out_ch_limit']))
         weights = weights[:meta.out_ch]
 
