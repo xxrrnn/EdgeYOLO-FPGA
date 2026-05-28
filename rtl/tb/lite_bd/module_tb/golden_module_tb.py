@@ -72,6 +72,7 @@ OP_WAIT_VPU = 0x4
 OP_DCIM_EXEC = 0x6
 OP_WAIT_DCIM = 0x7
 OP_DCIM_CFG = 0x8
+OP_DCIM_LAYER = 0x9
 OP_END = 0xF
 
 UNIT_DQA = 1
@@ -672,6 +673,22 @@ def dcim_cfg(pairs: Sequence[Tuple[int, int]]) -> List[int]:
     return [header(OP_DCIM_CFG, 0, len(pairs))] + body
 
 
+def dcim_layer_op(num_pixels: int, mode_reg: int, tile_mask: int, act_base_word: int,
+                  act_stride_words: int, out_stride_words: int,
+                  wei_base_words: Sequence[int], out_base_words: Sequence[int]) -> List[int]:
+    assert len(wei_base_words) == NUM_TILES
+    assert len(out_base_words) == NUM_TILES
+    body = [
+        num_pixels,
+        mode_reg,
+        tile_mask,
+        act_base_word,
+        act_stride_words,
+        out_stride_words,
+    ] + list(wei_base_words) + list(out_base_words)
+    return [header(OP_DCIM_LAYER, 0, len(body) * 4)] + [w & 0xFFFFFFFF for w in body]
+
+
 def write_inst(path: str, words: Sequence[int]) -> None:
     write_hex(path, [f'{w & 0xFFFFFFFF:08x}' for w in words])
 
@@ -723,20 +740,24 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
     # INT16 每 tile 只输出 4 ch，CH_OUT_per_tile = DCIM_CYCLE/2 = 4
     tiles_out = meta.num_tiles  # tile 掩码不变，tile_mask 仍按 num_tiles 算
     words_per_tile_per_px = 1 if int16 else 2  # INT16 每 tile 1 word，INT8 每 tile 2 word
-    init_pairs = [(DCIM_REG_MODE, mode_reg), (DCIM_REG_TILE_MASK, (1 << tiles_out) - 1)]
-    for t in range(NUM_TILES):
-        init_pairs.append((DCIM_REG_WEI_BASE + t * 4,
-                           (ibuf_wei // IBUF_WORD_BYTES) + t * acc * DCIM_CYCLE))
-    inst += dcim_cfg(init_pairs)
-    for px in range(num_pixels):
-        pairs = [(DCIM_REG_ACT_BASE,
-                  (ibuf_act // IBUF_WORD_BYTES) + px * acc * act_words_per_row)]
-        for t in range(NUM_TILES):
-            out_word = ((dcim_out_obuf // OBUF_WORD_BYTES)
-                        + px * tiles_out * words_per_tile_per_px
-                        + t * words_per_tile_per_px) if t < tiles_out else 0
-            pairs.append((DCIM_REG_OUT_BASE + t * 4, out_word))
-        inst += dcim_cfg(pairs) + [header(OP_DCIM_EXEC, 0, 0), header(OP_WAIT_DCIM, 0, 0)]
+    wei_base_words = [
+        (ibuf_wei // IBUF_WORD_BYTES) + t * acc * DCIM_CYCLE
+        for t in range(NUM_TILES)
+    ]
+    out_base_words = [
+        (dcim_out_obuf // OBUF_WORD_BYTES) + t * words_per_tile_per_px if t < tiles_out else 0
+        for t in range(NUM_TILES)
+    ]
+    inst += dcim_layer_op(
+        num_pixels=num_pixels,
+        mode_reg=mode_reg,
+        tile_mask=(1 << tiles_out) - 1,
+        act_base_word=ibuf_act // IBUF_WORD_BYTES,
+        act_stride_words=acc * act_words_per_row,
+        out_stride_words=tiles_out * words_per_tile_per_px,
+        wei_base_words=wei_base_words,
+        out_base_words=out_base_words,
+    )
     inst += [header(OP_NOP, 0, 0)] * 16
     return inst
 

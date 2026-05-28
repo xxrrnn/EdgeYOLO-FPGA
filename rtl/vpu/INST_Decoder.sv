@@ -26,6 +26,7 @@
 //   0x6 - DCIM_EXEC  : 触发 DCIM 启动 (写 CTRL 寄存器, 无 body)
 //   0x7 - WAIT_DCIM  : 等待 DCIM Array 完成
 //   0x8 - DCIM_CFG   : 批量寄存器写入 DCIM (N pairs of addr/data)
+//   0x9 - DCIM_LAYER : DCIM layer-level loop (mode/weights once, per-pixel act/out update)
 //   0xF - END        : 指令序列结束
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -91,6 +92,7 @@ module INST_Decoder #(
     localparam [3:0] OP_DCIM_EXEC = 4'h6;
     localparam [3:0] OP_WAIT_DCIM = 4'h7;
     localparam [3:0] OP_DCIM_CFG  = 4'h8;
+    localparam [3:0] OP_DCIM_LAYER = 4'h9;
     localparam [3:0] OP_END       = 4'hF;
     
     // 状态码定义
@@ -131,10 +133,20 @@ module INST_Decoder #(
         S_WAIT_DCIM_DONE  = 6'd28,
         S_EXEC_WAIT_DCIM  = 6'd29,
         S_DCIM_CFG_INIT      = 6'd30,
-        S_DCIM_CFG_APPLY     = 6'd43   // push latched cfg pairs to DCIM regs
+        S_DCIM_CFG_APPLY     = 6'd43,
+        S_DCIM_LAYER_INIT    = 6'd44,
+        S_DCIM_LAYER_CFG_MODE = 6'd45,
+        S_DCIM_LAYER_CFG_TILE = 6'd46,
+        S_DCIM_LAYER_CFG_WEI  = 6'd47,
+        S_DCIM_LAYER_CFG_ACT  = 6'd48,
+        S_DCIM_LAYER_CFG_OUT  = 6'd49,
+        S_DCIM_LAYER_START    = 6'd50,
+        S_DCIM_LAYER_WAIT     = 6'd51,
+        S_DCIM_LAYER_NEXT     = 6'd52
     } state_t;
 
     localparam int DCIM_CFG_MAX_BODY_WORDS = 32;  // max 16 (addr,data) pairs per OP_DCIM_CFG
+    localparam int DCIM_LAYER_BODY_WORDS = 22;
     
     state_t state, next_state;
     
@@ -146,8 +158,8 @@ module INST_Decoder #(
     reg [23:0] body_length;                       // 指令体长度（字节）
     reg [31:0] inst_header;                       // 指令头缓存
     
-    // 指令体缓存（最大 48 字节 = 12 个 32 位字）
-    reg [31:0] body_buffer [0:11];
+    // 指令体缓存（OP_DCIM_LAYER 最大 22 个 32 位字）
+    reg [31:0] body_buffer [0:DCIM_LAYER_BODY_WORDS-1];
     reg [5:0]  body_word_count;     // 需要读取的字数（DCIM_CFG 最多 32 字）
     reg [5:0]  body_word_idx;       // 当前读取的字索引
     
@@ -156,6 +168,21 @@ module INST_Decoder #(
     reg [23:0] dcim_cfg_pair_count;
     reg        dcim_cfg_load;
     reg [31:0] dcim_cfg_body [0:DCIM_CFG_MAX_BODY_WORDS-1];
+
+    // OP_DCIM_LAYER loop state
+    reg [31:0] dcim_layer_num_pixels;
+    reg [31:0] dcim_layer_pixel_idx;
+    reg [31:0] dcim_layer_mode_reg;
+    reg [31:0] dcim_layer_tile_mask;
+    reg [31:0] dcim_layer_act_base;
+    reg [31:0] dcim_layer_act_stride;
+    reg [31:0] dcim_layer_out_stride;
+    reg [31:0] dcim_layer_act_current;
+    reg [31:0] dcim_layer_wei_base [0:7];
+    reg [31:0] dcim_layer_out_base [0:7];
+    reg [31:0] dcim_layer_out_current [0:7];
+    reg [3:0]  dcim_layer_tile_idx;
+    reg        dcim_layer_seen_busy;
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -231,6 +258,7 @@ module INST_Decoder #(
                     OP_VPU_EXEC:  next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
                     OP_DCIM_EXEC: next_state = S_EXEC_DCIM;
                     OP_DCIM_CFG:  next_state = S_DCIM_CFG_INIT;
+                    OP_DCIM_LAYER: next_state = (inst_rd_data_pipe[23:0] == (DCIM_LAYER_BODY_WORDS << 2)) ? S_FETCH_BODY : S_ERROR;
                     OP_WAIT_CDMA: next_state = S_EXEC_WAIT_CDMA;
                     OP_WAIT_VPU:  next_state = S_EXEC_WAIT_VPU;
                     OP_WAIT_DCIM: next_state = S_EXEC_WAIT_DCIM;
@@ -271,6 +299,7 @@ module INST_Decoder #(
                         OP_CDMA_COPY: next_state = S_EXEC_CDMA;
                         OP_VPU_EXEC:  next_state = S_EXEC_VPU;
                         OP_DCIM_CFG:  next_state = S_DCIM_CFG_APPLY;
+                        OP_DCIM_LAYER: next_state = S_DCIM_LAYER_INIT;
                         default:      next_state = S_ERROR;
                     endcase
                 end else begin
@@ -348,6 +377,52 @@ module INST_Decoder #(
                 else
                     next_state = S_DCIM_CFG_APPLY;
             end
+
+            S_DCIM_LAYER_INIT: begin
+                next_state = S_DCIM_LAYER_CFG_MODE;
+            end
+
+            S_DCIM_LAYER_CFG_MODE: begin
+                next_state = S_DCIM_LAYER_CFG_TILE;
+            end
+
+            S_DCIM_LAYER_CFG_TILE: begin
+                next_state = S_DCIM_LAYER_CFG_WEI;
+            end
+
+            S_DCIM_LAYER_CFG_WEI: begin
+                if (dcim_layer_tile_idx >= 4'd7)
+                    next_state = S_DCIM_LAYER_CFG_ACT;
+                else
+                    next_state = S_DCIM_LAYER_CFG_WEI;
+            end
+
+            S_DCIM_LAYER_CFG_ACT: begin
+                next_state = S_DCIM_LAYER_CFG_OUT;
+            end
+
+            S_DCIM_LAYER_CFG_OUT: begin
+                if (dcim_layer_tile_idx >= 4'd7)
+                    next_state = S_DCIM_LAYER_START;
+                else
+                    next_state = S_DCIM_LAYER_CFG_OUT;
+            end
+
+            S_DCIM_LAYER_START: begin
+                next_state = S_DCIM_LAYER_WAIT;
+            end
+
+            S_DCIM_LAYER_WAIT: begin
+                if (dcim_layer_seen_busy && dcim_ready)
+                    next_state = S_DCIM_LAYER_NEXT;
+            end
+
+            S_DCIM_LAYER_NEXT: begin
+                if (dcim_layer_pixel_idx + 1 >= dcim_layer_num_pixels)
+                    next_state = S_NEXT_INST;
+                else
+                    next_state = S_DCIM_LAYER_CFG_ACT;
+            end
             
             S_NEXT_INST: begin
                 if (words_remaining > 0)
@@ -415,8 +490,23 @@ module INST_Decoder #(
             body_word_count <= '0;
             body_word_idx <= '0;
             
-            for (int i = 0; i < 12; i++)
+            for (int i = 0; i < DCIM_LAYER_BODY_WORDS; i++)
                 body_buffer[i] <= '0;
+            for (int i = 0; i < 8; i++) begin
+                dcim_layer_wei_base[i] <= '0;
+                dcim_layer_out_base[i] <= '0;
+                dcim_layer_out_current[i] <= '0;
+            end
+            dcim_layer_num_pixels <= '0;
+            dcim_layer_pixel_idx <= '0;
+            dcim_layer_mode_reg <= '0;
+            dcim_layer_tile_mask <= '0;
+            dcim_layer_act_base <= '0;
+            dcim_layer_act_stride <= '0;
+            dcim_layer_act_current <= '0;
+            dcim_layer_out_stride <= '0;
+            dcim_layer_tile_idx <= '0;
+            dcim_layer_seen_busy <= 1'b0;
                 
         end else begin
             // 默认清除脉冲信号
@@ -625,6 +715,84 @@ module INST_Decoder #(
                              dcim_cfg_body[dcim_cfg_pair_count * 2 + 1],
                              dcim_cfg_pair_count, dcim_cfg_total_pairs);
 `endif
+                end
+
+                S_DCIM_LAYER_INIT: begin
+                    dcim_layer_num_pixels <= body_buffer[0];
+                    dcim_layer_mode_reg <= body_buffer[1];
+                    dcim_layer_tile_mask <= body_buffer[2];
+                    dcim_layer_act_base <= body_buffer[3];
+                    dcim_layer_act_stride <= body_buffer[4];
+                    dcim_layer_out_stride <= body_buffer[5];
+                    for (int i = 0; i < 8; i++) begin
+                        dcim_layer_wei_base[i] <= body_buffer[6 + i];
+                        dcim_layer_out_base[i] <= body_buffer[14 + i];
+                        dcim_layer_out_current[i] <= body_buffer[14 + i];
+                    end
+                    dcim_layer_act_current <= body_buffer[3];
+                    dcim_layer_pixel_idx <= '0;
+                    dcim_layer_tile_idx <= '0;
+                    dcim_layer_seen_busy <= 1'b0;
+                end
+
+                S_DCIM_LAYER_CFG_MODE: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= 12'h008;
+                    dcim_cfg_wr_data <= dcim_layer_mode_reg;
+                end
+
+                S_DCIM_LAYER_CFG_TILE: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= 12'h240;
+                    dcim_cfg_wr_data <= dcim_layer_tile_mask;
+                    dcim_layer_tile_idx <= '0;
+                end
+
+                S_DCIM_LAYER_CFG_WEI: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= 12'h040 + ({8'h0, dcim_layer_tile_idx} << 2);
+                    dcim_cfg_wr_data <= dcim_layer_wei_base[dcim_layer_tile_idx];
+                    dcim_layer_tile_idx <= dcim_layer_tile_idx + 1'b1;
+                end
+
+                S_DCIM_LAYER_CFG_ACT: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= 12'h010;
+                    dcim_cfg_wr_data <= dcim_layer_act_current;
+                    dcim_layer_tile_idx <= '0;
+                end
+
+                S_DCIM_LAYER_CFG_OUT: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= 12'h140 + ({8'h0, dcim_layer_tile_idx} << 2);
+                    dcim_cfg_wr_data <= dcim_layer_out_current[dcim_layer_tile_idx];
+                    dcim_layer_tile_idx <= dcim_layer_tile_idx + 1'b1;
+                end
+
+                S_DCIM_LAYER_START: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= 12'h000;
+                    dcim_cfg_wr_data <= 32'h1;
+                    dcim_layer_seen_busy <= 1'b0;
+`ifdef PROBE_DCIM_LAYER
+                    $display("[%0t] DCIM_LAYER start pixel=%0d/%0d", $time, dcim_layer_pixel_idx, dcim_layer_num_pixels);
+`endif
+                end
+
+                S_DCIM_LAYER_WAIT: begin
+                    if (!dcim_ready)
+                        dcim_layer_seen_busy <= 1'b1;
+`ifdef PROBE_DCIM_LAYER
+                    if (dcim_layer_seen_busy && dcim_ready)
+                        $display("[%0t] DCIM_LAYER pixel done pixel=%0d", $time, dcim_layer_pixel_idx);
+`endif
+                end
+
+                S_DCIM_LAYER_NEXT: begin
+                    dcim_layer_pixel_idx <= dcim_layer_pixel_idx + 1'b1;
+                    dcim_layer_act_current <= dcim_layer_act_current + dcim_layer_act_stride;
+                    for (int i = 0; i < 8; i++)
+                        dcim_layer_out_current[i] <= dcim_layer_out_current[i] + dcim_layer_out_stride;
                 end
                 
                 S_NEXT_INST: begin
