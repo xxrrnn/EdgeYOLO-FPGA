@@ -16,9 +16,11 @@ FILELIST="$SCRIPT_DIR/filelist_qa_standalone.f"
 TB_TOP="tb_qa_standalone"
 SIM_NAME="sim_qa_standalone"
 GOLDEN_PY="$REPO_ROOT/tools/golden_qa_standalone.py"
+GEN_DIR="$REPO_ROOT/rtl/vpu/tb/standalone/generated"
+STANDALONE_SCALE="${STANDALONE_SCALE:-1.0}"
 
-echo "=== [0/4] Generate QA golden vectors ==="
-python3 "$GOLDEN_PY" --out "$REPO_ROOT/rtl/vpu/tb/standalone/generated/qa_standalone_golden.svh"
+echo "=== [0/4] Generate QA golden (network scale=$STANDALONE_SCALE) ==="
+python3 "$GOLDEN_PY" --scale "$STANDALONE_SCALE" --out-dir "$GEN_DIR"
 
 INCDIR_LIST=(
   "$REPO_ROOT/rtl/chip"
@@ -31,7 +33,7 @@ mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 # 把 hex 文件软链到当前目录（testbench 用相对路径 $readmemh）
-ln -sfn "$REPO_ROOT/rtl/vpu/tb/e2e"/*.hex . 2>/dev/null || true
+ln -sfn "$GEN_DIR/hex" "$BUILD_DIR/hex"
 
 INC_ARGS=""
 for d in "${INCDIR_LIST[@]}"; do

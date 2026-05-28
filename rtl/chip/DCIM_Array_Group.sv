@@ -118,7 +118,8 @@ module DCIM_Array_Group #(
             DCIM_Tile #(
                 .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT),
                 .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC),
-                .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH), .BUF_DATA_WIDTH(BUF_DATA_WIDTH)
+                .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH), .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
+                .TILE_IDX(i)
             ) u_tile (
                 .clk(clk), .rst_n(rst_n),
                 .start(start),

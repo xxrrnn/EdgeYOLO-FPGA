@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 module ad_unit #(
     parameter ADDR_WIDTH =      32,

@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 //////////////////////////////////////////////////////////////////////////////////
 // tb_inst_decoder_dcim_vpu - 验证 INST_Decoder 配置 DCIM 和 VPU

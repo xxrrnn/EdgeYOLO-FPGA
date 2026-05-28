@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 `include "chip_defines.vh"
 
 // Global_VPU_top - VPU 顶层模块 (lite 版本)
@@ -45,6 +45,7 @@ module Global_VPU_top #(
     input   wire [ADDR_WIDTH-1:0]    addr_break,
     input   wire [ADDR_WIDTH-1:0]    addr_s,
     input   wire [ADDR_WIDTH-1:0]    addr_t,
+    input   wire [3:0]               vpu_flags,   // flags[0]=relu_en（DQA 用）
 
     // lite: OBUF 128-bit 端口（替代 GB，直连 DCIM OBUF）
     output wire [`DCIM_OBUF_ADDR_WIDTH-1:0]  obuf_addr,
@@ -111,6 +112,7 @@ module Global_VPU_top #(
         .addr_break(addr_break),
         .addr_s(addr_s),
         .addr_t(addr_t),
+        .vpu_flags(vpu_flags),
         // lite: OBUF 端口
         .obuf_addr(obuf_addr),
         .obuf_en(obuf_en),

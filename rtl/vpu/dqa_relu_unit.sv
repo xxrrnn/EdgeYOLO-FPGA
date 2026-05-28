@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 module dqa_relu_unit #(
     parameter ADDR_WIDTH = 32,
@@ -18,6 +18,7 @@ module dqa_relu_unit #(
     input   wire                                rst_n,
     input   wire                                dqa_unit_start,
     output  wire                                dqa_unit_ready,
+    input   wire                                dqa_relu_en,     // 1=ReLU（max(·,0)），0=线性直通
 
     input   wire[ADDR_WIDTH - 1:0]              dqa_src_addr,
     input   wire[ADDR_WIDTH - 1:0]              dqa_src_c,
@@ -113,6 +114,8 @@ module dqa_relu_unit #(
     localparam  MAX_CHANNEL_LENGTH = MAX_CHANNEL_NUM * FP_WIDTH;
     localparam  FP_CORE_LENGTH = FP_CORE_NUM* FP_WIDTH;
     localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+    wire [ADDR_WIDTH - 1 : 0]                       dqa_x_load_addr_word;
+    wire [ADDR_WIDTH - 1 : 0]                       dqa_save_addr_word;
     logic [ADDR_WIDTH - 1 : 0]                      dqa_x_load_addr_add, n_dqa_x_load_addr_add;
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_BYTES,DQA_SINGLE_COMPUTE_BLOCKS ;
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_SAVE_BLOCKS ;
@@ -134,7 +137,6 @@ module dqa_relu_unit #(
     assign dqa_w_save_stride = dqa_w_save_stride_reg;
     assign dqa_h_load_stride = dqa_h_load_stride_reg;
     assign dqa_h_save_stride = dqa_h_save_stride_reg;
-
 
     reg [ADDR_WIDTH - 1 : 0]                       dqa_save_addr, dqa_save_cnt;
 
@@ -171,6 +173,19 @@ module dqa_relu_unit #(
     assign  dqa_x_tran_done                          = (dqa_x_tran_cnt       == TRAN_NUM- 1);
 
     assign  dqa_done                                 = dqa_x_load_block_done && dqa_x_load_c_done && dqa_x_load_w_done &&dqa_x_load_h_done;
+
+    // NHWC flat word addresses (lite: BYTE_ADDR_SHIFT=4, BLOCKS=1)
+    assign dqa_x_load_addr_word = (dqa_src_addr_reg >> BYTE_ADDR_SHIFT)
+                                + dqa_x_load_block_cnt
+                                + (dqa_x_load_c_cnt << $clog2(DQA_SINGLE_COMPUTE_BLOCKS))
+                                + dqa_x_load_w_cnt * dqa_w_load_stride
+                                + dqa_x_load_h_cnt * dqa_h_load_stride;
+
+    assign dqa_save_addr_word = (dqa_dst_addr_reg >> BYTE_ADDR_SHIFT)
+                               + dqa_save_cnt
+                               + (dqa_x_load_c_cnt << $clog2(DQA_SINGLE_COMPUTE_SAVE_BLOCKS))
+                               + dqa_x_load_w_cnt * dqa_w_save_stride
+                               + dqa_x_load_h_cnt * dqa_h_save_stride;
 
     always @* begin
         n_dqa_x_load_block_cnt           = dqa_x_load_block_cnt;
@@ -315,17 +330,17 @@ module dqa_relu_unit #(
                     end
                 end
                 DQA_SAVE: begin
-                    dqa_save_cnt <= dqa_save_cnt + 1;
+                    dqa_save_cnt <= dqa_save_cnt + 1'b1;
                 end
                 DQA_SAVE_ADDR_1: begin
-                    dqa_save_cnt <= dqa_save_cnt;
                     dqa_save_addr <= (dqa_dst_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add;
-                end 
+                end
                 DQA_SAVE_ADDR_2: begin
-                    dqa_save_cnt <= dqa_save_cnt;
                     dqa_save_addr <= dqa_save_addr - dqa_x_load_block_cnt + dqa_save_cnt;
                 end
-                IDLE: dqa_save_cnt <= '0;
+                IDLE: begin
+                    dqa_save_cnt <= '0;
+                end
                 default: begin
                     dqa_save_cnt <= '0;
                 end
@@ -337,18 +352,16 @@ module dqa_relu_unit #(
         gb_enb   = '0;
         gb_web   = '0;
         gb_dinb  = '0;
-        if(c_state == DQA_LOAD_X) begin
-            // 只读：发地址，1 拍后进 DQA_WAIT_X 等 ready/valid
+        if(c_state == DQA_LOAD_X || c_state == DQA_WAIT_X) begin
             gb_addrb = (dqa_src_addr_reg >> BYTE_ADDR_SHIFT) + dqa_x_load_addr_add;
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
         end else if(c_state == DQA_SAVE) begin
-            // 只写
             gb_addrb = dqa_save_addr;
             gb_enb   = 1'b1;
             gb_web   = {(GB_BANDWIDTH / 8){1'b1}};
-            gb_dinb  = dqa_out_reg[dqa_save_cnt*GB_BANDWIDTH +: GB_BANDWIDTH];
+            gb_dinb  = dqa_out_reg[dqa_save_cnt * GB_BANDWIDTH +: GB_BANDWIDTH];
         end
     end
 
@@ -362,6 +375,8 @@ module dqa_relu_unit #(
     assign s_axis_tvalid = (c_state == DQA_FP); 
     assign s_axis_tdata = dqa_int_in_reg[dqa_x_tran_cnt << $clog2(FP_TRAN_LENGTH_IN) +:FP_TRAN_LENGTH_IN];
 
+    logic [FP_CORE_NUM*FP_WIDTH-1:0] dqa_relu_res;
+
     always@(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             dqa_x_tran_cnt  <= '0;
@@ -371,8 +386,8 @@ module dqa_relu_unit #(
             if(c_state == DQA_FP_WAIT && m_axis_result_tvalid) begin
                 dqa_x_tran_cnt  <= dqa_x_tran_done ? '0: dqa_x_tran_cnt + 1'b1;
                 dqa_fp_reg[dqa_x_tran_cnt << $clog2(FP_TRAN_LENGTH_FP) +: FP_TRAN_LENGTH_FP] <= m_axis_result_tdata;
-            end else if(fp_res_tvalid) begin
-                dqa_out_reg <= fp_res;
+            end else if(c_state == DQA_COMPUTE_WAIT && fp_res_tvalid) begin
+                dqa_out_reg <= dqa_relu_res;
             end else if(c_state == IDLE)begin
                 dqa_x_tran_cnt  <= '0;
                 dqa_fp_reg <= '0;
@@ -409,6 +424,17 @@ module dqa_relu_unit #(
 
     wire [ADDR_WIDTH-1:0] dqa_channel_group_count = dqa_src_c_reg >> $clog2(FP_CORE_NUM);
     wire [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel = dqa_channel_group_count - 1 - dqa_x_load_c_cnt;
+
+    genvar relu_i;
+    generate
+        for (relu_i = 0; relu_i < FP_CORE_NUM; relu_i = relu_i + 1) begin : gen_dqa_relu
+            localparam int LSB = relu_i * FP_WIDTH;
+            wire [FP_WIDTH-1:0] lane = fp_res[LSB +: FP_WIDTH];
+            wire lane_negative = lane[FP_WIDTH-1];
+            // relu_en=1: max(·,0)；relu_en=0: 线性直通（head 输出层无激活）
+            assign dqa_relu_res[LSB +: FP_WIDTH] = (dqa_relu_en && lane_negative) ? {FP_WIDTH{1'b0}} : lane;
+        end
+    endgenerate
 
     assign dqa_full_scale_wire = dqa_scale_reg[MAX_CHANNEL_LENGTH - (dqa_scale_bias_group_sel << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
     assign dqa_full_bias_wire  = dqa_bias_reg [MAX_CHANNEL_LENGTH - (dqa_scale_bias_group_sel << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
@@ -451,11 +477,11 @@ module dqa_relu_unit #(
             dqa_src_c_reg      <= dqa_src_c;
             dqa_src_h_reg      <= dqa_src_h;
             dqa_src_w_reg      <= dqa_src_w;
-            // Precompute strides using shifts (C_INT_WIDTH_IN and FP_WIDTH are powers of 2)
-            dqa_w_load_stride_reg <= (dqa_src_c << $clog2(C_INT_WIDTH_IN)) >> (3 + 5);
-            dqa_w_save_stride_reg <= (dqa_src_c << $clog2(FP_WIDTH)) >> (3 + 5);
-            dqa_h_load_stride_reg <= (dqa_src_w * dqa_src_c) << ($clog2(C_INT_WIDTH_IN) - 3 - 5);
-            dqa_h_save_stride_reg <= (dqa_src_w * dqa_src_c) << ($clog2(FP_WIDTH) - 3 - 5);
+            // Use input ports (not _reg): NBAs in this block still see pre-latch values.
+            dqa_w_load_stride_reg <= dqa_src_c >> $clog2(FP_CORE_NUM);
+            dqa_w_save_stride_reg <= dqa_src_c >> $clog2(FP_CORE_NUM);
+            dqa_h_load_stride_reg <= dqa_src_w * (dqa_src_c >> $clog2(FP_CORE_NUM));
+            dqa_h_save_stride_reg <= dqa_src_w * (dqa_src_c >> $clog2(FP_CORE_NUM));
         end
     end
 

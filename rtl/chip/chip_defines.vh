@@ -34,7 +34,7 @@
 `define CHIP_BYTE_ADDR_SHIFT    4       // $clog2(16) = 4  (lite: 5→4)
 
 // ============================================================================
-// 3. VPU 参数（原 vpu_defines.vh 内容）
+// 3. VPU 参数
 // ============================================================================
 `define VPU_DATA_WIDTH          `CHIP_DATA_WIDTH
 `define VPU_BANDWIDTH           `CHIP_BANDWIDTH
@@ -118,7 +118,7 @@
 `define DCIM_WD1                4       // 权重位宽（INT4）
 `define DCIM_CH_IN              16      // 每 Tile 输入通道数
 `define DCIM_CH_OUT             16      // 每 Tile 输出通道数
-`define DCIM_SRAM_DP            128     // DCIM SRAM 深度
+`define DCIM_SRAM_DP            128     // DCIM SRAM 深度（固定 128 entries；acc_depth>16 时由 DCIM_Tile 分块加载权重）
 `define DCIM_CYCLE              8       // 权重 SRAM 加载周期数
 `define DCIM_ACC_MAX            80      // 最大累加深度（num_rows / acc_depth 上界）
 

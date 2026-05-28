@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 module tb_system_inst_decoder;
 
     localparam CLK_PERIOD    = 4.0;

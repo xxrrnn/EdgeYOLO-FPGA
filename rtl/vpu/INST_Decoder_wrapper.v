@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 //////////////////////////////////////////////////////////////////////////////////
 // INST_Decoder_wrapper - Verilog wrapper for SystemVerilog INST_Decoder
@@ -50,6 +50,7 @@ module INST_Decoder_wrapper #(
     output wire [31:0] vpu_addr_break,
     output wire [31:0] vpu_addr_s,
     output wire [31:0] vpu_addr_t,
+    output wire [3:0]  vpu_flags,        // OP_VPU_EXEC header flags[3:0]
     
     // DCIM direct register write interface
     output wire        dcim_cfg_wr_en,
@@ -98,6 +99,7 @@ module INST_Decoder_wrapper #(
         .vpu_addr_break(vpu_addr_break),
         .vpu_addr_s(vpu_addr_s),
         .vpu_addr_t(vpu_addr_t),
+        .vpu_flags(vpu_flags),
         
         .dcim_cfg_wr_en(dcim_cfg_wr_en),
         .dcim_cfg_wr_addr(dcim_cfg_wr_addr),

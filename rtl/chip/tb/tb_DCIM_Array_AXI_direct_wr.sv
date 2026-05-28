@@ -27,7 +27,7 @@ module tb_DCIM_Array_AXI_direct_wr;
     reg         cfg_wr_en;
     reg  [11:0] cfg_wr_addr;
     reg  [31:0] cfg_wr_data;
-    wire        done, ready;
+    wire        ready;
 
     integer pass_cnt, fail_cnt;
 
@@ -106,7 +106,7 @@ module tb_DCIM_Array_AXI_direct_wr;
         .obuf_ext_dina_6(0), .obuf_ext_douta_6(),
         .obuf_ext_wea_7(0), .obuf_ext_ena_7(0), .obuf_ext_addra_7(0),
         .obuf_ext_dina_7(0), .obuf_ext_douta_7(),
-        .done(done), .ready(ready)
+        .ready(ready)
     );
 
     initial clk = 0;

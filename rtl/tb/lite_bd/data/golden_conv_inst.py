@@ -11,9 +11,9 @@ Generates everything needed by tb_e2e_inst_driven.sv:
 Scaled spatial dims keep algorithm path identical to full-size, only fewer rows.
 
 Note on ReLU:
-  Hardware path is im2col -> DCIM -> DQA(no ReLU) -> QA. We skip the NN_LUT step
-  to keep verification focused on the heavy lifters. The Python golden therefore
-  also skips ReLU; QA clamp(>=0) handles negatives naturally.
+  Hardware path is im2col -> DCIM -> DQA_RELU -> QA.  DQA clamps negative
+  FP32 results to zero before QA, matching the network activation path used by
+  module-level BD tests.
 
 Address map (OBUF, byte addresses; OBUF is 16MB):
   L1 input feature        : 0x000000
@@ -40,6 +40,7 @@ Per layer:
   IBUF activation base for DCIM = activation scratch (0x040000)
 """
 import argparse
+import json
 import os
 import struct
 import sys
@@ -83,6 +84,16 @@ IBUF_L2_WEI = 0x010000
 IBUF_L3_WEI = 0x020000
 IBUF_ACT    = 0x040000
 
+# Physical AXI map (lite BD / build/*/memory_map.md) — for CDMA inst when --hw-phy-addr
+OBUF_PHY_BASE = 0x1010_0000_0
+IBUF_PHY_BASE = 0x1000_0000_0
+HBM_PHY_BASE  = 0x0
+
+# HBM staging (byte offsets within 4GB HBM) — TB preloads hbm_image.hex
+HBM_INPUT_OFF   = 0x000000
+HBM_WEIGHT_BASE = 0x100000   # 1MB: L1 weights
+HBM_WEIGHT_STRIDE = 0x10000  # 64KB per layer slot in HBM image
+
 # WB BRAM byte addresses (32KB)
 # Layout: per layer use 256 bytes
 WB_L1_SCALE = 0x0000   # 32 FP32 = 128 B
@@ -124,6 +135,138 @@ DCIM_REG_OUT_BASE = 0x140  # +4 per tile
 DCIM_REG_TILE_MASK= 0x240  # bit[t]=1 means Tile t enabled
 
 MODE_INT8 = 0b110  # signed INT8 activation x INT8 weight (split nibble)
+
+NETWORK_JSON = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', '..', '..', '..', 'model', 'yolov5n', 'parsed', 'network.json'
+)
+
+# Connected 3-layer chains from network.json (L1->L2->L3 channel/spatial compatible).
+# l1_full_hw: L1 input HxW at full 320x320 YOLOv5n resolution (before --scale).
+E2E_CASES = {
+    'default': {
+        'layers': ['model.1.conv', 'model.2.cv1.conv', 'model.2.m.0.cv2.conv'],
+        'l1_full_hw': (160, 160),
+        'desc': '3x3 s2 + 1x1 + 3x3 bottleneck (original mini regression)',
+    },
+    'early': {
+        'layers': ['model.1.conv', 'model.2.cv2.conv', 'model.2.cv3.conv'],
+        'l1_full_hw': (160, 160),
+        'desc': '3x3 s2 + 1x1 + 1x1 (32ch mid, from network.json)',
+    },
+    'downsample': {
+        'layers': ['model.2.cv3.conv', 'model.3.conv', 'model.4.cv1.conv'],
+        'l1_full_hw': (80, 80),
+        'desc': '1x1 + 3x3 s2 + 1x1 (OC 32->64->32)',
+    },
+    'c3_deep': {
+        'layers': ['model.3.conv', 'model.4.cv3.conv', 'model.4.cv2.conv'],
+        'l1_full_hw': (40, 40),
+        'desc': '3x3 s2 + 1x1(64ch) + 1x1(64->32) at 40x40',
+    },
+    'bottleneck3x3': {
+        'layers': ['model.2.m.0.cv1.conv', 'model.2.m.0.cv2.conv', 'model.2.m.0.cv1.conv'],
+        'l1_full_hw': (80, 80),
+        'desc': '1x1 + 3x3 + 1x1 all 16ch (CSP bottleneck block)',
+    },
+}
+
+
+def load_network_conv_index(path=None):
+    """Parse network.json -> name -> conv layer dict."""
+    path = path or NETWORK_JSON
+    with open(path, 'r') as f:
+        net = json.load(f)
+    index = {}
+    for ly in net['layers']:
+        if ly.get('type') == 'conv':
+            index[ly['name']] = ly
+    return index
+
+
+def npz_path_for_layer(name):
+    """model.1.conv -> model/yolov5n/parsed/weights/model_1_conv.npz"""
+    fname = name.replace('.', '_') + '.npz'
+    return os.path.join(WEIGHT_DIR, fname)
+
+
+def conv_layer_from_network(name, meta, in_h, in_w):
+    """Build ConvLayer using kernel/stride/pad from network.json."""
+    stride = meta['stride'][0] if isinstance(meta['stride'], list) else meta['stride']
+    pad = meta['padding'][0] if isinstance(meta['padding'], list) else meta['padding']
+    return ConvLayer(
+        name,
+        npz_path_for_layer(name),
+        in_h=in_h, in_w=in_w,
+        in_ch=meta['in_channels'],
+        out_ch=meta['out_channels'],
+        kh=meta['kernel_h'], kw=meta['kernel_w'],
+        stride=stride, pad=pad,
+    )
+
+
+def build_case_layers(case_name, scale, net_index=None):
+    """Instantiate 3 chained ConvLayers for an E2E case."""
+    if case_name not in E2E_CASES:
+        raise KeyError('Unknown case {!r}. Choose from: {}'.format(
+            case_name, ', '.join(sorted(E2E_CASES))))
+    spec = E2E_CASES[case_name]
+    net_index = net_index or load_network_conv_index()
+
+    def scale_hw(full_h, full_w):
+        nh = max(8, int(round(full_h * scale)))
+        nw = max(8, int(round(full_w * scale)))
+        nh -= nh & 1
+        nw -= nw & 1
+        return nh, nw
+
+    l1_h, l1_w = scale_hw(spec['l1_full_hw'][0], spec['l1_full_hw'][1])
+    layers = []
+    in_h, in_w = l1_h, l1_w
+    for name in spec['layers']:
+        if name not in net_index:
+            raise KeyError('Layer {!r} not in network.json'.format(name))
+        ly = conv_layer_from_network(name, net_index[name], in_h, in_w)
+        layers.append(ly)
+        in_h, in_w = ly.oh, ly.ow
+    return layers, spec
+
+
+def write_manifest_svh(path, case_name, scale, verify_words, layers):
+    """SystemVerilog manifest consumed by tb_lite_bd_e2e.sv."""
+    def chk_words(ly, kind):
+        if kind == 'im2col':
+            return ly.oh * ly.ow * ly.acc_depth
+        if kind == 'accum':
+            return ly.oh * ly.ow * ly.out_ch // 4
+        return ly.oh * ly.ow * ly.out_ch // 16
+
+    lines = [
+        '// Auto-generated by golden_conv_inst.py — do not edit',
+        '// case={} scale={} verify_words={}'.format(case_name, scale, verify_words),
+        'localparam string E2E_CASE_NAME = "{}";'.format(case_name),
+        'localparam integer E2E_VERIFY_WORDS = {};'.format(verify_words),
+    ]
+    for li, ly in enumerate(layers):
+        p = li + 1
+        lines += [
+            'localparam integer L{}_IN_H = {};'.format(p, ly.in_h),
+            'localparam integer L{}_IN_W = {};'.format(p, ly.in_w),
+            'localparam integer L{}_IN_C = {};'.format(p, ly.in_ch),
+            'localparam integer L{}_IN_WORDS = {};'.format(
+                p, (ly.in_h * ly.in_w * ly.in_ch + OBUF_WORD_BYTES - 1) // OBUF_WORD_BYTES),
+            'localparam integer L{}_OH = {};'.format(p, ly.oh),
+            'localparam integer L{}_OW = {};'.format(p, ly.ow),
+            'localparam integer L{}_OC = {};'.format(p, ly.out_ch),
+            'localparam integer L{}_ACC_DEPTH = {};'.format(p, ly.acc_depth),
+            'localparam integer L{}_NUM_TILES = {};'.format(p, ly.num_tiles),
+            'localparam integer L{}_CHK_IM2COL = {};'.format(p, chk_words(ly, 'im2col')),
+            'localparam integer L{}_CHK_ACCUM = {};'.format(p, chk_words(ly, 'accum')),
+            'localparam integer L{}_CHK_DQA = {};'.format(p, chk_words(ly, 'accum')),
+            'localparam integer L{}_CHK_OUTPUT = {};'.format(p, chk_words(ly, 'output')),
+        ]
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
 
 
 # -----------------------------------------------------------------------------
@@ -195,12 +338,12 @@ class ConvLayer:
         return im2col.astype(np.int32) @ w.T  # [OH*OW, OC]
 
     def compute_dqa(self, accum):
-        """accum [OH*OW, OC] INT32 -> dqa [OH*OW, OC] FP32, per-OC scale + bias.
+        """accum [OH*OW, OC] INT32 -> dqa_relu [OH*OW, OC] FP32.
 
-        Note: hardware path is fp32(accum) * scale + bias (no ReLU here).
+        Hardware path is DQA_RELU: fp32(accum) * scale + bias, then clamp negatives to 0.
         """
-        x = accum.astype(np.float32)
-        return x * self.dqa_scale[None, :] + self.dqa_bias[None, :]
+        x = accum.astype(np.float32) * self.dqa_scale[None, :] + self.dqa_bias[None, :]
+        return np.maximum(x, 0.0)
 
     def compute_qa(self, dqa):
         """dqa FP32 -> INT8: clamp(round(x / act_scale), -128, 127). Symmetric quantization."""
@@ -372,6 +515,51 @@ def write_wb_hex(path, wb_blob):
     write_hex(path, bytes_to_128_words(wb_blob))
 
 
+def build_hbm_image_blob(input_feat, layers, ibuf_wei_offsets, weight_hex_paths):
+    """Pack input feature + per-layer weight tiles into one HBM byte image."""
+    l1 = layers[0]
+    feat_flat = input_feat.reshape(l1.in_h, l1.in_w, l1.in_ch)
+    row_bytes = ((l1.in_ch + 15) // 16) * 16
+    feat_bytes = l1.in_h * l1.in_w * row_bytes
+
+    max_used = HBM_INPUT_OFF + feat_bytes
+    for li, ly in enumerate(layers):
+        hbm_off = HBM_WEIGHT_BASE + li * HBM_WEIGHT_STRIDE
+        for tpath in weight_hex_paths[li]:
+            if not tpath or not os.path.isfile(tpath):
+                continue
+            with open(tpath, 'r') as f:
+                nlines = sum(1 for ln in f if ln.strip())
+            max_used = max(max_used, hbm_off + nlines * 16)
+            hbm_off += nlines * 16
+
+    blob = bytearray(max_used)
+    for y in range(l1.in_h):
+        for x in range(l1.in_w):
+            base = HBM_INPUT_OFF + (y * l1.in_w + x) * row_bytes
+            for c in range(l1.in_ch):
+                blob[base + c] = int(feat_flat[y, x, c]) & 0xFF
+    for li, ly in enumerate(layers):
+        hbm_off = HBM_WEIGHT_BASE + li * HBM_WEIGHT_STRIDE
+        for tpath in weight_hex_paths[li]:
+            if not tpath or not os.path.isfile(tpath):
+                continue
+            with open(tpath, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    w128 = int(line, 16)
+                    for b in range(16):
+                        blob[hbm_off] = (w128 >> (8 * (15 - b))) & 0xFF
+                        hbm_off += 1
+    return bytes(blob)
+
+
+def write_hbm_hex(path, blob):
+    write_hex(path, bytes_to_128_words(blob))
+
+
 # -----------------------------------------------------------------------------
 # Instruction encoder
 # -----------------------------------------------------------------------------
@@ -396,12 +584,21 @@ def encode_vpu_exec(unit, src_addr, src2_addr, src_c, src_h, src_w,
     return [make_header(OP_VPU_EXEC, 0, 12 * 4)] + body
 
 
-def encode_cdma_copy(src_byte_addr, dst_byte_addr, length_bytes):
-    """OP_CDMA_COPY body is 3 x 32-bit (12 bytes): src_lsb, dst_lsb, length.
+def _split_axi64(addr):
+    return (addr >> 32) & 0xFFFFFFFF, addr & 0xFFFFFFFF
 
-    MSB is forced to 0 by INST_Decoder. CDMA model in TB interprets src as
-    OBUF byte offset and dst as IBUF byte offset.
+
+def encode_cdma_copy(src_byte_addr, dst_byte_addr, length_bytes, hw_phy_addr=False):
+    """OP_CDMA_COPY body.
+
+    Legacy (12 B): src_lsb, dst_lsb, length — TB CDMA uses local OBUF/IBUF offsets.
+    HW phy (20 B): src_msb, src_lsb, dst_msb, dst_lsb, length — matches CDMA_Controller.
     """
+    if hw_phy_addr:
+        s_msb, s_lsb = _split_axi64(src_byte_addr)
+        d_msb, d_lsb = _split_axi64(dst_byte_addr)
+        return [make_header(OP_CDMA_COPY, 0, 5 * 4),
+                s_msb, s_lsb, d_msb, d_lsb, length_bytes & 0xFFFFFFFF]
     return [make_header(OP_CDMA_COPY, 0, 3 * 4),
             src_byte_addr & 0xFFFFFFFF,
             dst_byte_addr & 0xFFFFFFFF,
@@ -458,7 +655,8 @@ def build_layer_instructions(layer,
                              dqa_obuf_byte, qa_obuf_byte,
                              ibuf_act_byte, ibuf_wei_byte_per_tile,
                              wb_scale_byte, wb_bias_byte, wb_qscale_byte,
-                             mode=MODE_INT8):
+                             mode=MODE_INT8, hw_phy_addr=False,
+                             hbm_first=False, hbm_feat_byte=None, hbm_wei_byte=None):
     """Build the instruction sequence for one conv layer.
 
     Stages:
@@ -470,6 +668,27 @@ def build_layer_instructions(layer,
       6. QA  (VPU_EXEC unit=QA)
     """
     insts = []
+
+    def _cdma_src_dst(src_b, dst_b):
+        if hw_phy_addr:
+            return src_b, dst_b
+        return src_b, dst_b
+
+    # --- HBM-first: CDMA staging -> on-chip buffers (real axi_cdma in BD sim) ---
+    if hbm_first and hw_phy_addr:
+        if hbm_feat_byte is not None:
+            src, dst = _cdma_src_dst(HBM_PHY_BASE + hbm_feat_byte,
+                                     OBUF_PHY_BASE + feat_obuf_byte)
+            feat_bytes = layer.in_h * layer.in_w * layer.in_ch
+            feat_bytes = ((feat_bytes + 15) // 16) * 16
+            insts += encode_cdma_copy(src, dst, feat_bytes, hw_phy_addr=True)
+            insts += encode_wait_cdma()
+        if hbm_wei_byte is not None:
+            wei_bytes = layer.num_tiles * 256 * IBUF_WORD_BYTES
+            src, dst = _cdma_src_dst(HBM_PHY_BASE + hbm_wei_byte,
+                                     IBUF_PHY_BASE + ibuf_wei_byte_per_tile[0])
+            insts += encode_cdma_copy(src, dst, wei_bytes, hw_phy_addr=True)
+            insts += encode_wait_cdma()
 
     # --- im2col ---
     insts += encode_vpu_exec(
@@ -492,7 +711,13 @@ def build_layer_instructions(layer,
 
     # --- CDMA: copy im2col bytes from OBUF to IBUF activation scratch ---
     im2col_bytes = layer.oh * layer.ow * layer.acc_depth * OBUF_WORD_BYTES
-    insts += encode_cdma_copy(im2col_obuf_byte, ibuf_act_byte, im2col_bytes)
+    if hw_phy_addr:
+        cdma_src = OBUF_PHY_BASE + im2col_obuf_byte
+        cdma_dst = IBUF_PHY_BASE + ibuf_act_byte
+    else:
+        cdma_src = im2col_obuf_byte
+        cdma_dst = ibuf_act_byte
+    insts += encode_cdma_copy(cdma_src, cdma_dst, im2col_bytes, hw_phy_addr=hw_phy_addr)
     insts += encode_wait_cdma()
 
     # --- DCIM config + exec (looped per output pixel) ---
@@ -537,9 +762,8 @@ def build_layer_instructions(layer,
         insts += encode_dcim_exec()
         insts += encode_wait_dcim()
 
-    # Flush delay: OBUF Port B has 3-cycle write pipeline.
-    # Give extra cycles for last DCIM pixel's OBUF write to complete.
-    for _ in range(4):
+    # Flush delay: all Tiles finish OBUF writes (8 tiles may need extra cycles).
+    for _ in range(16):
         insts += encode_nop()
 
     # --- DQA ---
@@ -582,51 +806,59 @@ def build_layer_instructions(layer,
 # -----------------------------------------------------------------------------
 def main():
     p = argparse.ArgumentParser()
+    p.add_argument('--case', default='default',
+                   help='Conv-chain case name (see E2E_CASES in this file). '
+                        'Use "list" to print cases and exit.')
     p.add_argument('--scale', type=float, default=0.2,
-                   help='Spatial scale factor for input dims (default 0.2 -> 32x32 for L1)')
+                   help='Spatial scale factor for L1 input dims (default 0.2)')
+    p.add_argument('--verify-words', type=int, default=32,
+                   help='Max 128-bit words per checkpoint (0 = full tensor for layer)')
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--network-json', default=None,
+                   help='Override path to network.json')
     p.add_argument('--out-dir', default=None,
-                   help='Output dir for hex files (default: ./hex_inst)')
+                   help='Output dir for hex files (default: rtl/tb/lite_bd/data)')
+    p.add_argument('--hw-phy-addr', action='store_true',
+                   help='CDMA_COPY uses physical AXI addresses (OBUF/IBUF base from BD)')
+    p.add_argument('--bd-sim', action='store_true',
+                   help='lite BD VCS sim: --hw-phy-addr + HBM-first CDMA inst + hbm_image.hex')
+    p.add_argument('--bd-sim-fast', action='store_true',
+                   help='lite BD fast sim: --hw-phy-addr, preload OBUF/IBUF directly, skip HBM-first copies')
+    p.add_argument('--bd-e2e', action='store_true',
+                   help=argparse.SUPPRESS)  # deprecated alias for --bd-sim
     args = p.parse_args()
 
-    out_dir = args.out_dir or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'hex_inst')
+    if args.bd_sim or args.bd_e2e or args.bd_sim_fast:
+        args.hw_phy_addr = True
+    if args.bd_sim or args.bd_e2e:
+        args.bd_sim = True
+    bd_mode = 'hbm-first' if args.bd_sim else ('fast-onchip' if args.bd_sim_fast else 'standalone')
+
+    if args.case == 'list':
+        print('Conv-chain cases (3-layer chains from network.json):')
+        for k, v in sorted(E2E_CASES.items()):
+            print('  {:16s}  {}  layers={}'.format(k, v['desc'], v['layers']))
+        return 0
+
+    out_dir = args.out_dir or os.path.dirname(os.path.abspath(__file__))
     os.makedirs(out_dir, exist_ok=True)
 
-    # ---- Scale spatial dims, keep channels/kernels untouched ----
     s = args.scale
+    net_index = load_network_conv_index(args.network_json)
+    layers, spec = build_case_layers(args.case, s, net_index)
+    verify_words = max(0, args.verify_words)
 
-    def scale_hw(full_h, full_w):
-        nh = max(8, int(round(full_h * s)))
-        nw = max(8, int(round(full_w * s)))
-        # Make even so stride=2 divides cleanly for L1
-        nh -= nh & 1
-        nw -= nw & 1
-        return nh, nw
-
-    L1_H, L1_W = scale_hw(160, 160)
-    L2_H, L2_W = (L1_H // 2, L1_W // 2)  # L1 with stride=2 produces L2 input
-    L3_H, L3_W = (L2_H, L2_W)            # L3 same spatial as L2
-
+    print('Case: {} ({})'.format(args.case, spec['desc']))
     print('Scale factor: {:.3f}'.format(s))
-    print('  L1 input HxW : {}x{}'.format(L1_H, L1_W))
-    print('  L2 input HxW : {}x{}'.format(L2_H, L2_W))
-    print('  L3 input HxW : {}x{}'.format(L3_H, L3_W))
-
-    layers = [
-        ConvLayer('L1_model.1.conv',
-                  os.path.join(WEIGHT_DIR, 'model_1_conv.npz'),
-                  in_h=L1_H, in_w=L1_W, in_ch=16, out_ch=32,
-                  kh=3, kw=3, stride=2, pad=1),
-        ConvLayer('L2_model.2.cv1.conv',
-                  os.path.join(WEIGHT_DIR, 'model_2_cv1_conv.npz'),
-                  in_h=L2_H, in_w=L2_W, in_ch=32, out_ch=16,
-                  kh=1, kw=1, stride=1, pad=0),
-        ConvLayer('L3_model.2.m.0.cv2.conv',
-                  os.path.join(WEIGHT_DIR, 'model_2_m_0_cv2_conv.npz'),
-                  in_h=L3_H, in_w=L3_W, in_ch=16, out_ch=16,
-                  kh=3, kw=3, stride=1, pad=1),
-    ]
+    print('Verify words per checkpoint: {} (0=all)'.format(verify_words))
+    print('HW physical CDMA addresses: {}'.format(args.hw_phy_addr))
+    print('HBM-first (BD sim): {}'.format(args.bd_sim))
+    print('Fast on-chip preload (BD sim): {}'.format(args.bd_sim_fast))
+    print('  L1 input HxW : {}x{}'.format(layers[0].in_h, layers[0].in_w))
+    if len(layers) > 1:
+        print('  L2 input HxW : {}x{}'.format(layers[1].in_h, layers[1].in_w))
+    if len(layers) > 2:
+        print('  L3 input HxW : {}x{}'.format(layers[2].in_h, layers[2].in_w))
 
     print('\nLayer summary:')
     for ly in layers:
@@ -638,7 +870,9 @@ def main():
 
     # ---- Random input feature (symmetric INT8, range [-128, 127]) ----
     np.random.seed(args.seed)
-    input_feat = np.random.randint(-128, 128, size=(L1_H, L1_W, 16), dtype=np.int8)
+    l1 = layers[0]
+    input_feat = np.random.randint(
+        -128, 128, size=(l1.in_h, l1.in_w, l1.in_ch), dtype=np.int8)
 
     # ---- Forward all 3 layers ----
     feats = [input_feat]
@@ -673,11 +907,12 @@ def main():
 
     # ---- Write input feature hex ----
     write_feature_hex(os.path.join(out_dir, 'input_feat.hex'),
-                      input_feat.reshape(L1_H, L1_W, 16))
+                      input_feat.reshape(l1.in_h, l1.in_w, l1.in_ch))
 
     # ---- Write goldens + weights per layer ----
     n_inst = 0
     inst_words = []
+    weight_hex_paths = [[] for _ in layers]
     for li, ly in enumerate(layers):
         mid = intermediates_all[li]
         prefix = 'L{}'.format(li + 1)
@@ -701,11 +936,13 @@ def main():
             tile_off = ibuf_wei[li] + t * (256 * IBUF_WORD_BYTES)  # 256 words reserved per tile
             wei_byte_per_tile.append(tile_off)
             if entries:
-                write_weight_entries_hex(
-                    os.path.join(out_dir, '{}_weight_tile{}.hex'.format(prefix, t)),
-                    entries)
+                wh = os.path.join(out_dir, '{}_weight_tile{}.hex'.format(prefix, t))
+                write_weight_entries_hex(wh, entries)
+                weight_hex_paths[li].append(wh)
 
         # Layer instructions
+        hbm_feat = HBM_INPUT_OFF if (args.bd_sim and li == 0) else None
+        hbm_wei = (HBM_WEIGHT_BASE + li * HBM_WEIGHT_STRIDE) if args.bd_sim else None
         layer_insts = build_layer_instructions(
             ly,
             feat_obuf_byte=obuf_in[li],
@@ -718,6 +955,10 @@ def main():
             wb_scale_byte=wb_scale[li],
             wb_bias_byte=wb_bias[li],
             wb_qscale_byte=wb_qscl[li],
+            hw_phy_addr=args.hw_phy_addr,
+            hbm_first=args.bd_sim,
+            hbm_feat_byte=hbm_feat,
+            hbm_wei_byte=hbm_wei,
         )
         inst_words += layer_insts
 
@@ -728,10 +969,21 @@ def main():
     wb_blob = build_wb_blob(layers, wb_qscl, wb_scale, wb_bias)
     write_wb_hex(os.path.join(out_dir, 'wb_init.hex'), wb_blob)
 
-    # ---- Address-map manifest (TB consumes this via $readmemh of plain text) ----
+    if args.bd_sim:
+        hbm_blob = build_hbm_image_blob(input_feat, layers, ibuf_wei, weight_hex_paths)
+        write_hbm_hex(os.path.join(out_dir, 'hbm_image.hex'), hbm_blob)
+        print('Wrote hbm_image.hex ({} bytes)'.format(len(hbm_blob)))
+
+    write_manifest_svh(
+        os.path.join(out_dir, 'conv_manifest.svh'),
+        args.case, s, verify_words, layers)
+
     manifest = os.path.join(out_dir, 'manifest.txt')
     with open(manifest, 'w') as f:
-        f.write('# Auto-generated. Spatial scale={}\n'.format(s))
+        f.write('# Auto-generated. case={} scale={} mode={}\n'.format(args.case, s, bd_mode))
+        f.write('CASE={}\n'.format(args.case))
+        f.write('BD_MODE={}\n'.format(bd_mode))
+        f.write('VERIFY_WORDS={}\n'.format(verify_words))
         f.write('NUM_LAYERS=3\n')
         for li, ly in enumerate(layers):
             f.write('\n# Layer {}\n'.format(li + 1))

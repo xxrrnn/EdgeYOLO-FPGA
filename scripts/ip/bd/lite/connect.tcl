@@ -184,7 +184,7 @@ connect_bd_net [get_bd_pins inst_decoder/vpu_addr_t]     [get_bd_pins vpu_0/addr
 connect_bd_net [get_bd_pins inst_decoder/dcim_cfg_wr_en]   [get_bd_pins dcim_array_0/cfg_wr_en]
 connect_bd_net [get_bd_pins inst_decoder/dcim_cfg_wr_addr] [get_bd_pins dcim_array_0/cfg_wr_addr]
 connect_bd_net [get_bd_pins inst_decoder/dcim_cfg_wr_data] [get_bd_pins dcim_array_0/cfg_wr_data]
-connect_bd_net [get_bd_pins dcim_array_0/done]             [get_bd_pins inst_decoder/dcim_ready]
+connect_bd_net [get_bd_pins dcim_array_0/ready]            [get_bd_pins inst_decoder/dcim_ready]
 
 # ==============================================================================
 # INST_Decoder <-> VPU_AXI_Regs (vpu_regs)

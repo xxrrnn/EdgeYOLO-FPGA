@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 // tb_qa_unit.sv - Testbench for qa_unit (Quantize Unit)
 // Uses REAL Xilinx IP: fp32_mac (via fp_mac_array), fp32_2_int8_array

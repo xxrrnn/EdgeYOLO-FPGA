@@ -85,16 +85,9 @@ foreach f [glob -nocomplain [file normalize "$vpuRtlDir/fp_array/*.v"] [file nor
 # --- Header files ---
 set chipHeaderFiles [list \
     [file normalize "$srcDir/chip/chip_defines.vh"] \
-    [file normalize "$srcDir/chip/chip_defs.vh"] \
 ]
 
 add_files -norecurse [concat $chipRtlFiles $dcimRtlFiles $bufferRtlFiles $vpuRtlFiles $chipHeaderFiles]
-
-# VPU header
-set vpuHeaderFile [file normalize "$vpuRtlDir/vpu_defines.vh"]
-if {[file exists $vpuHeaderFile]} {
-    add_files -norecurse $vpuHeaderFile
-}
 
 set_property include_dirs [list \
     [file normalize "$srcDir/chip"] \
@@ -102,7 +95,7 @@ set_property include_dirs [list \
     [file normalize "$srcDir/ref/DCIM/src/dcim"] \
     [file normalize "$srcDir/ref/DCIM/src/model"] \
     $vpuRtlDir \
-    [file normalize "$vpuRtlDir/fp array"] \
+    [file normalize "$vpuRtlDir/fp_array"] \
 ] [current_fileset]
 
 set paraFile [file normalize "$srcDir/ref/DCIM/src/inc/para.v"]
@@ -112,11 +105,6 @@ set_property is_global_include true [get_files $paraFile]
 foreach vhFile $chipHeaderFiles {
     set_property file_type {Verilog Header} [get_files $vhFile]
     set_property is_global_include true [get_files $vhFile]
-}
-
-if {[file exists $vpuHeaderFile]} {
-    set_property file_type {Verilog Header} [get_files $vpuHeaderFile]
-    set_property is_global_include true [get_files $vpuHeaderFile]
 }
 
 set_property verilog_define [list \

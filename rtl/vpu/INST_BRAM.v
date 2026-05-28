@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 //////////////////////////////////////////////////////////////////////////////////
 // INST_BRAM - 指令存储 BRAM（双端口）
@@ -66,6 +66,11 @@ module INST_BRAM #(
     initial begin
         for (i = 0; i < DEPTH; i = i + 1)
             mem[i] = 32'h0;
+        // BD sim: port-B reads this array directly; optional backdoor load
+        if ($test$plusargs("INST_READMEMH")) begin
+            $readmemh("inst.hex", mem);
+            $display("[%0t] INST_BRAM: readmemh(inst.hex) loaded", $time);
+        end
     end
     
     // ========================================

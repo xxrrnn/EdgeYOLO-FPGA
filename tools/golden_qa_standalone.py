@@ -1,80 +1,32 @@
 #!/usr/bin/env python3
 """
-golden_qa_standalone.py - QA unit standalone test golden generator.
+golden_qa_standalone.py - QA unit standalone golden (YOLOv5n original params).
 
-Matches hardware:
-  - FP32 input packed 4 values / 128-bit OBUF word (ch0 in [31:0], little-endian bytes)
-  - Symmetric INT8: clamp(round(fp * qscale), -128, 127)
-  - Output NHWC flatten -> bytes_to_128_words (same as golden_e2e_inst.py)
+Uses scale=1.0 spatial dims and real act_scale / DQA outputs from the 3-layer
+YOLO chain. Large tensors in hex files; SVH holds metadata + qscale only.
 
 Usage:
-  python3 tools/golden_qa_standalone.py [--out rtl/vpu/tb/e2e/qa_standalone_golden.svh]
+  python3 tools/golden_qa_standalone.py
 """
 from __future__ import annotations
 
 import argparse
 import os
-import struct
-import sys
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Sequence
 
 import numpy as np
 
-FP_CORE_NUM = 4
-OBUF_WORD_BYTES = 16
-
-
-def fp32_to_bits(x: float) -> int:
-    return struct.unpack(">I", struct.pack(">f", float(x)))[0]
-
-
-def bits_to_fp32_hex(bits: int) -> str:
-    return f"32'h{bits:08x}"
-
-
-def pack_fp32_obuf_words(fp_values: Sequence[float]) -> List[int]:
-    """Return list of 128-bit integers (SV {fp3,fp2,fp1,fp0} style)."""
-    vals = list(fp_values)
-    pad = (-len(vals)) % FP_CORE_NUM
-    vals.extend([0.0] * pad)
-    words = []
-    for i in range(0, len(vals), FP_CORE_NUM):
-        chunk = vals[i : i + FP_CORE_NUM]
-        word = 0
-        for j, v in enumerate(chunk):
-            word |= fp32_to_bits(v) << (32 * j)
-        words.append(word)
-    return words
-
-
-def bytes_to_128_words(byte_blob: bytes) -> List[int]:
-    pad = (-len(byte_blob)) % OBUF_WORD_BYTES
-    blob = byte_blob + b"\x00" * pad
-    words = []
-    for i in range(0, len(blob), OBUF_WORD_BYTES):
-        chunk = blob[i : i + OBUF_WORD_BYTES]
-        w = 0
-        for j, b in enumerate(chunk):
-            w |= int(b) << (8 * j)
-        words.append(w)
-    return words
-
-
-def qa_quantize(fp_values: Sequence[float], qscale: float) -> np.ndarray:
-    arr = np.asarray(fp_values, dtype=np.float64)
-    return np.clip(np.round(arr * qscale), -128, 127).astype(np.int8)
-
-
-def nhwc_flat(fp_nhwc: np.ndarray) -> List[float]:
-    """fp_nhwc shape [H, W, C] -> NHWC flat list."""
-    h, w, c = fp_nhwc.shape
-    out = []
-    for y in range(h):
-        for x in range(w):
-            for ch in range(c):
-                out.append(float(fp_nhwc[y, x, ch]))
-    return out
+from net_standalone_common import (
+    FP_CORE_NUM,
+    build_yolo_layers,
+    bytes_to_128_words,
+    forward_all_layers,
+    nhwc_flat_fp32,
+    pack_fp32_obuf_words,
+    qa_hw_qscale,
+    write_hex,
+)
 
 
 @dataclass
@@ -86,216 +38,144 @@ class QaCase:
     qscale: float
     src_word_base: int
     dst_word_base: int
-    fp_values: List[float]
-    expect_int8: List[int]
-    expect_words: List[int]
+    n_in_words: int
+    n_out_words: int
     expect_save_count: int
-    check_upper_zero: bool
+    in_hex: str
+    out_hex: str
+    poll_limit: int
 
 
-def build_case(
-    name: str,
-    h: int,
-    w: int,
-    c: int,
-    qscale: float,
-    fp_values: Sequence[float],
-    src_word_base: int = 0,
-    dst_word_base: int = 16,
-    check_upper_zero: bool = False,
-) -> QaCase:
-    assert len(fp_values) == h * w * c
-    int8 = qa_quantize(fp_values, qscale)
-    words = bytes_to_128_words(int8.tobytes())
-    total_fp = h * w * c
-    save_count = (total_fp + FP_CORE_NUM - 1) // FP_CORE_NUM
-    return QaCase(
-        name=name,
-        h=h,
-        w=w,
-        c=c,
-        qscale=qscale,
-        src_word_base=src_word_base,
-        dst_word_base=dst_word_base,
-        fp_values=list(fp_values),
-        expect_int8=[int(x) for x in int8.tolist()],
-        expect_words=words,
-        expect_save_count=save_count,
-        check_upper_zero=check_upper_zero or (total_fp <= FP_CORE_NUM),
-    )
+def fp32_word_lines(values: Sequence[float]) -> List[str]:
+    return [f"{w:032x}" for w in pack_fp32_obuf_words(values)]
 
 
-def default_cases() -> List[QaCase]:
+def build_network_cases(scale: float, hex_dir: str) -> List[QaCase]:
+    layers, _, _ = build_yolo_layers(scale)
+    mids = forward_all_layers(layers)
+
+    bases = [0x00000, 0x20000, 0x40000]
     cases = []
 
-    # T1: original minimal — 4ch, 1 slot, upper 96 bits must stay zero
-    cases.append(
-        build_case(
-            "t1_min_4ch",
-            h=1,
-            w=1,
-            c=4,
-            qscale=0.5,
-            fp_values=[2.5, 5.7, 100.3, -3.0],
-            src_word_base=0,
-            dst_word_base=16,
-            check_upper_zero=True,
-        )
-    )
+    for idx, (ly, mid) in enumerate(zip(layers, mids)):
+        dqa = mid["dqa"]
+        qa = ly.compute_qa(dqa)
+        flat_fp = nhwc_flat_fp32(dqa.reshape(ly.oh, ly.ow, ly.out_ch))
+        int8_blob = qa.reshape(-1).astype(np.int8).tobytes()
+        out_lines = bytes_to_128_words(int8_blob)
 
-    # T2: full 128-bit word — 16 distinct channels, 4 slots must differ
-    fp16 = [float(i * 3.7 - 5.2) for i in range(16)]
-    cases.append(
-        build_case(
-            "t2_full_word_16ch",
-            h=1,
-            w=1,
-            c=16,
-            qscale=0.25,
-            fp_values=fp16,
-            src_word_base=32,
-            dst_word_base=48,
-        )
-    )
+        in_words = len(pack_fp32_obuf_words(flat_fp))
+        out_words = len(out_lines)
+        total_fp = ly.oh * ly.ow * ly.out_ch
+        save_count = (total_fp + FP_CORE_NUM - 1) // FP_CORE_NUM
 
-    # T3: 8ch × 2 pixels — 4 saves, 1 output word
-    fp_8x2 = []
-    for pix in range(2):
-        for ch in range(8):
-            fp_8x2.append((pix + 1) * 10.0 + ch * 0.3)
-    cases.append(
-        build_case(
-            "t3_8ch_2px",
-            h=2,
-            w=1,
-            c=8,
-            qscale=0.1,
-            fp_values=fp_8x2,
-            src_word_base=64,
-            dst_word_base=80,
-        )
-    )
+        src = bases[idx]
+        dst = src + 0x10000
 
-    # T4: 32ch — 2 output words (8 saves)
-    fp32 = [float(np.sin(i * 0.7) * 40.0) for i in range(32)]
-    cases.append(
-        build_case(
-            "t4_32ch_2words",
-            h=1,
-            w=1,
-            c=32,
-            qscale=0.2,
-            fp_values=fp32,
-            src_word_base=96,
-            dst_word_base=112,
-        )
-    )
+        in_hex = os.path.join(hex_dir, f"L{idx + 1}_qa_in.hex")
+        out_hex = os.path.join(hex_dir, f"L{idx + 1}_qa_out.hex")
+        write_hex(in_hex, fp32_word_lines(flat_fp))
+        write_hex(out_hex, out_lines)
 
-    # T5: 2×2 spatial, 4ch — distinct per-pixel values
-    nhwc = np.zeros((2, 2, 4), dtype=np.float64)
-    for y in range(2):
-        for x in range(2):
-            for ch in range(4):
-                nhwc[y, x, ch] = (y * 2 + x) * 20.0 + ch * 1.1 - 3.0
-    cases.append(
-        build_case(
-            "t5_2x2x4",
-            h=2,
-            w=2,
-            c=4,
-            qscale=0.5,
-            fp_values=nhwc_flat(nhwc),
-            src_word_base=128,
-            dst_word_base=144,
-            check_upper_zero=False,
-        )
-    )
+        poll = max(800_000, save_count * 80)
 
+        cases.append(
+            QaCase(
+                name=f"L{idx + 1}_{ly.name}",
+                h=ly.oh,
+                w=ly.ow,
+                c=ly.out_ch,
+                qscale=qa_hw_qscale(ly.act_scale),
+                src_word_base=src,
+                dst_word_base=dst,
+                n_in_words=in_words,
+                n_out_words=out_words,
+                expect_save_count=save_count,
+                in_hex=os.path.basename(in_hex),
+                out_hex=os.path.basename(out_hex),
+                poll_limit=poll,
+            )
+        )
     return cases
 
 
 def emit_svh(cases: Sequence[QaCase], path: str) -> None:
+    import struct
+
+    def fp32_to_bits(x: float) -> int:
+        return struct.unpack(">I", struct.pack(">f", float(x)))[0]
+
     lines = [
         "// Auto-generated by tools/golden_qa_standalone.py — do not edit",
+        f"// Network original params (default scale=1.0); E2E uses smaller scale for speed",
         "`ifndef QA_STANDALONE_GOLDEN_SVH",
         "`define QA_STANDALONE_GOLDEN_SVH",
         "",
         f"localparam int QA_STANDALONE_NUM_CASES = {len(cases)};",
+        'localparam string QA_HEX_DIR = "hex/";',
         "",
     ]
 
     for idx, tc in enumerate(cases):
-        n_words = len(pack_fp32_obuf_words(tc.fp_values))
-        n_out = len(tc.expect_words)
-        lines.append(f"// Case {idx}: {tc.name}")
+        qbits = fp32_to_bits(tc.qscale)
+        lines.append(f"// Case {idx}: {tc.name}  {tc.h}x{tc.w}x{tc.c}")
         lines.append(f"localparam int QA_CASE_{idx}_H = {tc.h};")
         lines.append(f"localparam int QA_CASE_{idx}_W = {tc.w};")
         lines.append(f"localparam int QA_CASE_{idx}_C = {tc.c};")
         lines.append(f"localparam int QA_CASE_{idx}_SRC_BASE = {tc.src_word_base};")
         lines.append(f"localparam int QA_CASE_{idx}_DST_BASE = {tc.dst_word_base};")
-        lines.append(f"localparam int QA_CASE_{idx}_N_IN_WORDS = {n_words};")
-        lines.append(f"localparam int QA_CASE_{idx}_N_OUT_WORDS = {n_out};")
+        lines.append(f"localparam int QA_CASE_{idx}_N_IN_WORDS = {tc.n_in_words};")
+        lines.append(f"localparam int QA_CASE_{idx}_N_OUT_WORDS = {tc.n_out_words};")
         lines.append(f"localparam int QA_CASE_{idx}_SAVE_COUNT = {tc.expect_save_count};")
-        lines.append(f"localparam bit QA_CASE_{idx}_CHECK_UPPER_ZERO = {1 if tc.check_upper_zero else 0};")
-        qbits = fp32_to_bits(tc.qscale)
+        lines.append(f"localparam int QA_CASE_{idx}_POLL_LIMIT = {tc.poll_limit};")
         lines.append(f"localparam logic [31:0] QA_CASE_{idx}_QSCALE_BITS = 32'h{qbits:08x};")
-
-        lines.append(f"localparam logic [127:0] QA_CASE_{idx}_IN [{n_words}] = '{{")
-        for wi, w in enumerate(pack_fp32_obuf_words(tc.fp_values)):
-            comma = "," if wi + 1 < n_words else ""
-            lines.append(f"    128'h{w:032x}{comma}")
-        lines.append("};")
-
-        lines.append(f"localparam logic [127:0] QA_CASE_{idx}_OUT [{n_out}] = '{{")
-        for wi, w in enumerate(tc.expect_words):
-            comma = "," if wi + 1 < n_out else ""
-            lines.append(f"    128'h{w:032x}{comma}")
-        lines.append("};")
+        lines.append(f'localparam string QA_CASE_{idx}_IN_HEX  = {{QA_HEX_DIR, "{tc.in_hex}"}};')
+        lines.append(f'localparam string QA_CASE_{idx}_OUT_HEX = {{QA_HEX_DIR, "{tc.out_hex}"}};')
         lines.append("")
 
     lines.append("`endif // QA_STANDALONE_GOLDEN_SVH")
     lines.append("")
-
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
 
-def self_check(cases: Sequence[QaCase]) -> None:
+def self_check(cases: Sequence[QaCase], hex_dir: str) -> None:
     for tc in cases:
-        got = qa_quantize(tc.fp_values, tc.qscale)
-        exp = np.asarray(tc.expect_int8, dtype=np.int8)
-        if not np.array_equal(got, exp):
-            raise SystemExit(f"self-check failed: {tc.name}")
-        # T1 reference
-        if tc.name == "t1_min_4ch":
-            ref = np.array([1, 3, 50, -2], dtype=np.int8)
-            if not np.array_equal(got, ref):
-                raise SystemExit("t1 reference mismatch")
+        assert os.path.isfile(os.path.join(hex_dir, tc.in_hex)), tc.in_hex
+        assert os.path.isfile(os.path.join(hex_dir, tc.out_hex)), tc.out_hex
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--scale", type=float, default=1.0)
     ap.add_argument(
-        "--out",
+        "--out-dir",
         default=os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
             "rtl",
             "vpu",
             "tb",
-            "e2e",
-            "qa_standalone_golden.svh",
+            "standalone",
+            "generated",
         ),
     )
     args = ap.parse_args()
-    cases = default_cases()
-    self_check(cases)
-    emit_svh(cases, args.out)
-    print(f"Wrote {len(cases)} QA standalone cases -> {args.out}")
+    out_dir = os.path.normpath(args.out_dir)
+    hex_dir = os.path.join(out_dir, "hex")
+    svh = os.path.join(out_dir, "qa_standalone_golden.svh")
+
+    cases = build_network_cases(args.scale, hex_dir)
+    self_check(cases, hex_dir)
+    emit_svh(cases, svh)
+
+    print(f"Wrote {len(cases)} QA network cases -> {svh}")
+    print(f"  hex dir: {hex_dir}  (scale={args.scale})")
     for tc in cases:
         print(
-            f"  {tc.name}: {tc.h}x{tc.w}x{tc.c} qscale={tc.qscale} "
-            f"saves={tc.expect_save_count} out_words={len(tc.expect_words)}"
+            f"  {tc.name}: {tc.h}x{tc.w}x{tc.c} qscale={tc.qscale:.6g} "
+            f"saves={tc.expect_save_count} out_words={tc.n_out_words}"
         )
 
 

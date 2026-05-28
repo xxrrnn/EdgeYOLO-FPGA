@@ -1,41 +1,50 @@
-# VPU Testbench Layout
+# VPU Testbench
 
-This directory is organized by validation scope.
+VPU 模块级与局部联合仿真。与板上路径一致的 **lite Block Design 系统级仿真** 在独立目录：
 
-## `standalone/`
-
-Unit-level tests with focused golden checks and minimal dependencies.
-
-- `tb_qa_standalone.sv`: QA unit, lite parameters, Python golden, OBUF-ready/valid behavior.
-- `tb_dqa_standalone.sv`: DQA unit, lite parameters, Python golden, real `rtl/DCIM_Macro/obuf.v` Port A/B usage.
-- `generated/`: generated standalone golden `.svh` files.
-- `tb_im2col_unit.sv`: im2col unit standalone test.
-- `tb_INST_Decoder.sv`: instruction decoder unit test.
-
-## `integration/`
-
-Small multi-unit tests that validate important hardware paths without full E2E runtime.
-
-- `tb_im2col_dcim_joint.sv`: im2col + CDMA/IBUF + DCIM joint validation.
-- `tb_inst_driven_im2col_dcim.sv`: instruction-driven im2col/DCIM integration.
-
-## `e2e/`
-
-End-to-end simulations and generated golden data.
-
-- `tb_e2e_inst_driven.sv`: full 3-layer instruction-driven E2E. Slow; use after standalone/integration checks pass.
-- `golden_e2e_inst.py`: generates E2E input, weights, instructions, and checkpoint goldens.
-- `*.hex`: generated data consumed by E2E testbenches.
-
-## `legacy/`
-
-Older or pre-lite testbenches kept for reference. They may use stale parameters or simplified memories and should not be treated as current regression sources unless refreshed.
-
-## `sim/`
-
-Reusable xsim scripts and filelists. Current primary regressions:
+**[`rtl/tb/lite_bd/README.md`](../../tb/lite_bd/README.md)**
 
 ```bash
-bash rtl/vpu/tb/sim/run_xsim_qa_standalone.sh
-bash rtl/vpu/tb/sim/run_xsim_dqa_standalone.sh
+bash rtl/tb/lite_bd/sim/run_bd_sim.sh
 ```
+
+---
+
+## 目录结构
+
+```
+rtl/vpu/tb/
+├── standalone/     # QA、DQA、im2col、INST_Decoder 单元 TB
+├── integration/    # im2col + DCIM 等联合仿真（无完整 BD）
+├── legacy/         # 旧 TB，仅供参考
+└── sim/
+    ├── vcs_common.sh
+    ├── run_vcs_standalone.sh
+    ├── run_vcs_dqa_standalone.sh
+    ├── run_vcs_qa_standalone.sh
+    └── run_xsim_*_standalone.sh
+```
+
+---
+
+## 单元仿真（VCS）
+
+```bash
+bash rtl/vpu/tb/sim/run_vcs_standalone.sh
+bash rtl/vpu/tb/sim/run_vcs_dqa_standalone.sh
+bash rtl/vpu/tb/sim/run_vcs_qa_standalone.sh
+
+# 快速冒烟
+ONLY_CASE=2 STANDALONE_SCALE=0.1 bash rtl/vpu/tb/sim/run_vcs_qa_standalone.sh
+```
+
+| 变量 | 默认 | 含义 |
+|------|------|------|
+| `STANDALONE_SCALE` | `1.0` | golden 空间缩放 |
+| `ONLY_CASE` | (all) | `0`=L1, `1`=L2, `2`=L3 |
+| `XILINX_VCS_LIB` | 见 `vcs_common.sh` | 预编译 Xilinx IP 库 |
+| `LITE_GEN` | `build/lite/lite.gen/sources_1/ip` | 浮点 IP sim 模型 |
+
+一次性 VCS 库：`vivado -mode batch -source scripts/sim/compile_xilinx_vcs_lib.tcl`
+
+建议验证顺序：`standalone` → `integration` → [`rtl/tb/lite_bd`](../tb/lite_bd/README.md)

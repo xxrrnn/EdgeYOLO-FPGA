@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 //==============================================================================
 // us_unit_fixed - 硬编码 Nearest Neighbor Upsample ×2 单元
 //==============================================================================
@@ -52,7 +52,8 @@ module us_unit_fixed #(
     output logic [GB_BANDWIDTH-1:0]      gb_dinb,
     output logic [GB_BANDWIDTH/8-1:0]    gb_web,
     output logic                         gb_enb,
-    input  wire  [GB_BANDWIDTH-1:0]      gb_doutb
+    input  wire  [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire                          gb_doutb_valid  // OBUF 读数据有效（ready/valid，替代硬延迟）
 );
 
     // =========================================================================
@@ -60,8 +61,8 @@ module us_unit_fixed #(
     // =========================================================================
     localparam SCALE      = 2;
     localparam SCALE_BITS = 1;  // log2(SCALE) = log2(2) = 1
-    localparam LANES      = GB_BANDWIDTH / FP_WIDTH;  // 8 FP32 per word
-    localparam LANES_BITS = 3;  // log2(LANES) = log2(8) = 3
+    localparam LANES      = GB_BANDWIDTH / FP_WIDTH;
+    localparam LANES_BITS = $clog2(LANES);  // log2(LANES)
     localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
     // =========================================================================
@@ -71,7 +72,7 @@ module us_unit_fixed #(
         S_IDLE,
         S_INIT,
         S_LOAD_REQ,      // 发出 BRAM 读请求
-        S_LOAD_WAIT,     // 等待 BRAM 读延迟
+        S_LOAD_WAIT,     // 等待 OBUF 读数据有效（gb_doutb_valid 握手）
         S_LOAD_DONE,     // 锁存读取数据
         S_SAVE_0,        // 写入输出位置 0: (2*ih, 2*iw)
         S_SAVE_1,        // 写入输出位置 1: (2*ih, 2*iw+1)
@@ -203,10 +204,10 @@ module us_unit_fixed #(
 
                 // ---------------------------------------------------------
                 S_LOAD_WAIT: begin
-                    // 保持 enb=1，等待 global_buffer_bram 读首拍数据（read-first，地址上一拍已建立）
-                    gb_addrb <= load_addr;
-                    gb_enb   <= 1'b1;
-                    state    <= S_LOAD_DONE;
+                    // 等待 OBUF 控制器返回有效读数据（ready/valid 握手，替代硬编码延迟）
+                    gb_enb <= 1'b0;
+                    if (gb_doutb_valid)
+                        state <= S_LOAD_DONE;
                 end
 
                 // ---------------------------------------------------------

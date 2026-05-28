@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 `include "chip_defines.vh"
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 // ============================================================================
 // tb_im2col_dcim_joint - im2col + DCIM 联合仿真
@@ -81,7 +81,7 @@ module tb_im2col_dcim_joint;
 
     reg  [STRB_WIDTH-1:0]    ibuf_ext_wea;
     reg                      ibuf_ext_ena;
-    reg  [`DCIM_AXI_BRAM_ADDR_WIDTH-1:0] ibuf_ext_addra;
+    reg  [IBUF_ADDR_WIDTH+3:0] ibuf_ext_addra;
     reg  [BUF_DATA_WIDTH-1:0] ibuf_ext_dina;
     wire [BUF_DATA_WIDTH-1:0] ibuf_ext_douta;
 
@@ -97,9 +97,10 @@ module tb_im2col_dcim_joint;
     wire [STRB_WIDTH-1:0]       vpu_obuf_we;
     wire [BUF_DATA_WIDTH-1:0]   vpu_obuf_din;
     wire [BUF_DATA_WIDTH-1:0]   vpu_obuf_dout;
+    wire                        vpu_obuf_rd_valid;
 
     wire dcim_done;
-    wire dcim_ready = dcim_done;  // ready port removed from DCIM_Array_bd
+    wire dcim_ready;
 
     // im2col_unit 接口
     reg  im2col_start;
@@ -159,7 +160,8 @@ module tb_im2col_dcim_joint;
         .vpu_obuf_we    (vpu_obuf_we),
         .vpu_obuf_din   (vpu_obuf_din),
         .vpu_obuf_dout  (vpu_obuf_dout),
-        .done           (dcim_done)
+        .vpu_obuf_rd_valid(vpu_obuf_rd_valid),
+        .ready          (dcim_ready)
     );
 
     // =========================================================================
@@ -187,7 +189,8 @@ module tb_im2col_dcim_joint;
         .gb_dinb           (im2col_gb_dinb),
         .gb_web            (im2col_gb_web),
         .gb_enb            (im2col_gb_enb),
-        .gb_doutb          (vpu_obuf_dout)
+        .gb_doutb          (vpu_obuf_dout),
+        .gb_doutb_valid    (vpu_obuf_rd_valid)
     );
 
     // =========================================================================

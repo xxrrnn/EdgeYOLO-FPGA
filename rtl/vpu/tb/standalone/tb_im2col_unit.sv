@@ -63,11 +63,14 @@ module tb_im2col_unit;
     wire [GB_BANDWIDTH/8-1:0]     gb_web;
     wire                          gb_enb;
     reg  [GB_BANDWIDTH-1:0]       gb_doutb;
+    reg                           gb_doutb_valid;
 
     // OBUF 模拟读写
     wire [GB_ADDR_WIDTH-5:0] obuf_word_addr = gb_addrb >> 4;  // 字节地址 >> 4 = 128-bit 字地址
+    reg                        gb_read_pending;
 
     always @(posedge clk) begin
+        gb_doutb_valid <= 1'b0;
         if (gb_enb) begin
             if (|gb_web) begin
                 // 写操作
@@ -76,9 +79,14 @@ module tb_im2col_unit;
                     if (gb_web[i])
                         obuf_mem[obuf_word_addr][i*8 +: 8] <= gb_dinb[i*8 +: 8];
                 end
+            end else begin
+                gb_read_pending <= 1'b1;
             end
-            // 读操作（1 周期延迟简化）
-            gb_doutb <= obuf_mem[obuf_word_addr];
+        end
+        if (gb_read_pending) begin
+            gb_doutb        <= obuf_mem[obuf_word_addr];
+            gb_doutb_valid  <= 1'b1;
+            gb_read_pending <= 1'b0;
         end
     end
 
@@ -113,7 +121,8 @@ module tb_im2col_unit;
         .gb_dinb(gb_dinb),
         .gb_web(gb_web),
         .gb_enb(gb_enb),
-        .gb_doutb(gb_doutb)
+        .gb_doutb(gb_doutb),
+        .gb_doutb_valid(gb_doutb_valid)
     );
 
     // =========================================================================

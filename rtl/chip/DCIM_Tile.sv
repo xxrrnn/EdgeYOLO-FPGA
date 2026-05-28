@@ -26,6 +26,7 @@ module DCIM_Tile #(
     parameter ACC             = `DCIM_ACC_MAX,
     parameter BUF_ADDR_WIDTH  = `DCIM_BUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
+    parameter TILE_IDX        = 0,              // 由 DCIM_Array_Group 传入 genvar
     
     localparam SRAM_WD     = CH_IN * CH_OUT * WD1 / CYCLE,
     localparam ADDR_WD     = $clog2(SRAM_DP),
@@ -67,6 +68,7 @@ module DCIM_Tile #(
     // ========================================================================
     typedef enum logic [3:0] {
         ST_IDLE,
+        ST_CLEAR,
         ST_LOAD_WEI_REQ,
         ST_LOAD_WEI_RESP,
         ST_LOAD_WEI_DONE,
@@ -96,7 +98,7 @@ module DCIM_Tile #(
     reg  [ADDR_WD-1:0]       dcim_addr_wei;
     reg  [SRAM_WD-1:0]       dcim_data_wei;
     
-    assign dcim_clr = (state == ST_IDLE);
+    assign dcim_clr = (state == ST_IDLE) || (state == ST_CLEAR);
     
     wire                     dcim_valid_out;
     wire                     dcim_ready_out = 1'b1;
@@ -118,6 +120,10 @@ module DCIM_Tile #(
     reg [ACC_UBD_WD-1:0]     row_cnt;
     reg [9:0]                wei_load_cnt;
     reg [5:0]                ppcache_cnt;
+    reg [ACC_UBD_WD-1:0]     chunk_base;
+    reg                      chunk_continue_req;
+    reg signed [31:0]        int8_partial_accum [0:7];
+    reg signed [31:0]        int16_partial_accum [0:3];
     reg [1:0]                result_cnt;
     reg                      result_cnt_nonzero;
     reg [BUF_DATA_WIDTH-1:0] act_buf_lo;
@@ -143,6 +149,8 @@ module DCIM_Tile #(
     reg [BUF_ADDR_WIDTH-1:0] out_base_addr_reg;
     
     localparam [31:0] EXPECTED_OUTPUTS = 32'd1;
+    localparam integer MAX_ROWS_PER_CHUNK_INT = SRAM_DP / CYCLE;
+    localparam [ACC_UBD_WD-1:0] MAX_ROWS_PER_CHUNK = MAX_ROWS_PER_CHUNK_INT[ACC_UBD_WD-1:0];
     
     (* max_fanout = 16 *) reg is_int16_reg;
     wire is_int16 = is_int16_reg;
@@ -162,7 +170,15 @@ module DCIM_Tile #(
     // ========================================================================
     (* max_fanout = 8 *) reg ibuf_handshake_done;
     (* max_fanout = 8 *) reg ibuf_data_received;
-    (* max_fanout = 8 *) reg conv_handshake_done;
+    (* max_fanout = 8 *) reg conv_sent_reg;
+    reg [1:0] compute_phase_cnt;
+    wire [1:0] compute_phase_last = (mode_reg == `MODE_INT16) ? 2'd3 : 2'd1;
+    wire compute_phase_fire = (dcim_valid_act && dcim_ready_act);
+    wire compute_done = compute_phase_fire && (compute_phase_cnt == compute_phase_last);
+    wire [ACC_UBD_WD-1:0] rows_left_inclusive = acc_reg - chunk_base;
+    wire [ACC_UBD_WD-1:0] chunk_rows = (rows_left_inclusive > MAX_ROWS_PER_CHUNK) ?
+                                       MAX_ROWS_PER_CHUNK : rows_left_inclusive;
+    wire chunk_has_more = (chunk_base + chunk_rows < acc_reg);
     (* max_fanout = 8 *) reg wei_load_finished;
     (* max_fanout = 8 *) reg ppcache_finished;
     (* max_fanout = 8 *) reg all_rows_processed;
@@ -172,7 +188,6 @@ module DCIM_Tile #(
         if (!rst_n) begin
             ibuf_handshake_done <= 0;
             ibuf_data_received <= 0;
-            conv_handshake_done <= 0;
             wei_load_finished <= 0;
             ppcache_finished <= 0;
             all_rows_processed <= 0;
@@ -181,12 +196,11 @@ module DCIM_Tile #(
         end else begin
             ibuf_handshake_done <= (ibuf_rd_valid && ibuf_rd_ready);
             ibuf_data_received <= ibuf_rd_data_valid;
-            conv_handshake_done <= (conv_valid && conv_ready);
-            wei_load_finished <= (wei_load_cnt >= acc_reg * CYCLE - 1);
+            wei_load_finished <= (wei_load_cnt >= chunk_rows * CYCLE - 1);
             ppcache_finished <= (state == ST_LOAD_PPCACHE) && ((row_cnt == 0) ? (ppcache_cnt >= 4 * CYCLE) : (ppcache_cnt >= 2 * CYCLE));
-            all_rows_processed <= (row_cnt >= acc_reg - 1);
+            all_rows_processed <= (row_cnt >= chunk_rows - 1);
             result_cnt_nonzero <= (result_cnt != 2'd0);
-            all_results_collected <= result_cnt_nonzero;
+            all_results_collected <= result_cnt_nonzero || chunk_continue_req;
         end
     end
     
@@ -195,13 +209,32 @@ module DCIM_Tile #(
     // ========================================================================
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= ST_IDLE;
-        else state <= next_state;
+        else begin
+            state <= next_state;
+`ifdef SIMULATION
+`ifdef PROBE_DCIM_TILE_STATE
+            if (next_state != state) begin
+                if (next_state == ST_CLEAR && state == ST_IDLE)
+                    $display("[%0t] DCIM_Tile(%m) CLEAR", $time);
+                else if (next_state == ST_LOAD_WEI_REQ && state == ST_CLEAR)
+                    $display("[%0t] DCIM_Tile(%m) START", $time);
+                else if (next_state == ST_COMPUTE)
+                    $display("[%0t] DCIM_Tile(%m) COMPUTE (acc pass)", $time);
+                else if (next_state == ST_WAIT_RESULT)
+                    $display("[%0t] DCIM_Tile(%m) WAIT_RESULT (all acc done)", $time);
+                else if (next_state == ST_DONE)
+                    $display("[%0t] DCIM_Tile(%m) DONE", $time);
+            end
+`endif
+`endif
+        end
     end
     
     always_comb begin
         next_state = state;
         case (state)
-            ST_IDLE:           if (start_pulse) next_state = ST_LOAD_WEI_REQ;
+            ST_IDLE:           if (start_pulse) next_state = ST_CLEAR;
+            ST_CLEAR:          next_state = ST_LOAD_WEI_REQ;
             ST_LOAD_WEI_REQ:   if (ibuf_handshake_done) next_state = ST_LOAD_WEI_RESP;
             ST_LOAD_WEI_RESP:  if (ibuf_data_received) next_state = ST_LOAD_WEI_DONE;
             ST_LOAD_WEI_DONE: begin
@@ -219,12 +252,15 @@ module DCIM_Tile #(
             ST_LOAD_ACT2_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_ACT2_RESP;
             ST_LOAD_ACT2_RESP: if (ibuf_data_received) next_state = ST_COMPUTE;
             ST_COMPUTE: begin
-                if (conv_handshake_done) begin
+                if (compute_done) begin
                     if (all_rows_processed) next_state = ST_WAIT_RESULT;
-                    else next_state = ST_PREP_PPCACHE;  // Next acc_word: just load from SRAM (already there)
+                    else next_state = ST_PREP_PPCACHE;  // Next acc_word after all nibble phases are consumed
                 end
             end
-            ST_WAIT_RESULT:    if (all_results_collected) next_state = ST_DONE;
+            ST_WAIT_RESULT:    if (all_results_collected) begin
+                if (chunk_has_more) next_state = ST_CLEAR;
+                else next_state = ST_DONE;
+            end
             ST_DONE:           next_state = ST_IDLE;
             default:           next_state = ST_IDLE;
         endcase
@@ -257,12 +293,15 @@ module DCIM_Tile #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
+            chunk_base <= 0;
             dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
             dcim_addr_wei <= 0; dcim_data_wei <= 0;
             conv_valid <= 0; conv_data <= 0;
             ibuf_rd_valid <= 0; ibuf_rd_addr <= 0;
             ibuf_data_latch <= 0;
             act_buf_lo <= 0;
+            conv_sent_reg <= 0;
+            compute_phase_cnt <= 0;
         end else begin
             dcim_wr_wei <= 0;
             dcim_load_wei <= 0;
@@ -272,7 +311,22 @@ module DCIM_Tile #(
             case (state)
                 ST_IDLE: begin
                     wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
+                    chunk_base <= 0;
                     ibuf_rd_valid <= 0;
+                    conv_sent_reg <= 0;
+                    compute_phase_cnt <= 0;
+                end
+
+                ST_CLEAR: begin
+                    wei_load_cnt <= 0;
+                    ppcache_cnt <= 0;
+                    row_cnt <= 0;
+                    if (chunk_continue_req) begin
+                        chunk_base <= chunk_base + chunk_rows;
+                    end
+                    ibuf_rd_valid <= 0;
+                    conv_sent_reg <= 0;
+                    compute_phase_cnt <= 0;
                 end
                 
                 // ==============================================================
@@ -281,7 +335,7 @@ module DCIM_Tile #(
                 // ==============================================================
                 ST_LOAD_WEI_REQ: begin
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= wei_base_addr_reg + wei_load_cnt;
+                    ibuf_rd_addr <= wei_base_addr_reg + chunk_base * CYCLE + wei_load_cnt;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
@@ -325,9 +379,11 @@ module DCIM_Tile #(
                 // Activation 加载
                 // ==============================================================
                 ST_LOAD_ACT_REQ: begin
+                    conv_sent_reg <= 0;
+                    compute_phase_cnt <= 0;
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= is_int16 ? (act_base_addr_reg + row_cnt * 2)
-                                             : (act_base_addr_reg + row_cnt);
+                    ibuf_rd_addr <= is_int16 ? (act_base_addr_reg + (chunk_base + row_cnt) * 2)
+                                             : (act_base_addr_reg + chunk_base + row_cnt);
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
@@ -347,7 +403,7 @@ module DCIM_Tile #(
                 
                 ST_LOAD_ACT2_REQ: begin
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= act_base_addr_reg + row_cnt * 2 + 1;
+                    ibuf_rd_addr <= act_base_addr_reg + (chunk_base + row_cnt) * 2 + 1;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
@@ -363,14 +419,26 @@ module DCIM_Tile #(
                 // 计算
                 // ==============================================================
                 ST_COMPUTE: begin
-                    conv_valid <= 1'b1;
-                    if (conv_handshake_done) begin
-                        conv_valid <= 0;
+                    conv_valid <= !conv_sent_reg;
+                    if (conv_valid && conv_ready) begin
+                        conv_sent_reg <= 1'b1;
+                    end
+                    if (compute_phase_fire) begin
+                        compute_phase_cnt <= compute_phase_cnt + 1'b1;
+                    end
+                    if (compute_done) begin
+                        conv_valid <= 1'b0;
+                        conv_sent_reg <= 1'b0;
+                        compute_phase_cnt <= 0;
                         row_cnt <= row_cnt + 1;
                     end
                 end
                 
                 ST_WAIT_RESULT: begin
+`ifdef SIMULATION
+                    // 若长时间停在此状态，检查 dcim_valid_out 是否 fire
+                    // 原因：结果还在 dcim 核内部流水线中，需等 dcim_valid_out 拉高
+`endif
                 end
                 
                 default: begin
@@ -403,18 +471,40 @@ module DCIM_Tile #(
         end
     endgenerate
     
+    // INT16 模式：4 个有效输出通道对应 4 个 accumulate col（col 0..3）
+    // 每个 col 的结果存在 temp0(WD3) + temp1(WD3) + temp2(WD3) 中，
+    // 完整值 = {temp2, temp1, temp0}（3×WD3 bit），截取低 32 bit 即 INT32 结果。
+    // phys_ch_reg[col*4+0] = temp0, phys_ch_reg[col*4+1] = temp1, phys_ch_reg[col*4+2] = temp2
     generate
         for (gi = 0; gi < 4; gi = gi + 1) begin : int16_extract
-            localparam PHYS_BASE = gi * 4;
-            wire [4*WD3-1:0] int16_full = {phys_ch_reg[PHYS_BASE+3], phys_ch_reg[PHYS_BASE+2], 
-                                            phys_ch_reg[PHYS_BASE+1], phys_ch_reg[PHYS_BASE]};
-            assign int16_result[gi] = int16_full[31:0];
+            localparam COL_BASE = gi * 4;
+            wire [3*WD3-1:0] raw_int16;
+            assign raw_int16 = {phys_ch_reg[COL_BASE+2], phys_ch_reg[COL_BASE+1], phys_ch_reg[COL_BASE]};
+            assign int16_result[gi] = raw_int16[31:0];
         end
     endgenerate
     
     wire [255:0] int8_packed_comb = {int8_result[7], int8_result[6], int8_result[5], int8_result[4],
                                       int8_result[3], int8_result[2], int8_result[1], int8_result[0]};
     wire [127:0] int16_packed_comb = {int16_result[3], int16_result[2], int16_result[1], int16_result[0]};
+    wire [31:0] int8_accum_result [0:7];
+    generate
+        for (gi = 0; gi < 8; gi = gi + 1) begin : int8_chunk_accum
+            assign int8_accum_result[gi] = int8_result[gi] + int8_partial_accum[gi];
+        end
+    endgenerate
+    wire [255:0] int8_accum_packed_comb = {int8_accum_result[7], int8_accum_result[6],
+                                           int8_accum_result[5], int8_accum_result[4],
+                                           int8_accum_result[3], int8_accum_result[2],
+                                           int8_accum_result[1], int8_accum_result[0]};
+    wire [31:0] int16_accum_result [0:3];
+    generate
+        for (gi = 0; gi < 4; gi = gi + 1) begin : int16_chunk_accum
+            assign int16_accum_result[gi] = int16_result[gi] + int16_partial_accum[gi];
+        end
+    endgenerate
+    wire [127:0] int16_accum_packed_comb = {int16_accum_result[3], int16_accum_result[2],
+                                            int16_accum_result[1], int16_accum_result[0]};
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -430,7 +520,16 @@ module DCIM_Tile #(
                 result_cnt <= 0;
                 obuf_wr_valid <= 0;
                 save_phase <= 0;
+                chunk_continue_req <= 0;
+                for (int i = 0; i < 8; i++) int8_partial_accum[i] <= 0;
+                for (int i = 0; i < 4; i++) int16_partial_accum[i] <= 0;
             end else begin
+                if (state == ST_CLEAR) begin
+                    result_cnt <= 0;
+                    obuf_wr_valid <= 0;
+                    save_phase <= 0;
+                    chunk_continue_req <= 0;
+                end
                 case (save_phase)
                     3'd0: begin
                         obuf_wr_valid <= 0;
@@ -451,21 +550,35 @@ module DCIM_Tile #(
                     end
                     
                     3'd2: begin
-                        int8_packed_reg <= int8_packed_comb;
-                        int16_packed_reg <= int16_packed_comb;
-                        // Pre-arm valid + addr/data so phase=3 already has
-                        // valid=1 from cycle 0, removing the "valid is 0
-                        // on entry" race with the arbiter.
-                        obuf_wr_valid <= 1'b1;
-                        obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
-                        if (is_int16_reg) begin
-                            obuf_wr_addr <= out_base_addr_reg + result_cnt;
-                            obuf_wr_data <= int16_packed_comb;
+                        if (chunk_has_more) begin
+                            if (is_int16_reg) begin
+                                for (int i = 0; i < 4; i++) begin
+                                    int16_partial_accum[i] <= int16_partial_accum[i] + int16_result[i];
+                                end
+                            end else begin
+                                for (int i = 0; i < 8; i++) begin
+                                    int8_partial_accum[i] <= int8_partial_accum[i] + int8_result[i];
+                                end
+                            end
+                            chunk_continue_req <= 1'b1;
+                            save_phase <= 3'd0;
                         end else begin
-                            obuf_wr_addr <= out_base_addr_reg + result_cnt * 2;
-                            obuf_wr_data <= int8_packed_comb[127:0];
+                            int8_packed_reg <= int8_accum_packed_comb;
+                            int16_packed_reg <= int16_packed_comb;
+                            // Pre-arm valid + addr/data so phase=3 already has
+                            // valid=1 from cycle 0, removing the "valid is 0
+                            // on entry" race with the arbiter.
+                            obuf_wr_valid <= 1'b1;
+                            obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
+                            if (is_int16_reg) begin
+                                obuf_wr_addr <= out_base_addr_reg + result_cnt;
+                                obuf_wr_data <= int16_accum_packed_comb;
+                            end else begin
+                                obuf_wr_addr <= out_base_addr_reg + result_cnt * 2;
+                                obuf_wr_data <= int8_accum_packed_comb[127:0];
+                            end
+                            save_phase <= 3'd3;
                         end
-                        save_phase <= 3'd3;
                     end
                     
                     3'd3: begin
@@ -524,6 +637,25 @@ module DCIM_Tile #(
 `endif
 `endif
 
+`ifdef SIMULATION
+`ifdef PROBE_DCIM_TILE_VALID
+    always_ff @(posedge clk) begin
+        if (rst_n && dcim_valid_out && dcim_ready_out) begin
+            $display("[%0t] DCIM_Tile[%0d] dcim_valid_out fired: result_cnt=%0d save_phase=%0d",
+                     $time, TILE_IDX, result_cnt, save_phase);
+            if (is_int16_reg && out_base_addr_reg >= 20'h20018 && out_base_addr_reg <= 20'h2001f) begin
+                $display("[%0t] DCIM_Tile[%0d] INT16 debug: out_base=0x%05h chunk_base=%0d row_cnt=%0d data_out=0x%0h",
+                         $time, TILE_IDX, out_base_addr_reg, chunk_base, row_cnt, dcim_data_out);
+            end
+        end
+        if (rst_n && state == ST_WAIT_RESULT && !all_results_collected && dcim_valid_out === 1'b0)
+            if ($time % 10000 == 0)
+                $display("[%0t] DCIM_Tile[%0d] WAIT_RESULT: still waiting dcim_valid_out (phase=%0d result_cnt=%0d)",
+                         $time, TILE_IDX, save_phase, result_cnt);
+    end
+`endif
+`endif
+
     // ========================================================================
     // DCIM 计算核心实例化
     // ========================================================================
@@ -546,7 +678,7 @@ module DCIM_Tile #(
         .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC)
     ) u_dcim (
         .clk(clk), .rstn(rst_n), .clr(dcim_clr), .ena(dcim_ena),
-        .mode_cal(mode_reg), .acc(acc_reg),
+        .mode_cal(mode_reg), .acc(chunk_rows),
         .wr_wei(dcim_wr_wei), .load_wei(dcim_load_wei), .swap_wei(dcim_swap_wei),
         .up_ready_wei(dcim_ready_wei), .up_address_wei(dcim_addr_wei),
         .up_data_wei(dcim_data_wei), .up_be_wei({SRAM_WD{1'b1}}),

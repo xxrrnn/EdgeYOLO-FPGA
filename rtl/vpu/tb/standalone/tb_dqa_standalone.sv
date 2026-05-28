@@ -40,11 +40,7 @@
 //   Python: dqa_out[h,w,c] = int32[h,w,c] * scale[c] + bias[c]
 //   输出 NHWC flatten → 128-bit words (4 FP32 per word, little-endian)
 //
-// 测试用例：
-//   - t1_min_4ch: 1×1×4 (最小用例)
-//   - t2_full_word_16ch: 1×1×16 (完整 128-bit word)
-//   - t3_8ch_2px: 2×1×8 (多 pixel)
-//   - t4_2x2x4: 2×2×4 (空间多 pixel)
+// 测试用例：YOLOv5n L1/L2/L3 @ scale=1.0（原始网络参数）
 //
 // ==============================================================================
 
@@ -130,10 +126,12 @@ module tb_dqa_standalone;
         .doutb(tb_obuf_douta)
     );
 
-    reg [WB_BANDWIDTH-1:0] wb_mem [0:15];
+    localparam WB_MEM_WORDS = 32;  // 512 B — fits scale+bias @ byte 0 / 0x100
+
+    reg [WB_BANDWIDTH-1:0] wb_mem [0:WB_MEM_WORDS-1];
     always @(posedge clk) begin
         if (wb_enb)
-            wb_doutb <= wb_mem[wb_addrb[3:0]];
+            wb_doutb <= wb_mem[wb_addrb[4:0]];
     end
 
     dqa_relu_unit #(
@@ -219,11 +217,24 @@ module tb_dqa_standalone;
         input logic [31:0] exp_lane,
         inout bit case_ok
     );
+        real gf, ef, diff, tol;
         begin
-            if (!fp32_lane_close(got_lane, exp_lane)) begin
-                $display("FAIL [%s]: OUT word %0d lane %0d got=0x%08h exp=0x%08h",
-                         case_name, word_idx, lane_idx, got_lane, exp_lane);
+            if ((^got_lane === 1'bx) || (^exp_lane === 1'bx)) begin
+                $display("FAIL [%s]: OUT word %0d lane %0d got=X exp=0x%08h",
+                         case_name, word_idx, lane_idx, exp_lane);
                 case_ok = 1'b0;
+            end else if (got_lane == exp_lane) begin
+                // exact match
+            end else begin
+                gf = $bitstoshortreal(got_lane);
+                ef = $bitstoshortreal(exp_lane);
+                diff = (gf > ef) ? (gf - ef) : (ef - gf);
+                tol  = 1.0e-2 * ((ef > 0.0 ? ef : -ef) + 1.0);
+                if (diff > tol) begin
+                    $display("FAIL [%s]: OUT word %0d lane %0d got=0x%08h (%f) exp=0x%08h (%f)",
+                             case_name, word_idx, lane_idx, got_lane, gf, exp_lane, ef);
+                    case_ok = 1'b0;
+                end
             end
         end
     endtask
@@ -264,48 +275,89 @@ module tb_dqa_standalone;
         tb_obuf_ena <= 1'b0;
     endtask
 
-    function automatic logic [127:0] get_expect_word(input int case_idx, input int wi);
-        case (case_idx)
-            0: return DQA_CASE_0_OUT[wi];
-            1: return DQA_CASE_1_OUT[wi];
-            2: return DQA_CASE_2_OUT[wi];
-            3: return DQA_CASE_3_OUT[wi];
-            default: return '0;
+    localparam int HEX_MEM_DEPTH = 65536;
+    reg [127:0] hex_mem [0:HEX_MEM_DEPTH-1];
+
+    function automatic string case_in_hex(input int idx);
+        case (idx)
+            0: return DQA_CASE_0_IN_HEX;
+            1: return DQA_CASE_1_IN_HEX;
+            2: return DQA_CASE_2_IN_HEX;
+            default: return "";
         endcase
     endfunction
 
-    task automatic load_case_input(input int case_idx, input int src_base, input int n_in_words);
-        integer k;
-        case (case_idx)
-            0: for (k = 0; k < n_in_words; k = k + 1) obuf_write_word(src_base + k, DQA_CASE_0_IN[k]);
-            1: for (k = 0; k < n_in_words; k = k + 1) obuf_write_word(src_base + k, DQA_CASE_1_IN[k]);
-            2: for (k = 0; k < n_in_words; k = k + 1) obuf_write_word(src_base + k, DQA_CASE_2_IN[k]);
-            3: for (k = 0; k < n_in_words; k = k + 1) obuf_write_word(src_base + k, DQA_CASE_3_IN[k]);
-            default: $fatal(1, "bad case idx %0d", case_idx);
+    function automatic string case_out_hex(input int idx);
+        case (idx)
+            0: return DQA_CASE_0_OUT_HEX;
+            1: return DQA_CASE_1_OUT_HEX;
+            2: return DQA_CASE_2_OUT_HEX;
+            default: return "";
         endcase
+    endfunction
+
+    function automatic int case_poll_limit(input int idx);
+        case (idx)
+            0: return DQA_CASE_0_POLL_LIMIT;
+            1: return DQA_CASE_1_POLL_LIMIT;
+            2: return DQA_CASE_2_POLL_LIMIT;
+            default: return 500000;
+        endcase
+    endfunction
+
+    function automatic int scale_bias_words(input int c);
+        return (c + 3) / 4;
+    endfunction
+
+    task automatic load_hex_to_obuf(input string path, input int base, input int nwords);
+        integer k;
+        begin
+            $readmemh(path, hex_mem);
+            for (k = 0; k < nwords; k = k + 1)
+                obuf_write_word(base + k, hex_mem[k]);
+        end
     endtask
 
-    task automatic load_scale_bias(input int case_idx);
-        integer k;
-        case (case_idx)
-            0: begin
-                for (k = 0; k < 1; k = k + 1) wb_mem[0 + k] = DQA_CASE_0_SCALE[k];
-                for (k = 0; k < 1; k = k + 1) wb_mem[4 + k] = DQA_CASE_0_BIAS[k];
-            end
-            1: begin
-                for (k = 0; k < 4; k = k + 1) wb_mem[0 + k] = DQA_CASE_1_SCALE[k];
-                for (k = 0; k < 4; k = k + 1) wb_mem[4 + k] = DQA_CASE_1_BIAS[k];
-            end
-            2: begin
-                for (k = 0; k < 2; k = k + 1) wb_mem[0 + k] = DQA_CASE_2_SCALE[k];
-                for (k = 0; k < 2; k = k + 1) wb_mem[4 + k] = DQA_CASE_2_BIAS[k];
-            end
-            3: begin
-                for (k = 0; k < 1; k = k + 1) wb_mem[0 + k] = DQA_CASE_3_SCALE[k];
-                for (k = 0; k < 1; k = k + 1) wb_mem[4 + k] = DQA_CASE_3_BIAS[k];
-            end
-            default: $fatal(1, "bad case idx %0d", case_idx);
+    function automatic int case_scale_byte_addr(input int idx);
+        case (idx)
+            0: return DQA_CASE_0_SCALE_BYTE_ADDR;
+            1: return DQA_CASE_1_SCALE_BYTE_ADDR;
+            2: return DQA_CASE_2_SCALE_BYTE_ADDR;
+            default: return 0;
         endcase
+    endfunction
+
+    function automatic int case_bias_byte_addr(input int idx);
+        case (idx)
+            0: return DQA_CASE_0_BIAS_BYTE_ADDR;
+            1: return DQA_CASE_1_BIAS_BYTE_ADDR;
+            2: return DQA_CASE_2_BIAS_BYTE_ADDR;
+            default: return 0;
+        endcase
+    endfunction
+
+    task automatic load_scale_bias(input int case_idx, input int c);
+        integer k, nw, scale_wbase, bias_wbase;
+        begin
+            nw = scale_bias_words(c);
+            scale_wbase = case_scale_byte_addr(case_idx) >> 4;
+            bias_wbase  = case_bias_byte_addr(case_idx) >> 4;
+            case (case_idx)
+                0: begin
+                    for (k = 0; k < nw; k = k + 1) wb_mem[scale_wbase + k] = DQA_CASE_0_SCALE[k];
+                    for (k = 0; k < nw; k = k + 1) wb_mem[bias_wbase + k]  = DQA_CASE_0_BIAS[k];
+                end
+                1: begin
+                    for (k = 0; k < nw; k = k + 1) wb_mem[scale_wbase + k] = DQA_CASE_1_SCALE[k];
+                    for (k = 0; k < nw; k = k + 1) wb_mem[bias_wbase + k]  = DQA_CASE_1_BIAS[k];
+                end
+                2: begin
+                    for (k = 0; k < nw; k = k + 1) wb_mem[scale_wbase + k] = DQA_CASE_2_SCALE[k];
+                    for (k = 0; k < nw; k = k + 1) wb_mem[bias_wbase + k]  = DQA_CASE_2_BIAS[k];
+                end
+                default: $fatal(1, "bad case idx %0d", case_idx);
+            endcase
+        end
     endtask
 
     task automatic run_one_case(
@@ -315,65 +367,67 @@ module tb_dqa_standalone;
         input int src_base, input int dst_base,
         input int n_in_words, input int n_out_words
     );
-        integer wi;
+        integer wi, poll_lim;
+        string out_path;
         logic [127:0] got, exp;
         bit case_ok;
         begin
             test_total = test_total + 1;
             case_ok = 1'b1;
             timed_out = 1'b0;
+            poll_lim = case_poll_limit(case_idx);
+            out_path = case_out_hex(case_idx);
 
-            load_case_input(case_idx, src_base, n_in_words);
-            load_scale_bias(case_idx);
+            load_hex_to_obuf(case_in_hex(case_idx), src_base, n_in_words);
+            load_scale_bias(case_idx, c);
 
             dqa_src_addr   = src_base << 4;
             dqa_dst_addr   = dst_base << 4;
-            dqa_scale_addr = 32'h0;
-            dqa_bias_addr  = 32'h40;
+            dqa_scale_addr = case_scale_byte_addr(case_idx);
+            dqa_bias_addr  = case_bias_byte_addr(case_idx);
             dqa_src_c = c;
             dqa_src_h = h;
             dqa_src_w = w;
 
             $display("");
-            $display("=== Case %0d: %s (%0dx%0dx%0d) ===", case_idx, case_name, h, w, c);
-            $display("  src_addr=0x%08h dst_addr=0x%08h scale_addr=0x%08h bias_addr=0x%08h",
-                     dqa_src_addr, dqa_dst_addr, dqa_scale_addr, dqa_bias_addr);
+            $display("=== Case %0d: %s (%0dx%0dx%0d) poll_limit=%0d ===",
+                     case_idx, case_name, h, w, c, poll_lim);
+            $display("  in=%s out=%s", case_in_hex(case_idx), out_path);
 
             @(posedge clk);
             dqa_unit_start = 1;
             @(posedge clk);
             dqa_unit_start = 0;
-            
+
             begin : wait_poll
                 integer poll_i;
                 bit saw_busy;
                 saw_busy = 1'b0;
-                for (poll_i = 0; poll_i < 200000; poll_i = poll_i + 1) begin
+                for (poll_i = 0; poll_i < poll_lim; poll_i = poll_i + 1) begin
                     @(posedge clk);
                     if (dqa_unit_ready == 1'b0)
                         saw_busy = 1'b1;
                     else if (saw_busy)
                         disable wait_poll;
                 end
-                if (poll_i >= 200000) begin
+                if (poll_i >= poll_lim) begin
                     timed_out = 1'b1;
                     $display("[%0t] TIMEOUT case %0d state=%0d", $time, case_idx, u_dqa.c_state);
                 end
             end
-            dqa_unit_start = 0;
 
             if (timed_out) begin
                 $display("FAIL [%s]: DQA did not return to ready", case_name);
                 case_ok = 1'b0;
             end
 
-            // DQA 写 OBUF Port A 需要穿过 OBUF 顶层两级输入寄存器后才真正落到 bank。
-            // ready 回到 1 后等待几拍，确保最后一个写请求已经提交到存储体。
             repeat(4) @(posedge clk);
+
+            $readmemh(out_path, hex_mem);
 
             for (wi = 0; wi < n_out_words; wi = wi + 1) begin
                 obuf_read_word_task(dst_base + wi, got);
-                exp = get_expect_word(case_idx, wi);
+                exp = hex_mem[wi];
                 compare_fp32_lane(case_name, wi, 0, got[31:0],   exp[31:0],   case_ok);
                 compare_fp32_lane(case_name, wi, 1, got[63:32],  exp[63:32],  case_ok);
                 compare_fp32_lane(case_name, wi, 2, got[95:64],  exp[95:64],  case_ok);
@@ -390,12 +444,15 @@ module tb_dqa_standalone;
     endtask
 
     integer i;
+    integer only_case;
     initial begin
         test_pass = 0;
         test_fail = 0;
         test_total = 0;
+        only_case = -1;
+        void'($value$plusargs("ONLY_CASE=%d", only_case));
 
-        $display("=== tb_dqa_standalone: multi-case DQA coverage ===");
+        $display("=== tb_dqa_standalone: YOLOv5n L1/L2/L3 (network params golden) ===");
         $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d GB_BW=%0d OBUF_NBPIPE=%0d",
                  FP_CORE_NUM, FP_TRAN_NUM, GB_BANDWIDTH, OBUF_NBPIPE);
 
@@ -404,31 +461,29 @@ module tb_dqa_standalone;
         dqa_src_c = 0; dqa_src_h = 0; dqa_src_w = 0;
         tb_obuf_ena = 0; tb_obuf_wea = 0; tb_obuf_addra = 0; tb_obuf_dina = 0;
 
-        for (i = 0; i < 16; i = i + 1)
+        for (i = 0; i < WB_MEM_WORDS; i = i + 1)
             wb_mem[i] = 0;
 
         #20; rst_n = 1;
         #20;
 
-        run_one_case(0, "t1_min_4ch",
-                     DQA_CASE_0_H, DQA_CASE_0_W, DQA_CASE_0_C,
-                     DQA_CASE_0_SRC_BASE, DQA_CASE_0_DST_BASE,
-                     DQA_CASE_0_N_IN_WORDS, DQA_CASE_0_N_OUT_WORDS);
+        if (only_case < 0 || only_case == 0)
+            run_one_case(0, "L1_model.1.conv",
+                         DQA_CASE_0_H, DQA_CASE_0_W, DQA_CASE_0_C,
+                         DQA_CASE_0_SRC_BASE, DQA_CASE_0_DST_BASE,
+                         DQA_CASE_0_N_IN_WORDS, DQA_CASE_0_N_OUT_WORDS);
 
-        run_one_case(1, "t2_full_word_16ch",
-                     DQA_CASE_1_H, DQA_CASE_1_W, DQA_CASE_1_C,
-                     DQA_CASE_1_SRC_BASE, DQA_CASE_1_DST_BASE,
-                     DQA_CASE_1_N_IN_WORDS, DQA_CASE_1_N_OUT_WORDS);
+        if (only_case < 0 || only_case == 1)
+            run_one_case(1, "L2_model.2.cv1.conv",
+                         DQA_CASE_1_H, DQA_CASE_1_W, DQA_CASE_1_C,
+                         DQA_CASE_1_SRC_BASE, DQA_CASE_1_DST_BASE,
+                         DQA_CASE_1_N_IN_WORDS, DQA_CASE_1_N_OUT_WORDS);
 
-        run_one_case(2, "t3_8ch_2px",
-                     DQA_CASE_2_H, DQA_CASE_2_W, DQA_CASE_2_C,
-                     DQA_CASE_2_SRC_BASE, DQA_CASE_2_DST_BASE,
-                     DQA_CASE_2_N_IN_WORDS, DQA_CASE_2_N_OUT_WORDS);
-
-        run_one_case(3, "t4_2x2x4",
-                     DQA_CASE_3_H, DQA_CASE_3_W, DQA_CASE_3_C,
-                     DQA_CASE_3_SRC_BASE, DQA_CASE_3_DST_BASE,
-                     DQA_CASE_3_N_IN_WORDS, DQA_CASE_3_N_OUT_WORDS);
+        if (only_case < 0 || only_case == 2)
+            run_one_case(2, "L3_model.2.m.0.cv2.conv",
+                         DQA_CASE_2_H, DQA_CASE_2_W, DQA_CASE_2_C,
+                         DQA_CASE_2_SRC_BASE, DQA_CASE_2_DST_BASE,
+                         DQA_CASE_2_N_IN_WORDS, DQA_CASE_2_N_OUT_WORDS);
 
         $display("");
         $display("=== Summary: %0d/%0d PASS, %0d FAIL ===", test_pass, test_total, test_fail);

@@ -66,7 +66,7 @@ module DCIM_Array_bd #(
     // =========================================================================
     input  wire [BUF_DATA_WIDTH/8-1:0]   ibuf_ext_wea,
     input  wire                          ibuf_ext_ena,
-    input  wire [AXI_BRAM_ADDR_WIDTH-1:0] ibuf_ext_addra,
+    input  wire [IBUF_ADDR_WIDTH+3:0]    ibuf_ext_addra,  // 字节地址：17+4=21 bits (2MB)
     input  wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_dina,
     output wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_douta,  // Group 0 读回
 
@@ -96,7 +96,7 @@ module DCIM_Array_bd #(
     // =========================================================================
     // 状态输出
     // =========================================================================
-    output wire done
+    output wire ready
 );
 
     // =========================================================================
@@ -264,8 +264,8 @@ module DCIM_Array_bd #(
     wire [NUM_GROUPS-1:0]                obuf_ext_douta_valid_v;
 
     // VPU 读出 = OBUF Port A 读出（同周期到达，需要等 OBUF 流水线延迟）
-    assign vpu_obuf_dout     = obuf_ext_douta_v[BUF_DATA_WIDTH-1:0];
-    assign vpu_obuf_rd_valid = obuf_ext_douta_valid_v[0];  // Group 0，lite 仅 1 组
+    assign vpu_obuf_dout          = obuf_ext_douta_v[BUF_DATA_WIDTH-1:0];
+    assign vpu_obuf_rd_valid      = obuf_ext_douta_valid_v[0];  // Group 0，lite 仅 1 组
 
     generate
         if (NUM_GROUPS == 1) begin : gen_obuf_single
@@ -317,7 +317,9 @@ module DCIM_Array_bd #(
         .clk             (clk),
         .rst_n           (rst_n),
         .start           (cfg_start),
-        .done            (done),        .mode            (cfg_mode),
+        .done            (),
+        .ready           (ready),
+        .mode            (cfg_mode),
         .acc_depth       (cfg_acc_depth),
         .act_base_addr   (cfg_act_base_addr),
         .wei_base_addrs  (cfg_wei_base_addrs),

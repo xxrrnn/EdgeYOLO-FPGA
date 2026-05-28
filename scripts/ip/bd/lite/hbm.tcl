@@ -113,29 +113,37 @@ set_property -dict [list \
 ] [get_bd_cells dcim_obuf_smc]
 
 # 1 IBUF controller (lite: 1 group, 2MB, 128-bit)
+# READ_LATENCY = 6: ibuf.v IN_REG1(1)+IN_REG2_bank(1)+memrega(1)+NBPIPE(2)+douta(1) = 6
+# chip_defines.vh: DCIM_IBUF_RD_LATENCY 注释说实际延迟6，见 chip_defines.vh
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 dcim_ibuf_ctrl_0
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
   CONFIG.SINGLE_PORT_BRAM {1} \
   CONFIG.ECC_TYPE {0} \
+  CONFIG.READ_LATENCY {6} \
 ] [get_bd_cells dcim_ibuf_ctrl_0]
 
 # 1 OBUF controller (lite: 1 group, 16MB, 128-bit)
+# READ_LATENCY = 7: obuf.v IN_REG1(1)+IN_REG2(1)+IN_REG3_bank(1)+memrega(1)+NBPIPE(2)+douta(1) = 7
+# chip_defines.vh: OBUF 读延迟注释 = 7
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 dcim_obuf_ctrl_0
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
   CONFIG.SINGLE_PORT_BRAM {1} \
   CONFIG.ECC_TYPE {0} \
+  CONFIG.READ_LATENCY {7} \
 ] [get_bd_cells dcim_obuf_ctrl_0]
 
 # ==============================================================================
 # 6. VPU Weight Buffer Controller (WB only; GB removed in lite)
 # ==============================================================================
+# READ_LATENCY = 1: global_buffer_bram LOW_LATENCY 模式, ram_data_a 直通 douta (1 cycle)
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_wb_ctrl
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
   CONFIG.SINGLE_PORT_BRAM {1} \
   CONFIG.ECC_TYPE {0} \
+  CONFIG.READ_LATENCY {1} \
 ] [get_bd_cells vpu_wb_ctrl]
 
 # ==============================================================================

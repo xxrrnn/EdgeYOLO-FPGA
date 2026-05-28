@@ -47,7 +47,7 @@ module tb_DCIM_Array;
     // IBUF 单套广播端口（DCIM_Array_bd 内部展开到 NUM_GROUPS 组）
     reg  [BUF_DATA_WIDTH/8-1:0] ibuf_ext_wea;
     reg                         ibuf_ext_ena;
-    reg  [`DCIM_AXI_BRAM_ADDR_WIDTH-1:0] ibuf_ext_addra;
+    reg  [`DCIM_IBUF_ADDR_WIDTH+3:0] ibuf_ext_addra;
     reg  [BUF_DATA_WIDTH-1:0]   ibuf_ext_dina;
     wire [BUF_DATA_WIDTH-1:0]   ibuf_ext_douta;
 
@@ -120,7 +120,6 @@ module tb_DCIM_Array;
         .obuf_ext_addra  (obuf_ext_addra),
         .obuf_ext_dina   (obuf_ext_dina),
         .obuf_ext_douta  (obuf_ext_douta),
-        .done            (done),
         .ready           (ready)
     );
 
@@ -130,8 +129,7 @@ module tb_DCIM_Array;
             @(posedge clk);
             ibuf_ext_ena   <= 1'b1;
             ibuf_ext_wea   <= {(BUF_DATA_WIDTH / 8) {1'b1}};
-            ibuf_ext_addra <= {{(`DCIM_AXI_BRAM_ADDR_WIDTH - BUF_ADDR_WIDTH - 4){1'b0}},
-                                addr, 4'b0000};  // word_addr << 4
+            ibuf_ext_addra <= {addr, 4'b0000};  // word_addr << 4
             ibuf_ext_dina  <= data;
             @(posedge clk);
             ibuf_ext_ena <= 1'b0;

@@ -104,6 +104,19 @@ module obuf_wr_arbiter #(
                 obuf_we <= tile_wr_strb[grant_idx*STRB_WIDTH +: STRB_WIDTH];
                 obuf_addr <= tile_wr_addr[grant_idx*ADDR_WIDTH +: ADDR_WIDTH];
                 obuf_din <= tile_wr_data[grant_idx*DATA_WIDTH +: DATA_WIDTH];
+`ifdef SIMULATION
+`ifdef PROBE_OBUF_ARB_GRANT
+                if (tile_wr_addr[grant_idx*ADDR_WIDTH +: ADDR_WIDTH] >= 20'h20018 &&
+                    tile_wr_addr[grant_idx*ADDR_WIDTH +: ADDR_WIDTH] <= 20'h2001f) begin
+                    $display("[%0t] PROBE.OBUF_ARB grant tile=%0d addr=0x%05h data=0x%032h strb=0x%04h valid=0x%0h valid_q=0x%0h taken=0x%0h",
+                             $time, grant_idx,
+                             tile_wr_addr[grant_idx*ADDR_WIDTH +: ADDR_WIDTH],
+                             tile_wr_data[grant_idx*DATA_WIDTH +: DATA_WIDTH],
+                             tile_wr_strb[grant_idx*STRB_WIDTH +: STRB_WIDTH],
+                             tile_wr_valid, tile_wr_valid_q, grant_taken);
+                end
+`endif
+`endif
                 rr_ptr <= grant_idx + 1;
             end else begin
                 obuf_en <= 0;

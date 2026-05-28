@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 //==============================================================================
 // mp_unit_fixed - 硬编码 5×5 MaxPooling 单元
 //==============================================================================
@@ -42,7 +42,8 @@ module mp_unit_fixed #(
     output logic [GB_BANDWIDTH-1:0]      gb_dinb,
     output logic [GB_BANDWIDTH/8-1:0]    gb_web,
     output logic                         gb_enb,
-    input  wire  [GB_BANDWIDTH-1:0]      gb_doutb
+    input  wire  [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire                          gb_doutb_valid
 );
 
     // =========================================================================
@@ -209,8 +210,9 @@ module mp_unit_fixed #(
 
                 // ---------------------------------------------------------
                 S_LOAD_WAIT: begin
-                    // BRAM 读取延迟 1 周期
-                    state <= S_LOAD_CMP;
+                    if (gb_doutb_valid) begin
+                        state <= S_LOAD_CMP;
+                    end
                 end
 
                 // ---------------------------------------------------------

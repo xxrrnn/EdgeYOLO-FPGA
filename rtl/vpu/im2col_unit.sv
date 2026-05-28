@@ -1,5 +1,4 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
 `include "chip_defines.vh"
 
 // ============================================================================
@@ -9,10 +8,11 @@
 // kH*kW*CH_IN 元素），存回 OBUF 给 DCIM 计算用。
 //
 // 数据布局 (NHWC, INT8)：
-//   输入 feature: shape [H, W, CH_IN]，每像素 CH_IN bytes
-//     地址 = src_addr + (ih*W + iw)*CH_IN + c
-//   输出 im2col:  shape [OH*OW, kH*kW*CH_IN]，每行 = kH*kW*CH_IN bytes
-//     地址 = dst_addr + (oh*OW+ow)*(kH*kW*CH_IN) + (kh*kW+kw)*CH_IN + c
+//   输入 feature: shape [H, W, CH_IN]，OBUF 中每像素 ceil(CH_IN/16)*16 字节（int8_hwc_words 对齐）
+//     地址 = src_addr + (ih*W+iw)*in_col_stride + c_chunk*16
+//   输出 im2col:  shape [OH*OW, acc_depth*16]，每行前 kH*kW*CH_IN 字节有效，行尾补 0
+//     地址 = dst_addr + (oh*OW+ow)*row_stride + (kh*kW+kw)*CH_IN + c
+//     row_stride = ceil(kH*kW*CH_IN/16)*16
 //
 // OH = (H + 2*padH - kH)/strideH + 1，软件预算后通过 addr_s 传入
 // OW = (W + 2*padW - kW)/strideW + 1，软件预算后通过 addr_t 传入
@@ -76,7 +76,8 @@ module im2col_unit #(
     output reg  [GB_BANDWIDTH-1:0]       gb_dinb,
     output reg  [GB_BANDWIDTH/8-1:0]     gb_web,
     output reg                           gb_enb,
-    input  wire [GB_BANDWIDTH-1:0]       gb_doutb
+    input  wire [GB_BANDWIDTH-1:0]       gb_doutb,
+    input  wire                          gb_doutb_valid   // OBUF 读数据有效（与 gb_doutb 同拍）
 );
 
     // =========================================================================
@@ -102,13 +103,14 @@ module im2col_unit #(
     localparam S_IDLE       = 4'd0;
     localparam S_INIT       = 4'd1;
     localparam S_PRECOMPUTE = 4'd9;  // 预算二级乘法（S_INIT 结果 → 最终常量）
-    localparam S_READ_REQ   = 4'd2;  // 发出读请求
-    localparam S_READ_WAIT  = 4'd3;  // 等待读延迟（OBUF 流水线）
-    localparam S_READ_LATCH = 4'd4;  // 锁存读回数据
+    localparam S_READ_REQ   = 4'd2;  // 发出读请求（单周期 pulse）
+    localparam S_READ_WAIT  = 4'd3;  // 等待 douta_valid
+    localparam S_READ_LATCH = 4'd4;  // 释放总线
     localparam S_WRITE      = 4'd5;  // 发出写请求
     localparam S_NEXT_C     = 4'd6;  // 推进 c_chunk
     localparam S_NEXT       = 4'd7;  // 推进 kw/kh/ow/oh
     localparam S_DONE       = 4'd8;
+    localparam S_WRITE_TAIL = 4'd10; // CH_IN 字节跨 128-bit 字边界时的第二拍写
 
     reg [3:0] state;
 
@@ -120,16 +122,14 @@ module im2col_unit #(
     reg [15:0]        c_chunk_max;   // = ceil(CH_IN / 16)
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
-    // 读延迟计数
-    // OBUF 读延迟 (v2 双级输入寄存器):
-    //   DCIM_Array_bd mux(0) + obuf IN_REG1(1) + per-bank IN_REG2(1)
-    //   + memrega(1) + NBPIPE(2) + bank_sel_pipe→output_mux(1) + obuf output_mux(1) = 7
-    // 加上 VPU 端 obuf_dout 入 nn_lut 等的余量，统一等到 10 拍。
-    localparam READ_LATENCY = 10;
-    reg [3:0] rd_wait_cnt;
+    // 读延迟：使用 obuf.v douta_valid（NBPIPE=3 时 Port A 端到端 8 拍）
+    // 保留 rd_wait_cnt 仅作仿真超时保护
+    localparam READ_TIMEOUT = 17;  // 16+1 margin（用于强制重编译 VCS 缓存）
+    reg [4:0] rd_wait_cnt;
 
-    // 锁存的读数据
+    // 锁存的读数据 + 读地址在 128-bit 字内的字节偏移
     reg [GB_BANDWIDTH-1:0] rd_data_reg;
+    reg [3:0]              in_byte_in_word_r;
 
     // =========================================================================
     // 地址计算（完全流水线化：所有乘法在 S_INIT 预算，运行时只有加减法）
@@ -138,19 +138,19 @@ module im2col_unit #(
     wire [GB_ADDR_WIDTH-1:0] c_chunk_byte_offset = c_chunk * C_CHUNK_BYTES;
 
     // 预算常量（S_INIT 算一级，S_PRECOMPUTE 算二级）
-    reg [31:0] row_stride_r;         // = kH * kW * CH_IN  （二级，S_PRECOMPUTE）
-    reg [31:0] col_stride_r;         // = CH_IN（直接赋值）
+    reg [31:0] row_stride_r;         // = ceil(kH*kW*CH_IN/16)*16，与 DCIM acc_depth 行对齐
+    reg [31:0] in_col_stride_r;      // feature map 像素间距：ceil(CH_IN/16)*16（16B channel-group 对齐）
     reg [31:0] w_times_c_r;          // = W * CH_IN（一级，S_INIT）
     reg [31:0] stride_h_wc_r;        // = strideH * W * CH_IN（二级，S_PRECOMPUTE）
     reg [31:0] stride_w_c_r;         // = strideW * CH_IN（一级，S_INIT）
-    reg [31:0] kw_times_c_r;         // = kW * CH_IN（一级，S_INIT，供 row_stride 用）
+    reg [31:0] kw_times_c_r;         // = kW * CH_IN（一级，供 row_stride 自然字节数）
     reg signed [31:0] in_base_r;  // = src_addr - padH*W*C - padW*C（二级）
 
     // 增量累加寄存器（有符号，确保与 in_base_r 相加时不溢出）
     reg signed [31:0] in_oh_acc_r;   // = oh * stride_h_wc_r
     reg signed [31:0] in_kh_acc_r;   // = kh * w_times_c_r
     reg signed [31:0] in_ow_acc_r;   // = ow * stride_w_c_r
-    reg signed [31:0] in_kw_acc_r;   // = kw * col_stride_r
+    reg signed [31:0] in_kw_acc_r;   // = kw * in_col_stride_r
     // 组合：全有符号加法，地址截断到 GB_ADDR_WIDTH
     wire signed [31:0] in_pixel_byte_addr_s =
         $signed(in_base_r) + $signed(in_oh_acc_r) + $signed(in_kh_acc_r)
@@ -163,11 +163,53 @@ module im2col_unit #(
     wire [GB_ADDR_WIDTH-1:0] out_byte_addr =
         dst_addr_r + out_row_offset_r + out_col_offset_r + c_chunk_byte_offset;
 
-    // 写使能 mask：写满 16 byte（一个 128-bit word），不管 CH_IN 是否对齐 16
-    // (CH_IN 不是 16 倍数的情况由软件 padding 处理)
-    wire [GB_BANDWIDTH/8-1:0] write_mask = {(GB_BANDWIDTH/8){1'b1}};
+    // 写使能/数据：按字内偏移放置 CH_IN 字节；跨 16B 边界时分两拍写
+    wire [3:0] out_byte_in_word = out_byte_addr[3:0];
+    wire [31:0] write_rem_bytes = (src_c_r > (c_chunk * C_CHUNK_BYTES)) ?
+                                  (src_c_r - (c_chunk * C_CHUNK_BYTES)) : 32'd0;
+    wire [4:0] write_chunk_nbyte = (write_rem_bytes > C_CHUNK_BYTES) ?
+                                   5'd16 : write_rem_bytes[4:0];
+    // 必须用 6-bit 相加，避免 4-bit out_byte_in_word 截断导致 write_need_tail 恒为 0
+    wire [5:0] write_end_pos = {2'b0, out_byte_in_word} + {1'b0, write_chunk_nbyte};
+    wire [4:0] write_first_nbyte = (write_end_pos > C_CHUNK_BYTES) ?
+                                   (C_CHUNK_BYTES[4:0] - out_byte_in_word) : write_chunk_nbyte;
+    wire [4:0] write_tail_nbyte = (write_end_pos > C_CHUNK_BYTES) ?
+                                  (write_end_pos[4:0] - C_CHUNK_BYTES[4:0]) : 5'd0;
+    wire       write_need_tail = (write_tail_nbyte != 5'd0);
+    wire [GB_ADDR_WIDTH-1:0] write_byte_addr_aligned = out_byte_addr & ~32'd15;
+    wire                    write_is_tail = (state == S_WRITE_TAIL);
+    reg [GB_BANDWIDTH/8-1:0] write_mask;
+    reg [GB_BANDWIDTH-1:0] write_din_aligned;
+    integer write_mask_i, write_byte_pos;
+    always_comb begin
+        write_mask = {GB_BANDWIDTH/8{1'b0}};
+        write_din_aligned = {GB_BANDWIDTH{1'b0}};
+        if (!write_is_tail) begin
+            for (write_mask_i = 0; write_mask_i < write_first_nbyte; write_mask_i = write_mask_i + 1) begin
+                write_byte_pos = out_byte_in_word + write_mask_i;
+                write_mask[write_byte_pos] = 1'b1;
+                if (in_bound)
+                    write_din_aligned[write_byte_pos*8 +: 8] =
+                        rd_data_reg[(in_byte_in_word_r + write_mask_i) * 8 +: 8];
+            end
+        end else begin
+            for (write_mask_i = 0; write_mask_i < write_tail_nbyte; write_mask_i = write_mask_i + 1) begin
+                write_byte_pos = write_mask_i;
+                write_mask[write_byte_pos] = 1'b1;
+                if (in_bound)
+                    write_din_aligned[write_byte_pos*8 +: 8] =
+                        rd_data_reg[(in_byte_in_word_r + write_first_nbyte + write_mask_i) * 8 +: 8];
+            end
+        end
+    end
 
-    // 输入是否在范围内
+    // 输入坐标组合计算（S_READ_REQ 同拍 in_bound 判定）
+    wire signed [15:0] ih_calc = $signed(oh) * strideH_r - padH_r + $signed({8'd0, kh});
+    wire signed [15:0] iw_calc = $signed(ow) * strideW_r - padW_r + $signed({8'd0, kw});
+    wire ih_calc_ok = (ih_calc >= 0) && (ih_calc < $signed(src_h_r));
+    wire iw_calc_ok = (iw_calc >= 0) && (iw_calc < $signed(src_w_r));
+
+    // 输入是否在范围内（寄存 ih/iw 版本）
     wire ih_ok = (ih >= 0) && (ih < $signed(src_h_r));
     wire iw_ok = (iw >= 0) && (iw < $signed(src_w_r));
 
@@ -188,12 +230,13 @@ module im2col_unit #(
             in_bound          <= 1'b0;
             rd_wait_cnt       <= 0;
             rd_data_reg       <= 0;
+            in_byte_in_word_r <= 0;
             src_addr_r <= 0; dst_addr_r <= 0; src_c_r <= 0; src_h_r <= 0; src_w_r <= 0;
             oh_max_r <= 0; ow_max_r <= 0;
             kH_r <= 0; kW_r <= 0;
             strideH_r <= 0; strideW_r <= 0;
             padH_r <= 0; padW_r <= 0;
-            row_stride_r <= 0; col_stride_r <= 0; w_times_c_r <= 0;
+            row_stride_r <= 0; in_col_stride_r <= 0; w_times_c_r <= 0;
             stride_h_wc_r <= 0; stride_w_c_r <= 0; kw_times_c_r <= 0;
             in_base_r <= 0;
         end else begin
@@ -204,6 +247,12 @@ module im2col_unit #(
             case (state)
                 S_IDLE: begin
                     if (im2col_unit_start) begin
+`ifdef SIMULATION
+                        $display("[%0t] im2col_unit: START src=0x%0h dst=0x%0h C/H/W=%0d/%0d/%0d OH/OW=%0d/%0d",
+                                 $time, im2col_src_addr, im2col_dst_addr,
+                                 im2col_src_c, im2col_src_h, im2col_src_w,
+                                 im2col_addr_s, im2col_addr_t);
+`endif
                         // 锁存配置
                         src_addr_r <= im2col_src_addr;
                         dst_addr_r <= im2col_dst_addr;
@@ -228,10 +277,11 @@ module im2col_unit #(
                 S_INIT: begin
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
                     // 一级乘法（单操作数，单 DSP，< 2ns）
-                    col_stride_r  <= src_c_r;                    // 直接赋值
-                    w_times_c_r   <= src_w_r * src_c_r;          // W * CH_IN
-                    stride_w_c_r  <= strideW_r * src_c_r;        // strideW * CH_IN
-                    kw_times_c_r  <= kW_r * src_c_r;             // kW * CH_IN
+                    // feature map 按 16B channel-group 对齐存储：相邻像素/行间距 = ceil(CH_IN/16)*16
+                    in_col_stride_r  <= ((src_c_r + 15) >> 4) << 4;
+                    w_times_c_r      <= src_w_r * (((src_c_r + 15) >> 4) << 4);
+                    stride_w_c_r     <= strideW_r * (((src_c_r + 15) >> 4) << 4);
+                    kw_times_c_r     <= kW_r * src_c_r;  // 输出行内自然字节间隔 CH_IN
                     // 增量累加器初始为 0
                     in_oh_acc_r <= 0; in_kh_acc_r <= 0;
                     in_ow_acc_r <= 0; in_kw_acc_r <= 0;
@@ -241,54 +291,83 @@ module im2col_unit #(
 
                 S_PRECOMPUTE: begin
                     // 二级乘法：使用 S_INIT 已寄存的中间结果（< 2ns 每路）
-                    stride_h_wc_r <= strideH_r * w_times_c_r;   // strideH * (W*CH_IN)
-                    row_stride_r  <= kH_r * kw_times_c_r;        // kH * (kW*CH_IN)
+                    stride_h_wc_r <= strideH_r * w_times_c_r;   // strideH * W * ceil(CH_IN/16)*16
+                    // 每行按 acc_depth*16 字节对齐（与 golden_module_tb / DCIM 一致）
+                    row_stride_r  <= ((kH_r * kw_times_c_r) + 15) & ~32'd15;
                     // in_base = src_addr - padH*(W*CH_IN) - padW*CH_IN
                     in_base_r     <= $signed(src_addr_r)
                                    - $signed(padH_r) * $signed(w_times_c_r)
-                                   - $signed(padW_r) * $signed(src_c_r);
+                                   - $signed(padW_r) * $signed(in_col_stride_r);
                     state <= S_READ_REQ;
                 end
 
                 S_READ_REQ: begin
-                    // ih/iw 用于 in_bound 判断（仍需要计算）
-                    ih <= $signed(oh) * strideH_r - padH_r + $signed({8'd0, kh});
-                    iw <= $signed(ow) * strideW_r - padW_r + $signed({8'd0, kw});
+                    ih <= ih_calc;
+                    iw <= iw_calc;
                     rd_wait_cnt <= 0;
-                    state <= S_READ_WAIT;
+                    if (ih_calc_ok && iw_calc_ok) begin
+                        in_bound          <= 1'b1;
+                        // 像素数据在 16B 对齐槽位内的偏移 = (align - CH_IN) + c_chunk*0（c_chunk已含在in_pixel_byte_addr）
+                        // 像素数据从对齐槽位的 byte0 开始（hex 小端格式）
+                        in_byte_in_word_r <= in_pixel_byte_addr[3:0];
+                        gb_addrb          <= in_pixel_byte_addr;
+                        gb_enb            <= 1'b1;
+                        gb_web            <= '0;
+                    end else begin
+                        in_bound <= 1'b0;
+                        gb_enb   <= 1'b0;
+                    end
+                    state <= (ih_calc_ok && iw_calc_ok) ? S_READ_WAIT : S_WRITE;
                 end
 
                 S_READ_WAIT: begin
-                    if (ih_ok && iw_ok) begin
-                        in_bound <= 1'b1;
-                        // 持续 assert gb_enb，让 OBUF pipeline 正常推进
+                    // 保持 gb_enb=1 直到收到 valid（obuf 读流水线需要持续使能）
+                    // 收到 valid 时立即清除 enb，避免流水线残留触发下一拍 valid
+                    if (gb_doutb_valid) begin
+                        gb_addrb <= in_pixel_byte_addr;
+                        gb_enb   <= 1'b0;   // 清除使能，截断流水
+                        gb_web   <= '0;
+`ifdef SIMULATION
+                        $display("[im2col] LATCH_DATA oh=%0d ow=%0d kh=%0d kw=%0d addr=0x%h data=0x%h wait=%0d",
+                                 oh, ow, kh, kw, in_pixel_byte_addr, gb_doutb, rd_wait_cnt);
+`endif
+                        rd_data_reg <= gb_doutb;
+                        state       <= S_READ_LATCH;
+                    end else if (rd_wait_cnt == READ_TIMEOUT) begin
+                        $display("[im2col] READ TIMEOUT at byte addr 0x%08h", in_pixel_byte_addr);
+                        state <= S_READ_LATCH;
+                    end else begin
+                        // 未收到 valid，继续保持读使能
                         gb_addrb <= in_pixel_byte_addr;
                         gb_enb   <= 1'b1;
-                        gb_web   <= '0;  // 读
-                        if (rd_wait_cnt == READ_LATENCY) begin
-                            state <= S_READ_LATCH;
-                        end else begin
-                            rd_wait_cnt <= rd_wait_cnt + 1;
-                        end
-                    end else begin
-                        // pad 区域，跳过读，直接写 0
-                        in_bound <= 1'b0;
-                        gb_enb   <= 1'b0;
-                        state <= S_WRITE;
+                        gb_web   <= '0;
+                        rd_wait_cnt <= rd_wait_cnt + 1;
                     end
                 end
 
                 S_READ_LATCH: begin
-                    rd_data_reg <= gb_doutb;
-                    gb_enb      <= 1'b0;  // 读完毕，释放 Port A
-                    state       <= S_WRITE;
+                    // 等待流水线残留 valid 消失，防止下一次读操作在 S_READ_WAIT 收到旧数据
+                    if (gb_doutb_valid) begin
+                        // 流水线仍有残留脉冲，在此等待（丢弃残留 valid）
+                        gb_enb <= 1'b0;
+                    end else begin
+                        state <= S_WRITE;
+                    end
                 end
 
                 S_WRITE: begin
-                    gb_addrb <= out_byte_addr;
+                    gb_addrb <= write_byte_addr_aligned;
                     gb_enb   <= 1'b1;
                     gb_web   <= write_mask;
-                    gb_dinb  <= in_bound ? rd_data_reg : '0;
+                    gb_dinb  <= write_din_aligned;
+                    state    <= write_need_tail ? S_WRITE_TAIL : S_NEXT_C;
+                end
+
+                S_WRITE_TAIL: begin
+                    gb_addrb <= write_byte_addr_aligned + C_CHUNK_BYTES;
+                    gb_enb   <= 1'b1;
+                    gb_web   <= write_mask;
+                    gb_dinb  <= write_din_aligned;
                     state    <= S_NEXT_C;
                 end
 
@@ -307,21 +386,22 @@ module im2col_unit #(
                     // 递增循环计数器 + 增量更新偏移（无乘法）
                     if (kw + 1 < $signed({1'b0, kW_r})) begin
                         kw <= kw + 1;
-                        in_kw_acc_r      <= in_kw_acc_r + col_stride_r;
-                        out_col_offset_r <= out_col_offset_r + col_stride_r;
+                        in_kw_acc_r      <= in_kw_acc_r + in_col_stride_r;
+                        out_col_offset_r <= out_col_offset_r + src_c_r;
                         state <= S_READ_REQ;
-                    end else begin
-                        kw <= 0;
-                        in_kw_acc_r      <= 0;
-                        if (kh + 1 < $signed({1'b0, kH_r})) begin
-                            kh <= kh + 1;
-                            in_kh_acc_r      <= in_kh_acc_r + w_times_c_r;
-                            out_col_offset_r <= out_col_offset_r + col_stride_r; // = (kh+1)*kW*C
-                            state <= S_READ_REQ;
                         end else begin
-                            kh <= 0;
-                            in_kh_acc_r      <= 0;
-                            out_col_offset_r <= 0;
+                            kw <= 0;
+                            in_kw_acc_r      <= 0;
+                            if (kh + 1 < $signed({1'b0, kH_r})) begin
+                                kh <= kh + 1;
+                                in_kh_acc_r      <= in_kh_acc_r + w_times_c_r;
+                                // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 src_c_r
+                                out_col_offset_r <= out_col_offset_r + src_c_r;
+                                state <= S_READ_REQ;
+                            end else begin
+                                kh <= 0;
+                                in_kh_acc_r      <= 0;
+                                out_col_offset_r <= 0;
                             if (ow + 1 < $signed(ow_max_r)) begin
                                 ow <= ow + 1;
                                 in_ow_acc_r      <= in_ow_acc_r + stride_w_c_r;
@@ -344,6 +424,9 @@ module im2col_unit #(
                 end
 
                 S_DONE: begin
+`ifdef SIMULATION
+                    $display("[im2col] ALL DONE oh=%0d ow=%0d", oh, ow);
+`endif
                     im2col_unit_ready <= 1'b1;
                     state             <= S_IDLE;
                 end

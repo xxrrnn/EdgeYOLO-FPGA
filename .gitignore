@@ -138,3 +138,43 @@ rtl/**/csrc/rmar0.h
 .codex
 .cursor/
 rtl/chip/build/
+
+# ============================================
+# 忽略: 本地构建/仿真生成物（覆盖前面的白名单）
+# ============================================
+# 顶层 build 只保留关键 rpt，忽略 memory_map 等派生文件
+build/**
+!build/**/
+!build/**/ImplOutputDir/
+!build/**/ImplOutputDir/*.rpt
+!build/**/SynOutputDir/
+!build/**/SynOutputDir/*.rpt
+
+# XSim/VCS/Verdi 仿真输出目录与中间文件
+rtl/**/xsim.dir/
+rtl/**/sim/build_*/
+rtl/**/simv*
+rtl/**/simv*.daidir/
+rtl/**/csrc/
+rtl/**/verdiLog/
+rtl/**/vfastLog/
+rtl/**/ucli.key
+rtl/**/novas*.log
+rtl/**/*.fsdb
+rtl/**/*.wdb
+rtl/**/xelab.*
+rtl/**/xvlog.*
+rtl/**/xsim*.jou
+rtl/**/xsim*.log
+rtl/**/xsim*.pb
+
+# 测试自动生成数据
+rtl/vpu/tb/golden_*.hex
+rtl/vpu/tb/tb_im2col_*.hex
+rtl/vpu/tb/regression_l1/golden_*.hex
+rtl/vpu/tb/regression_l1/params.json
+rtl/vpu/tb/standalone/generated/
+
+# VCS 编译版本探针
+.cxl.vcs*.version
+synopsys_sim.setup

@@ -140,12 +140,21 @@ module act_nibble_converter #(
         dcim_act_data = '0;
         
         for (int ch = 0; ch < CH_IN; ch++) begin
-            case (nibble_cnt)
-                2'd0: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  0 +: 4]; // bit[3:0]
-                2'd1: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  4 +: 4]; // bit[7:4]
-                2'd2: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  8 +: 4]; // bit[11:8]
-                2'd3: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 + 12 +: 4]; // bit[15:12]
-            endcase
+            if (mode == MODE_INT16) begin
+                case (nibble_cnt)
+                    2'd0: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 + 12 +: 4]; // sign nibble first
+                    2'd1: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  8 +: 4];
+                    2'd2: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  4 +: 4];
+                    2'd3: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  0 +: 4];
+                endcase
+            end else begin
+                case (nibble_cnt)
+                    2'd0: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  0 +: 4]; // bit[3:0]
+                    2'd1: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  4 +: 4]; // bit[7:4]
+                    2'd2: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 +  8 +: 4]; // bit[11:8]
+                    2'd3: dcim_act_data[ch*4 +: 4] = raw_data_reg[ch*16 + 12 +: 4]; // bit[15:12]
+                endcase
+            end
         end
     end
     

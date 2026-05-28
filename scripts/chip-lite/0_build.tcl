@@ -10,10 +10,22 @@ if {[llength [get_projects -quiet]] != 0} {
     close_project
 }
 
-# 如果工程已存在，直接删除后重建
+# 如果工程已存在，删除后重建（最多重试 3 次，防止文件锁导致静默失败）
 if {[file exists $projPath]} {
     puts "Info: Project directory exists, removing: $projPath"
-    file delete -force $projPath
+    set retries 3
+    while {$retries > 0 && [file exists $projPath]} {
+        catch {file delete -force $projPath}
+        if {[file exists $projPath]} {
+            incr retries -1
+            after 500
+        } else {
+            break
+        }
+    }
+    if {[file exists $projPath]} {
+        error "ERROR: Cannot delete project directory $projPath (file lock?). Please close Vivado, delete it manually, then re-source."
+    }
 }
 
 create_project $projName $projPath -part $part

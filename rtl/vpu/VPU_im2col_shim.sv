@@ -39,7 +39,8 @@ module VPU_im2col_shim #(
     output wire                          obuf_en,
     output wire [BUF_DATA_WIDTH/8-1:0]   obuf_we,
     output wire [BUF_DATA_WIDTH-1:0]     obuf_din,
-    input  wire [BUF_DATA_WIDTH-1:0]     obuf_dout
+    input  wire [BUF_DATA_WIDTH-1:0]     obuf_dout,
+    input  wire                          obuf_rd_valid
 );
 
     localparam UNIT_IM2COL = 32'd7;
@@ -104,7 +105,8 @@ module VPU_im2col_shim #(
         .gb_dinb           (im2col_gb_dinb),
         .gb_web            (im2col_gb_web),
         .gb_enb            (im2col_gb_enb),
-        .gb_doutb          (obuf_dout)
+        .gb_doutb          (obuf_dout),
+        .gb_doutb_valid    (obuf_rd_valid)
     );
 
     // GB → OBUF 地址转换（字节地址 → 128-bit 字地址）

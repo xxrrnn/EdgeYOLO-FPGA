@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 // tb_dqa_relu_unit.sv - Testbench for dqa_relu_unit (Dequantize Unit)
 // Uses REAL Xilinx IP: fp32_mac (via fp_mac_array), int32_2_fp32_array

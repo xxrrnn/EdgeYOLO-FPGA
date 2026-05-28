@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 `include "mem_defines_auto.vh"
 
 module tb_mp_unit;

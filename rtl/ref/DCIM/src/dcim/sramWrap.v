@@ -30,6 +30,9 @@ module sramWrap#(
 `ifdef SIM
 `define SRAMWRAP_BRAM_MODEL
 `endif
+`ifdef SIMULATION
+`define SRAMWRAP_BRAM_MODEL
+`endif
 `ifdef FPGA
 `define SRAMWRAP_BRAM_MODEL
 `endif

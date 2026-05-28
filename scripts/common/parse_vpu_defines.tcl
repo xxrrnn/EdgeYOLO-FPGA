@@ -1,16 +1,16 @@
 #==============================================================================
 # parse_vpu_defines.tcl
 #
-# 解析 vpu_defines.vh 头文件，提取参数供 Tcl 脚本使用。
+# 解析 chip_defines.vh 头文件，提取参数供 Tcl 脚本使用。
 # 支持简单的 `define 语法和基本的算术表达式。
 #
 # 用法：
 #   source parse_vpu_defines.tcl
-#   parse_vpu_defines $path_to_vpu_defines_vh
+#   parse_vpu_defines $path_to_chip_defines_vh
 #   
 #   # 之后可以使用全局变量访问参数
-#   puts $::VPU_BANDWIDTH        ;# 256
-#   puts $::GB_SIZE_BYTES        ;# 131072
+#   puts $::VPU_BANDWIDTH        ;# 128
+#   puts $::GB_SIZE_BYTES        ;# 16777216
 #==============================================================================
 
 namespace eval vpu_params {
@@ -19,11 +19,11 @@ namespace eval vpu_params {
 }
 
 #------------------------------------------------------------------------------
-# 解析 chip_defines.vh 文件（支持原 vpu_defines.vh 和新 chip_defines.vh）
+# 解析 chip_defines.vh 文件
 # parse_vpu_defines 保留旧名称供向后兼容
 #------------------------------------------------------------------------------
 proc parse_vpu_defines {filepath} {
-    # 如果传入的是 vpu_defines.vh（只是 forward include），改为解析真正的 chip_defines.vh
+    # 允许传入 chip_defines.vh 直接路径，也兼容旧路径
     set dir [file dirname $filepath]
     set chip_defines_path [file normalize "$dir/../chip/chip_defines.vh"]
     
@@ -40,7 +40,7 @@ proc parse_vpu_defines {filepath} {
     }
     
     if {![file exists $filepath]} {
-        puts "ERROR: Cannot find chip_defines.vh or vpu_defines.vh at: $filepath"
+        puts "ERROR: Cannot find chip_defines.vh at: $filepath"
         return 0
     }
     
@@ -81,7 +81,7 @@ proc parse_vpu_defines {filepath} {
         set ::$name $resolved
     }
     
-    puts "INFO: Parsed [array size ::vpu_params::params] parameters from vpu_defines.vh"
+    puts "INFO: Parsed [array size ::vpu_params::params] parameters from chip_defines.vh"
     return 1
 }
 
@@ -160,7 +160,7 @@ proc get_vpu_param {name {default ""}} {
 #------------------------------------------------------------------------------
 proc print_vpu_params {} {
     puts "=============================================="
-    puts "VPU Parameters from vpu_defines.vh"
+    puts "VPU Parameters from chip_defines.vh"
     puts "=============================================="
     foreach name [lsort [array names ::vpu_params::params]] {
         puts [format "  %-30s = %s" $name $::vpu_params::params($name)]
@@ -184,23 +184,20 @@ proc bytes_to_range {bytes} {
 }
 
 #------------------------------------------------------------------------------
-# 自动查找并解析 vpu_defines.vh
-# 从当前脚本位置向上查找 rtl/vpu/vpu_defines.vh
+# 自动查找并解析 chip_defines.vh
+# 从当前脚本位置向上查找 rtl/chip/chip_defines.vh
 #------------------------------------------------------------------------------
 proc auto_parse_vpu_defines {} {
-    # 优先查找 chip_defines.vh（合并版），回退到 vpu_defines.vh
+    # 查找 chip_defines.vh
     set script_dir [file dirname [info script]]
     set possible_paths [list \
         [file join $script_dir "../../rtl/chip/chip_defines.vh"] \
         [file join $script_dir "../../../rtl/chip/chip_defines.vh"] \
-        [file join $script_dir "../../rtl/vpu/vpu_defines.vh"] \
-        [file join $script_dir "../../../rtl/vpu/vpu_defines.vh"] \
-        [file join $script_dir "../../../../rtl/vpu/vpu_defines.vh"] \
+        [file join $script_dir "../../../../rtl/chip/chip_defines.vh"] \
     ]
     
     if {[info exists ::origin_dir]} {
         lappend possible_paths [file join $::origin_dir "rtl/chip/chip_defines.vh"]
-        lappend possible_paths [file join $::origin_dir "rtl/vpu/vpu_defines.vh"]
     }
     
     foreach path $possible_paths {
@@ -211,6 +208,6 @@ proc auto_parse_vpu_defines {} {
         }
     }
     
-    puts "ERROR: Cannot find chip_defines.vh or vpu_defines.vh"
+    puts "ERROR: Cannot find chip_defines.vh"
     return 0
 }

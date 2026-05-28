@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-`include "vpu_defines.vh"
+`include "chip_defines.vh"
 
 //////////////////////////////////////////////////////////////////////////////////
 // INST_Decoder - 硬件指令解码器
@@ -72,6 +72,7 @@ module INST_Decoder #(
     output reg  [31:0] vpu_addr_break,
     output reg  [31:0] vpu_addr_s,
     output reg  [31:0] vpu_addr_t,
+    output reg  [3:0]  vpu_flags,        // OP_VPU_EXEC header[27:24]，flags[0]=relu_en
     
     // DCIM direct register write interface
     output reg         dcim_cfg_wr_en,
@@ -130,17 +131,10 @@ module INST_Decoder #(
         S_WAIT_DCIM_DONE  = 6'd28,
         S_EXEC_WAIT_DCIM  = 6'd29,
         S_DCIM_CFG_INIT      = 6'd30,
-        S_DCIM_CFG_RD_ADDR   = 6'd31,
-        S_DCIM_CFG_W_ADDR_P1 = 6'd32,
-        S_DCIM_CFG_W_ADDR_P2 = 6'd33,
-        S_DCIM_CFG_W_ADDR_P3 = 6'd34,
-        S_DCIM_CFG_LATCH_ADDR = 6'd35,
-        S_DCIM_CFG_RD_DATA   = 6'd36,
-        S_DCIM_CFG_W_DATA_P1 = 6'd37,
-        S_DCIM_CFG_W_DATA_P2 = 6'd38,
-        S_DCIM_CFG_W_DATA_P3 = 6'd39,
-        S_DCIM_CFG_WRITE     = 6'd40
+        S_DCIM_CFG_APPLY     = 6'd43   // push latched cfg pairs to DCIM regs
     } state_t;
+
+    localparam int DCIM_CFG_MAX_BODY_WORDS = 32;  // max 16 (addr,data) pairs per OP_DCIM_CFG
     
     state_t state, next_state;
     
@@ -154,13 +148,14 @@ module INST_Decoder #(
     
     // 指令体缓存（最大 48 字节 = 12 个 32 位字）
     reg [31:0] body_buffer [0:11];
-    reg [3:0]  body_word_count;     // 需要读取的字数
-    reg [3:0]  body_word_idx;       // 当前读取的字索引
+    reg [5:0]  body_word_count;     // 需要读取的字数（DCIM_CFG 最多 32 字）
+    reg [5:0]  body_word_idx;       // 当前读取的字索引
     
     // DCIM_CFG 内部寄存器
     reg [23:0] dcim_cfg_total_pairs;
     reg [23:0] dcim_cfg_pair_count;
-    reg [31:0] dcim_cfg_latched_addr;
+    reg        dcim_cfg_load;
+    reg [31:0] dcim_cfg_body [0:DCIM_CFG_MAX_BODY_WORDS-1];
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -275,6 +270,7 @@ module INST_Decoder #(
                     case (current_opcode)
                         OP_CDMA_COPY: next_state = S_EXEC_CDMA;
                         OP_VPU_EXEC:  next_state = S_EXEC_VPU;
+                        OP_DCIM_CFG:  next_state = S_DCIM_CFG_APPLY;
                         default:      next_state = S_ERROR;
                     endcase
                 end else begin
@@ -343,50 +339,14 @@ module INST_Decoder #(
             end
             
             S_DCIM_CFG_INIT: begin
-                next_state = S_DCIM_CFG_RD_ADDR;
+                next_state = S_FETCH_BODY;
             end
             
-            S_DCIM_CFG_RD_ADDR: begin
-                next_state = S_DCIM_CFG_W_ADDR_P1;
-            end
-            
-            S_DCIM_CFG_W_ADDR_P1: begin
-                next_state = S_DCIM_CFG_W_ADDR_P2;
-            end
-            
-            S_DCIM_CFG_W_ADDR_P2: begin
-                next_state = S_DCIM_CFG_W_ADDR_P3;
-            end
-            
-            S_DCIM_CFG_W_ADDR_P3: begin
-                next_state = S_DCIM_CFG_LATCH_ADDR;
-            end
-            
-            S_DCIM_CFG_LATCH_ADDR: begin
-                next_state = S_DCIM_CFG_RD_DATA;
-            end
-            
-            S_DCIM_CFG_RD_DATA: begin
-                next_state = S_DCIM_CFG_W_DATA_P1;
-            end
-            
-            S_DCIM_CFG_W_DATA_P1: begin
-                next_state = S_DCIM_CFG_W_DATA_P2;
-            end
-            
-            S_DCIM_CFG_W_DATA_P2: begin
-                next_state = S_DCIM_CFG_W_DATA_P3;
-            end
-            
-            S_DCIM_CFG_W_DATA_P3: begin
-                next_state = S_DCIM_CFG_WRITE;
-            end
-            
-            S_DCIM_CFG_WRITE: begin
+            S_DCIM_CFG_APPLY: begin
                 if (dcim_cfg_pair_count + 1 >= dcim_cfg_total_pairs)
                     next_state = S_NEXT_INST;
                 else
-                    next_state = S_DCIM_CFG_RD_ADDR;
+                    next_state = S_DCIM_CFG_APPLY;
             end
             
             S_NEXT_INST: begin
@@ -438,14 +398,13 @@ module INST_Decoder #(
             vpu_addr_break <= '0;
             vpu_addr_s <= '0;
             vpu_addr_t <= '0;
-            
-            dcim_cfg_wr_en <= 1'b0;
+            vpu_flags  <= '0;
             dcim_cfg_wr_addr <= '0;
             dcim_cfg_wr_data <= '0;
             
             dcim_cfg_total_pairs <= '0;
             dcim_cfg_pair_count <= '0;
-            dcim_cfg_latched_addr <= '0;
+            dcim_cfg_load <= 1'b0;
             
             current_word_idx <= '0;
             words_remaining <= '0;
@@ -537,8 +496,10 @@ module INST_Decoder #(
                 end
                 
                 S_STORE_BODY: begin
-                    // 存储读取的数据（使用流水线寄存器）
-                    body_buffer[body_word_idx] <= inst_rd_data_pipe;
+                    if (dcim_cfg_load)
+                        dcim_cfg_body[body_word_idx] <= inst_rd_data_pipe;
+                    else
+                        body_buffer[body_word_idx] <= inst_rd_data_pipe;
                     body_word_idx <= body_word_idx + 1;
                     current_word_idx <= current_word_idx + 1;
                     words_remaining <= words_remaining - 1;
@@ -549,12 +510,20 @@ module INST_Decoder #(
                 end
                 
                 S_EXEC_CDMA: begin
-                    // CDMA_COPY 指令体：src_addr(4B), dst_addr(4B), length(4B)
-                    cdma_src_addr_msb <= 32'h0;
-                    cdma_src_addr_lsb <= body_buffer[0];
-                    cdma_dst_addr_msb <= 32'h0;
-                    cdma_dst_addr_lsb <= body_buffer[1];
-                    cdma_length <= body_buffer[2];
+                    // CDMA_COPY: 12B {src_lsb,dst_lsb,len} or 20B {src_msb,src_lsb,dst_msb,dst_lsb,len}
+                    if (body_word_count == 5) begin
+                        cdma_src_addr_msb <= body_buffer[0];
+                        cdma_src_addr_lsb <= body_buffer[1];
+                        cdma_dst_addr_msb <= body_buffer[2];
+                        cdma_dst_addr_lsb <= body_buffer[3];
+                        cdma_length       <= body_buffer[4];
+                    end else begin
+                        cdma_src_addr_msb <= 32'h0;
+                        cdma_src_addr_lsb <= body_buffer[0];
+                        cdma_dst_addr_msb <= 32'h0;
+                        cdma_dst_addr_lsb <= body_buffer[1];
+                        cdma_length       <= body_buffer[2];
+                    end
                     cdma_config_valid <= 1'b1;
                     cdma_start <= 1'b1;  // 保持高电平
                 end
@@ -586,10 +555,15 @@ module INST_Decoder #(
                     vpu_addr_break  <= body_buffer[9];
                     vpu_addr_s      <= body_buffer[10];
                     vpu_addr_t      <= body_buffer[11];
+                    vpu_flags       <= current_flags;
                 end
                 
                 S_WAIT_VPU_START: begin
                     vpu_start <= 1'b1;
+`ifdef SIMULATION
+                    $display("[%0t] INST_Decoder: VPU_START unit=%0d dst=0x%08h c/h/w=%0d/%0d/%0d state=%0d",
+                             $time, vpu_unit_choose, vpu_dst_addr, vpu_src_c, vpu_src_h, vpu_src_w, state);
+`endif
                 end
                 
                 S_WAIT_VPU_DONE: begin
@@ -613,10 +587,17 @@ module INST_Decoder #(
                     dcim_cfg_wr_en <= 1'b1;
                     dcim_cfg_wr_addr <= 12'h000;
                     dcim_cfg_wr_data <= 32'h1;
+`ifdef SIMULATION
+                    $display("[%0t] DCIM_EXEC start (pixel fired)", $time);
+`endif
                 end
                 
                 S_WAIT_DCIM_DONE: begin
                     // 等待 DCIM 完成
+`ifdef SIMULATION
+                    if (dcim_ready)
+                        $display("[%0t] DCIM_WAIT_DONE: dcim_ready asserted → pixel done", $time);
+`endif
                 end
                 
                 S_EXEC_WAIT_DCIM: begin
@@ -624,56 +605,26 @@ module INST_Decoder #(
                 end
                 
                 S_DCIM_CFG_INIT: begin
+                    dcim_cfg_load <= 1'b1;
                     dcim_cfg_total_pairs <= body_length[23:0];
                     dcim_cfg_pair_count <= '0;
+                    body_word_count <= body_length[23:0] << 1;
+                    body_word_idx <= '0;
                 end
                 
-                S_DCIM_CFG_RD_ADDR: begin
-                    inst_rd_addr <= current_word_idx;
-                end
-                
-                S_DCIM_CFG_W_ADDR_P1: begin
-                    // 等待 BRAM 流水线 stage 1
-                end
-                
-                S_DCIM_CFG_W_ADDR_P2: begin
-                    // 等待 BRAM 流水线 stage 2
-                end
-                
-                S_DCIM_CFG_W_ADDR_P3: begin
-                    // 等待 BRAM 流水线 stage 3
-                end
-                
-                S_DCIM_CFG_LATCH_ADDR: begin
-                    dcim_cfg_latched_addr <= inst_rd_data_pipe;
-                    current_word_idx <= current_word_idx + 1;
-                    words_remaining <= words_remaining - 1;
-                    inst_rd_addr <= current_word_idx + 1;
-                end
-                
-                S_DCIM_CFG_RD_DATA: begin
-                    // addr already set in LATCH_ADDR
-                end
-                
-                S_DCIM_CFG_W_DATA_P1: begin
-                    // 等待 BRAM 流水线 stage 1
-                end
-                
-                S_DCIM_CFG_W_DATA_P2: begin
-                    // 等待 BRAM 流水线 stage 2
-                end
-                
-                S_DCIM_CFG_W_DATA_P3: begin
-                    // 等待 BRAM 流水线 stage 3
-                end
-                
-                S_DCIM_CFG_WRITE: begin
+                S_DCIM_CFG_APPLY: begin
                     dcim_cfg_wr_en <= 1'b1;
-                    dcim_cfg_wr_addr <= dcim_cfg_latched_addr[11:0];
-                    dcim_cfg_wr_data <= inst_rd_data_pipe;
+                    dcim_cfg_wr_addr <= dcim_cfg_body[dcim_cfg_pair_count * 2][11:0];
+                    dcim_cfg_wr_data <= dcim_cfg_body[dcim_cfg_pair_count * 2 + 1];
                     dcim_cfg_pair_count <= dcim_cfg_pair_count + 1;
-                    current_word_idx <= current_word_idx + 1;
-                    words_remaining <= words_remaining - 1;
+                    if (dcim_cfg_pair_count + 1 >= dcim_cfg_total_pairs)
+                        dcim_cfg_load <= 1'b0;
+`ifdef SIMULATION
+                    $display("[%0t] DCIM_CFG_WR addr=0x%03h data=0x%08h pair=%0d/%0d",
+                             $time, dcim_cfg_body[dcim_cfg_pair_count * 2][11:0],
+                             dcim_cfg_body[dcim_cfg_pair_count * 2 + 1],
+                             dcim_cfg_pair_count, dcim_cfg_total_pairs);
+`endif
                 end
                 
                 S_NEXT_INST: begin

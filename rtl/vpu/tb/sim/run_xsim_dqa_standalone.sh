@@ -10,7 +10,7 @@
 # 说明：
 #   - 自动调用 tools/golden_dqa_standalone.py 生成 golden SVH
 #   - 编译 DQA unit + 真实 OBUF + FP IP
-#   - 运行 4 个测试用例（4ch, 16ch, 8ch×2px, 2×2×4）
+#   - 运行 YOLOv5n L1/L2/L3 DQA（scale=1.0 原始网络参数，可用 STANDALONE_SCALE 覆盖）
 #   - FP32 容差检查（rel_err < 1e-5）
 # ===========================================================================
 set -euo pipefail
@@ -22,9 +22,11 @@ FILELIST="$SCRIPT_DIR/filelist_dqa_standalone.f"
 TB_TOP="tb_dqa_standalone"
 SIM_NAME="sim_dqa_standalone"
 GOLDEN_PY="$REPO_ROOT/tools/golden_dqa_standalone.py"
+GEN_DIR="$REPO_ROOT/rtl/vpu/tb/standalone/generated"
+STANDALONE_SCALE="${STANDALONE_SCALE:-1.0}"
 
-echo "=== [0/4] Generate DQA golden vectors ==="
-python3 "$GOLDEN_PY" --out "$REPO_ROOT/rtl/vpu/tb/standalone/generated/dqa_standalone_golden.svh"
+echo "=== [0/4] Generate DQA golden (network scale=$STANDALONE_SCALE) ==="
+python3 "$GOLDEN_PY" --scale "$STANDALONE_SCALE" --out-dir "$GEN_DIR"
 
 INCDIR_LIST=(
   "$REPO_ROOT/rtl/chip"
@@ -36,7 +38,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-ln -sfn "$REPO_ROOT/rtl/vpu/tb/e2e"/*.hex . 2>/dev/null || true
+ln -sfn "$GEN_DIR/hex" "$BUILD_DIR/hex"
 
 INC_ARGS=""
 for d in "${INCDIR_LIST[@]}"; do
