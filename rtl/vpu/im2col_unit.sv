@@ -327,7 +327,7 @@ module im2col_unit #(
                         gb_addrb <= in_pixel_byte_addr;
                         gb_enb   <= 1'b0;   // 清除使能，截断流水
                         gb_web   <= '0;
-`ifdef SIMULATION
+`ifdef PROBE_IM2COL
                         $display("[im2col] LATCH_DATA oh=%0d ow=%0d kh=%0d kw=%0d addr=0x%h data=0x%h wait=%0d",
                                  oh, ow, kh, kw, in_pixel_byte_addr, gb_doutb, rd_wait_cnt);
 `endif
@@ -424,7 +424,7 @@ module im2col_unit #(
                 end
 
                 S_DONE: begin
-`ifdef SIMULATION
+`ifdef PROBE_IM2COL_DONE
                     $display("[im2col] ALL DONE oh=%0d ow=%0d", oh, ow);
 `endif
                     im2col_unit_ready <= 1'b1;

@@ -110,7 +110,8 @@ module Global_VPU #(
 
     // 正在执行的 unit（start 后保持到 config_ready 再次变高）
     reg [ADDR_WIDTH-1:0]            unit_running_reg;
-    reg                               vpu_running;
+    reg [3:0]                       vpu_flags_reg;
+    reg                             vpu_running;
 
   always @(posedge clk or negedge rst_n_local) begin
     if(!rst_n_local) begin
@@ -127,10 +128,13 @@ module Global_VPU #(
       addr_s_reg    <= 0;
       addr_t_reg    <= 0;
       unit_running_reg <= 0;
+      vpu_flags_reg    <= 4'b0;
       vpu_running      <= 1'b0;
     end else begin
       // S_EXEC_VPU 更新端口；S_WAIT_VPU_START 拉高 start（晚一拍）。
-      // 在 config_ready 时锁存；start 拍再锁一次，避免 busy 时漏锁。
+      // 地址类参数：在 config_ready 时稳定，可在 config_ready&&config_valid 时锁存。
+      // vpu_flags：在 S_EXEC_VPU 周期才写入寄存器，需等到 start（S_WAIT_VPU_START 拍）才稳定，
+      //            仅在 start=1 时锁存，避免 config_ready&&config_valid 抢先锁存旧值。
       if ((config_ready && config_valid) || start) begin
         unit_choose_reg <= unit_choose;
         src_addr_reg    <= src_addr;
@@ -146,6 +150,7 @@ module Global_VPU #(
         addr_t_reg      <= addr_t;
       end
       if (start) begin
+        vpu_flags_reg    <= vpu_flags;   // 仅在 start 拍锁存，此时 vpu_flags 已稳定
         unit_running_reg <= unit_choose;
         vpu_running      <= 1'b1;
       end else if (vpu_running && config_ready) begin
@@ -169,6 +174,7 @@ module Global_VPU #(
   wire [ADDR_WIDTH-1:0] active_addr_break  = start ? addr_break    : addr_break_reg;
   wire [ADDR_WIDTH-1:0] active_addr_s      = start ? addr_s        : addr_s_reg;
   wire [ADDR_WIDTH-1:0] active_addr_t      = start ? addr_t        : addr_t_reg;
+  wire [3:0]            active_vpu_flags   = start ? vpu_flags     : vpu_flags_reg;
 
 
     wire [GB_ADDR_WIDTH-1:0]    gb_addrb, dqa_gb_addrb, nn_gb_addrb, qa_gb_addrb, mp_gb_addrb, us_gb_addrb, ad_gb_addrb, im2col_gb_addrb;
@@ -445,7 +451,7 @@ nn_lut_unit #(
         .rst_n(rst_n_local),
         .dqa_unit_start(dqa_unit_start),
         .dqa_unit_ready(dqa_unit_ready),
-        .dqa_relu_en(vpu_flags[0]),
+        .dqa_relu_en(active_vpu_flags[0]),
         .dqa_src_addr(active_src_addr),
         .dqa_src_c(active_src_c),
         .dqa_src_h(active_src_h),

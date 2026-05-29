@@ -177,6 +177,7 @@ connect_bd_net [get_bd_pins inst_decoder/vpu_dst_addr]   [get_bd_pins vpu_0/dst_
 connect_bd_net [get_bd_pins inst_decoder/vpu_addr_break] [get_bd_pins vpu_0/addr_break]
 connect_bd_net [get_bd_pins inst_decoder/vpu_addr_s]     [get_bd_pins vpu_0/addr_s]
 connect_bd_net [get_bd_pins inst_decoder/vpu_addr_t]     [get_bd_pins vpu_0/addr_t]
+connect_bd_net [get_bd_pins inst_decoder/vpu_flags]      [get_bd_pins vpu_0/vpu_flags]
 
 # ==============================================================================
 # INST_Decoder <-> DCIM Array (dcim_array_0) via direct config write interface

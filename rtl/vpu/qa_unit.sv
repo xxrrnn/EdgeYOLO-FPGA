@@ -292,8 +292,10 @@ module qa_unit #(
             qa_src_c_reg      <= qa_src_c;
             qa_src_h_reg      <= qa_src_h;
             qa_src_w_reg      <= qa_src_w;
+`ifdef PROBE_QA
             $display("[qa] START src=0x%08h dst=0x%08h scale=0x%08h c=%0d h=%0d w=%0d saves_per_word=%0d",
                      qa_src_addr, qa_dst_addr, qa_scale_addr, qa_src_c, qa_src_h, qa_src_w, SAVES_PER_WORD);
+`endif
         end
     end
 
@@ -305,12 +307,17 @@ module qa_unit #(
             qa_dbg_cycle_cnt <= '0;
         else begin
             qa_dbg_cycle_cnt <= qa_dbg_cycle_cnt + 1'b1;
-            if (c_state == QA_SAVE_HOLD && qa_done)
+            if (c_state == QA_SAVE_HOLD && qa_done) begin
+`ifdef PROBE_QA
                 $display("[qa] DONE iter=%0d/%0d out_words=%0d",
                          qa_iter_cnt, qa_total_iters_reg, qa_out_word_idx);
-            else if (c_state == QA_WAIT_X && qa_rd_wait_cnt[3:0] == 4'h0)
+`endif
+            end else if (c_state == QA_WAIT_X && qa_rd_wait_cnt[3:0] == 4'h0) begin
+`ifdef PROBE_QA
                 $display("[qa] WAIT_X in_word=0x%0h slot=%0d/%0d valid=%0b",
                          qa_x_load_addr, pack_slot, SAVES_PER_WORD, gb_doutb_valid);
+`endif
+            end
         end
     end
 
