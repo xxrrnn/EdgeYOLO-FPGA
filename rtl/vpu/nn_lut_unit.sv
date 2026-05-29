@@ -47,6 +47,7 @@ module nn_lut_unit#(
     output reg [GB_BANDWIDTH/8-1:0]     gb_web,  
     output reg                          gb_enb,    
     input wire [GB_BANDWIDTH-1:0]       gb_doutb,
+    input wire                          gb_doutb_valid,  // OBUF 读数据有效（与 gb_doutb 同拍）
 
     output reg [$clog2(RAM_DEPTH_WB)-1:0]   wb_addrb,
     output reg [WB_BANDWIDTH-1:0]       wb_dinb,
@@ -305,8 +306,14 @@ endgenerate
                 gb_enb = 1'b1;
             end
             NN_WAIT_X: begin
-                gb_addrb = 0;
-                gb_enb = 0;
+                // valid 未到：保持 enb 和地址，等待 URAM 数据返回
+                if (!gb_doutb_valid) begin
+                    gb_addrb = nn_src_addr_block + nn_r_cnt + (x_loads << $clog2(R_BEATS));
+                    gb_enb = 1'b1;
+                end else begin
+                    gb_addrb = 0;
+                    gb_enb = 0;
+                end
             end
 
             //---------------------------------
@@ -342,16 +349,18 @@ endgenerate
         end else begin
             case(c_state)
             NN_WAIT_X: begin
-                    if (GB_DATALENGTH_R > GB_BANDWIDTH) begin
-                        if ((nn_r_cnt + 1) * GB_BANDWIDTH <= GB_DATALENGTH_R) begin
-                            x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_BANDWIDTH]};
+                    if (gb_doutb_valid) begin
+                        if (GB_DATALENGTH_R > GB_BANDWIDTH) begin
+                            if ((nn_r_cnt + 1) * GB_BANDWIDTH <= GB_DATALENGTH_R) begin
+                                x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_BANDWIDTH]};
+                            end else begin
+                                x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_DATALENGTH_R-(R_BEATS-1)*GB_BANDWIDTH]};
+                            end
                         end else begin
-                            x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_DATALENGTH_R-(R_BEATS-1)*GB_BANDWIDTH]};
+                            x_regs <= gb_doutb;
                         end
-                    end else begin
-                        x_regs <= gb_doutb;
+                        nn_r_cnt <= nn_r_cnt + 1;
                     end
-                    nn_r_cnt <= nn_r_cnt + 1;
                 end
 
             NN_SAVE: begin
@@ -534,10 +543,14 @@ endgenerate
                 n_state=NN_WAIT_X;
             end
             NN_WAIT_X:begin
-                if(x_load_done)
-                    n_state=NN_CMP_START;  
-                else
-                    n_state=NN_LOAD_X; 
+                if (gb_doutb_valid) begin
+                    if(x_load_done)
+                        n_state=NN_CMP_START;  
+                    else
+                        n_state=NN_LOAD_X; 
+                end else begin
+                    n_state=NN_WAIT_X;
+                end
             end
             NN_CMP_START: n_state    = NN_CMP_WAIT;
             NN_CMP_WAIT:  n_state    = cmp_all_valid ? NN_MAC_START : NN_CMP_WAIT;

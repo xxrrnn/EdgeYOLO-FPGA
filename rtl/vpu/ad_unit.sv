@@ -25,7 +25,8 @@ module ad_unit #(
     output logic [GB_BANDWIDTH-1:0]     gb_dinb,  
     output logic [GB_BANDWIDTH/8-1:0]   gb_web,   
     output logic                        gb_enb,    
-    input  wire [GB_BANDWIDTH-1:0]      gb_doutb
+    input  wire [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire                         gb_doutb_valid  // OBUF 读数据有效（与 gb_doutb 同拍）
 );
 
     localparam  ad_single_compute_blocks      = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH) ;
@@ -172,18 +173,20 @@ module ad_unit #(
                     ad_save_cnt <= '0;
                 end
                 AD_WAIT_X: begin
-                    // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
-                    if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
-                        ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
-                    else
-                        ad_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
+                    if (gb_doutb_valid) begin
+                        if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
+                            ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                        else
+                            ad_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
+                    end
                 end
                 AD_WAIT_X_2: begin
-                    // 修复：当 FP_CORE_NUM*FP_WIDTH <= GB_BANDWIDTH 时，直接赋值
-                    if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
-                        ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
-                    else
-                        ad_fp_in2_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
+                    if (gb_doutb_valid) begin
+                        if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
+                            ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                        else
+                            ad_fp_in2_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
+                    end
                 end
                 AD_UPDATE: begin
                     // 在 AD_UPDATE 状态重置 ad_save_cnt，为本次迭代准备
@@ -215,7 +218,19 @@ module ad_unit #(
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
+        end else if(c_state == AD_WAIT_X && !gb_doutb_valid) begin
+            // valid 未到：保持地址和 enb，等待 URAM 数据返回
+            gb_addrb = ad_x_load_addr;
+            gb_enb   = 1'b1;
+            gb_web   = '0;
+            gb_dinb  = '0;
         end else if(c_state == AD_LOAD_X_2 ) begin
+            gb_addrb = ad_x2_load_addr;
+            gb_enb   = 1'b1;
+            gb_web   = '0;
+            gb_dinb  = '0;
+        end else if(c_state == AD_WAIT_X_2 && !gb_doutb_valid) begin
+            // valid 未到：保持地址和 enb，等待 URAM 数据返回
             gb_addrb = ad_x2_load_addr;
             gb_enb   = 1'b1;
             gb_web   = '0;
@@ -291,9 +306,9 @@ module ad_unit #(
             AD_PRECOMPUTE_3 : n_state  = AD_LOAD_X;
             AD_UPDATE       : n_state  = AD_LOAD_X;
             AD_LOAD_X       : n_state  = AD_WAIT_X;
-            AD_WAIT_X       : n_state  = AD_LOAD_X_2;
+            AD_WAIT_X       : n_state  = gb_doutb_valid ? AD_LOAD_X_2 : AD_WAIT_X;
             AD_LOAD_X_2     : n_state  = AD_WAIT_X_2;
-            AD_WAIT_X_2     : n_state  = ad_x_load_block_done ? AD_COMPUTE : AD_UPDATE;
+            AD_WAIT_X_2     : n_state  = gb_doutb_valid ? (ad_x_load_block_done ? AD_COMPUTE : AD_UPDATE) : AD_WAIT_X_2;
             AD_COMPUTE      : n_state  = AD_COMPUTE_WAIT;
             AD_COMPUTE_WAIT : n_state  = fp_res_tvalid ? AD_SAVE : AD_COMPUTE_WAIT;
             AD_SAVE        : begin

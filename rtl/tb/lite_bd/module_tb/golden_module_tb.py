@@ -162,6 +162,21 @@ MODULE_CASES = {
         {'name': 'qa_c256_pressure', 'module': 'qa', 'layer': 'model.9.cv2.conv', 'hwc': (2, 4, 256)},
         {'name': 'concat_c128_c128_to256', 'module': 'concat_by_cdma', 'hw': (10, 10), 'channels': [128, 128]},
     ],
+    'mini_network': [
+        {'name': 'mini_2conv_c16',
+         'desc': '2-layer Conv1x1 16→16 back-to-back, tests multi-layer OBUF management',
+         'layers': [
+             {'layer': 'model.2.m.0.cv1.conv', 'in_hw': (4, 4), 'in_ch': 16, 'out_ch': 16},
+             {'layer': 'model.2.m.0.cv2.conv', 'in_hw': (4, 4), 'in_ch': 16, 'out_ch': 16},
+         ]},
+        {'name': 'mini_3conv_residual_c32',
+         'desc': '3-layer: Conv1x1 32→32, Conv1x1 32→32, Add + QA (CSP residual pattern)',
+         'layers': [
+             {'layer': 'model.4.m.0.cv1.conv', 'in_hw': (4, 4), 'in_ch': 32, 'out_ch': 32},
+             {'layer': 'model.4.m.0.cv2.conv', 'in_hw': (4, 4), 'in_ch': 32, 'out_ch': 32},
+         ],
+         'residual_add': True},
+    ],
 }
 
 @dataclass
@@ -998,7 +1013,6 @@ def make_concat_by_cdma_case(out_dir: str, spec: dict, rng: np.random.Generator)
     out = np.concatenate(arrays, axis=2)
     exp_words = int8_hwc_words(out)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
-    write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
     for i, arr in enumerate(arrays):
         write_hex(os.path.join(out_dir, f'src{i}.hex'), int8_hwc_words(arr))
     fast_inst = []
@@ -1124,9 +1138,199 @@ def make_add_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
             'wb': bytes(WB_SIZE_BYTES), 'shape': f'hwc={h}x{w}x{c}'}
 
 
+def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
+    """Multi-layer network test: chain conv layers with optional residual add.
+
+    OBUF slot plan (each 1MB region, OBUF total 16MB):
+      SLOT_A = 0x000000  input feature (INT8)
+      SLOT_B = 0x100000  layer 0 QA output / layer 1 input (INT8)
+      SLOT_C = 0x200000  DCIM accumulator scratch (INT32) / final output
+      SLOT_D = 0x300000  im2col scratch / DQA scratch
+      SLOT_E = 0x400000  layer 0 DQA output (FP32, saved for residual add)
+      SLOT_F = 0x500000  layer 1 DQA output (FP32, saved for residual add)
+
+    For non-residual 2-layer:
+      L0: input@A → im2col@D → DCIM@C → DQA@D → QA@B
+      L1: input@B → im2col@D → DCIM@C → DQA@D → QA@SLOT_C (final)
+
+    For residual 2-layer (CSP pattern):
+      L0: input@A → im2col@D → DCIM@C → DQA@E (save fp32) → QA@B
+      L1: input@B → im2col@D → DCIM@C → DQA@F (save fp32)
+      ADD: E + F → D (fp32)
+      QA:  D → C (final, INT8)
+    """
+    layer_specs = spec['layers']
+    has_residual = spec.get('residual_add', False)
+    num_layers = len(layer_specs)
+
+    WB_LAYER_STRIDE = 0x100   # 256 bytes per layer (fits up to 64 channels × 4B)
+    WB_BIAS_BASE = 0x1000
+    WB_QSCALE_BASE = 0x2000
+
+    SLOT_A = 0x000000
+    SLOT_B = 0x100000
+    SLOT_C = 0x200000
+    SLOT_D = 0x300000
+    SLOT_E = 0x400000
+    SLOT_F = 0x500000
+
+    # --- Load per-layer conv metadata ---
+    metas = []
+    for ls in layer_specs:
+        m = conv_meta(net, ls['layer'])
+        m = ConvMeta(m.name, ls['in_ch'], ls['out_ch'],
+                     m.kh, m.kw, m.stride_h, m.stride_w,
+                     m.pad_h0, m.pad_w0, m.pad_h1, m.pad_w1, m.npz_path)
+        metas.append(m)
+
+    h0, w0 = layer_specs[0]['in_hw']
+
+    # --- Golden computation + WB/weight packing ---
+    feat = random_int8(rng, (h0, w0, metas[0].in_ch))
+    current_int8 = feat.copy()
+    wb_data = bytearray(WB_SIZE_BYTES)
+    all_weight_words: List[str] = []
+    ibuf_weight_offsets: List[int] = []
+    layer_dqa_fp32 = []   # FP32 DQA outputs (for residual)
+    layer_oh_ow = []      # output h,w per layer
+    ibuf_byte_cursor = 0
+
+    cur_h, cur_w = h0, w0
+    layer_qscales: List[np.float32] = []
+    for i, meta in enumerate(metas):
+        npz = load_layer_npz_checked(meta, net, require_activation=True)
+        weights = npz['weight_int8'].astype(np.int8)
+        scale = np.resize(npz['dqa_scale'].astype(np.float32), meta.out_ch)
+        bias = np.resize(npz['dqa_bias'].astype(np.float32), meta.out_ch)
+        qscale = np.float32(1.0 / float(npz['act_scale']))
+        layer_qscales.append(qscale)
+
+        # WB packing
+        s_off = WB_LAYER_STRIDE * i
+        b_off = WB_BIAS_BASE + WB_LAYER_STRIDE * i
+        q_off = WB_QSCALE_BASE + 4 * i
+        wb_data[s_off:s_off + len(scale.tobytes())] = scale.tobytes()
+        wb_data[b_off:b_off + len(bias.tobytes())] = bias.tobytes()
+        wb_data[q_off:q_off + 4] = qscale.tobytes()
+
+        # Golden: im2col → matmul → DQA/ReLU
+        oh = (cur_h + meta.pad_h0 + meta.pad_h1 - meta.kh) // meta.stride_h + 1
+        ow = (cur_w + meta.pad_w0 + meta.pad_w1 - meta.kw) // meta.stride_w + 1
+        cols = im2col(current_int8.reshape(cur_h, cur_w, meta.in_ch), meta)
+        wflat = weights.reshape(meta.out_ch, -1).astype(np.int32)
+        k_size = meta.acc_depth * DCIM_CH_IN
+        if wflat.shape[1] < k_size:
+            wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
+        accum = cols.astype(np.int32) @ wflat.T
+        dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
+        layer_dqa_fp32.append(dqa)
+        qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta.out_ch)
+        current_int8 = qa
+        layer_oh_ow.append((oh, ow))
+        cur_h, cur_w = oh, ow
+
+        # Weight packing for IBUF
+        ibuf_weight_offsets.append(ibuf_byte_cursor)
+        tile_words = []
+        for t in range(meta.num_tiles):
+            tile_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t)]
+        all_weight_words += tile_words
+        ibuf_byte_cursor += len(tile_words) * IBUF_WORD_BYTES
+
+    # --- Compute final expected output ---
+    if has_residual and num_layers >= 2:
+        fp32_sum = (layer_dqa_fp32[0] + layer_dqa_fp32[1]).astype(np.float32)
+        qscale_final = layer_qscales[-1]
+        oh_f, ow_f = layer_oh_ow[1]
+        final = np.clip(np.round(fp32_sum * qscale_final), -128, 127).astype(np.int8)
+        final = final.reshape(oh_f, ow_f, metas[1].out_ch)
+        exp_words = int8_hwc_words(final)
+        final_dst = SLOT_C
+    else:
+        exp_words = int8_hwc_words(current_int8)
+        final_dst = SLOT_C
+
+    # --- Build instruction stream ---
+    fast_inst: List[int] = []
+
+    for i, meta in enumerate(metas):
+        oh_i, ow_i = layer_oh_ow[i]
+        lh = h0 if i == 0 else layer_oh_ow[i - 1][0]
+        lw = w0 if i == 0 else layer_oh_ow[i - 1][1]
+
+        src_slot = SLOT_A if i == 0 else SLOT_B
+        ibuf_wei_off = IBUF_WEI + ibuf_weight_offsets[i]
+        wb_s = WB_LAYER_STRIDE * i
+        wb_b = WB_BIAS_BASE + WB_LAYER_STRIDE * i
+        wb_q = WB_QSCALE_BASE + 4 * i
+
+        # im2col: src → SLOT_D
+        fast_inst += vpu_exec(UNIT_IM2COL, src_slot, 0, meta.in_ch, lh, lw,
+                              0, 0, SLOT_D, encode_addr_break(meta), oh_i, ow_i)
+        # DCIM: SLOT_D(→IBUF via CDMA) × weight → SLOT_C
+        fast_inst += dcim_layer_inst(meta, oh_i * ow_i, SLOT_D, SLOT_C,
+                                     IBUF_ACT, ibuf_wei_off)
+
+        if has_residual:
+            # DQA/ReLU: SLOT_C → SLOT_E (layer 0) or SLOT_F (layer 1)
+            dqa_dst = SLOT_E if i == 0 else SLOT_F
+            fast_inst += vpu_exec(UNIT_DQA, SLOT_C, 0, meta.out_ch, oh_i, ow_i,
+                                  wb_b, wb_s, dqa_dst, flags=0x1)
+            if i < num_layers - 1:
+                # QA: dqa_dst → SLOT_B (feed next layer)
+                fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, meta.out_ch, oh_i, ow_i,
+                                      0, wb_q, SLOT_B)
+        else:
+            # DQA/ReLU: SLOT_C → SLOT_D
+            fast_inst += vpu_exec(UNIT_DQA, SLOT_C, 0, meta.out_ch, oh_i, ow_i,
+                                  wb_b, wb_s, SLOT_D, flags=0x1)
+            if i < num_layers - 1:
+                # QA: SLOT_D → SLOT_B (feed next layer)
+                fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, meta.out_ch, oh_i, ow_i,
+                                      0, wb_q, SLOT_B)
+            else:
+                # Last layer QA: SLOT_D → final_dst
+                fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, meta.out_ch, oh_i, ow_i,
+                                      0, wb_q, final_dst)
+
+    if has_residual:
+        # ADD: SLOT_E + SLOT_F → SLOT_D
+        oh_f, ow_f = layer_oh_ow[-1]
+        out_ch = metas[-1].out_ch
+        fast_inst += vpu_exec(UNIT_AD, SLOT_E, SLOT_F, out_ch, oh_f, ow_f,
+                              0, 0, SLOT_D)
+        # Final QA: SLOT_D → SLOT_C
+        wb_q_final = WB_QSCALE_BASE + 4 * (num_layers - 1)
+        fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, out_ch, oh_f, ow_f,
+                              0, wb_q_final, final_dst)
+
+    fast_inst += [header(OP_END, 0, 0)]
+
+    # --- Write output files ---
+    src_words = int8_hwc_words(feat)
+    write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
+    write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
+    write_hex(os.path.join(out_dir, 'weight.hex'), all_weight_words)
+    fast_loads = [
+        ('src0.hex', OBUF_PHY_BASE + SLOT_A),
+        ('weight.hex', IBUF_PHY_BASE + IBUF_WEI),
+    ]
+    make_fast_svh(fast_loads, out_dir)
+    hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)),
+                     (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
+
+    total_shape = ' → '.join(f'{ls["in_ch"]}→{ls["out_ch"]}' for ls in layer_specs)
+    return {'module': 'mini_network', 'name': spec['name'],
+            'layer': metas[0].name, 'dst': final_dst,
+            'words': len(exp_words), 'fast_inst': fast_inst,
+            'hbm': hbm, 'wb': bytes(wb_data),
+            'shape': f'{num_layers}-layer {total_shape} residual={has_residual}'}
+
+
+
 def module_needs_wb(module: str) -> bool:
-    """Only DQA/QA/conv_pipeline read scale/bias from WB; others skip wb_init preload."""
-    return module in ('dqa', 'qa', 'conv_pipeline')
+    """Only DQA/QA/conv_pipeline/mini_network read scale/bias from WB."""
+    return module in ('dqa', 'qa', 'conv_pipeline', 'mini_network')
 
 
 def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
@@ -1208,6 +1412,8 @@ def generate(args: argparse.Namespace) -> None:
         meta = make_mp_case(out_dir, spec, rng)
     elif effective_module == 'add':
         meta = make_add_case(out_dir, spec, rng)
+    elif effective_module == 'mini_network':
+        meta = make_mini_network_case(out_dir, net, spec, rng)
     else:
         raise AssertionError(effective_module)
 
