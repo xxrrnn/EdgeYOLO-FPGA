@@ -66,6 +66,11 @@ module DCIM_Tile #(
     // ========================================================================
     // 状态机定义
     // ========================================================================
+    // OBUF_WR_DRAIN: 最后一次 obuf_wr_ready 握手后，URAM Port B 写流水线
+    // 还需要额外若干拍才真正写入（IN_REG1 + IN_REG2 + URAM 写 = 3 拍）。
+    // ST_DONE 状态停留 OBUF_WR_DRAIN 拍，确保 ready 信号延迟到 URAM 写完成后。
+    localparam OBUF_WR_DRAIN = 4;  // 保守值：覆盖仲裁后的 OBUF 写流水线延迟
+
     typedef enum logic [3:0] {
         ST_IDLE,
         ST_CLEAR,
@@ -164,6 +169,14 @@ module DCIM_Tile #(
         if (!rst_n) done_reg <= 0;
         else if (state == ST_DONE) done_reg <= 1'b1;
         else if (state == ST_IDLE && start_pulse) done_reg <= 1'b0;
+    end
+
+    // OBUF 写流水线排空计数器（ST_DONE 延迟）
+    reg [$clog2(OBUF_WR_DRAIN+1)-1:0] wr_drain_cnt;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) wr_drain_cnt <= '0;
+        else if (state != ST_DONE) wr_drain_cnt <= '0;
+        else if (wr_drain_cnt < OBUF_WR_DRAIN) wr_drain_cnt <= wr_drain_cnt + 1'b1;
     end
     
     // ========================================================================
@@ -277,7 +290,7 @@ module DCIM_Tile #(
                 if (chunk_has_more) next_state = ST_CLEAR;
                 else next_state = ST_DONE;
             end
-            ST_DONE:           next_state = ST_IDLE;
+            ST_DONE:           if (wr_drain_cnt >= OBUF_WR_DRAIN) next_state = ST_IDLE;
             default:           next_state = ST_IDLE;
         endcase
     end

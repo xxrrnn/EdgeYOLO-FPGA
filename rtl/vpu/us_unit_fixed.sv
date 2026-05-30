@@ -185,7 +185,7 @@ module us_unit_fixed #(
                         // 初始化基址（位置 (0,0)）
                         src_row_base      <= us_src_addr >> BYTE_ADDR_SHIFT;
                         dst_row_base_even <= us_dst_addr >> BYTE_ADDR_SHIFT;
-                        dst_row_base_odd  <= (us_dst_addr >> BYTE_ADDR_SHIFT) + (us_src_w << SCALE_BITS) * (us_src_c >> LANES_BITS);
+                        dst_row_base_odd  <= (us_dst_addr >> BYTE_ADDR_SHIFT) + dst_row_stride;
                         
                         src_col_base      <= '0;
                         dst_col_base_even <= '0;

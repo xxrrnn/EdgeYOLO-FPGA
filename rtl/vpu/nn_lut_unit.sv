@@ -216,47 +216,60 @@ module nn_lut_unit#(
 //    endgenerate
 
 genvar core_i, cmp_i;
+
+// FP_WIDTH 决定选用 FP32 还是 FP16 比较单元，必须在最外层 generate if 判断，
+// 不能嵌套在双重 for 内（Vivado 综合器对深层嵌套的 generate if 无法静态求解）
 generate
-    for (core_i = 0; core_i < FP_CORE_NUM; core_i = core_i + 1) begin: CORE_ARRAY
-        for (cmp_i = 0; cmp_i < NEURON_NUM; cmp_i = cmp_i + 1) begin: CMP_LEQ_ARRAY
-
-            // ¸ù¾Ý FP_WIDTH Ñ¡Ôñ±È½Ïµ¥Ôª
-            if (FP_WIDTH == 32) begin: FP32_LEQ
+    if (FP_WIDTH == 32) begin: GEN_FP32_LEQ
+        for (core_i = 0; core_i < FP_CORE_NUM; core_i = core_i + 1) begin: CORE_ARRAY
+            for (cmp_i = 0; cmp_i < NEURON_NUM; cmp_i = cmp_i + 1) begin: CMP_LEQ_ARRAY
                 fp32_compare_leq fp_leq_inst (
-                    .aclk(clk), 
-                    .s_axis_a_tvalid(cmp_in_valid), 
-                    .s_axis_a_tdata(x_regs[core_i*FP_WIDTH +:FP_WIDTH]), 
-                    .s_axis_b_tvalid(cmp_in_valid), 
-                    .s_axis_b_tdata(breakpoint_regs[cmp_i*FP_WIDTH +: FP_WIDTH]), 
-                    .m_axis_result_tvalid(cmp_res_valid[core_i][cmp_i]),  // output wire
-                    .m_axis_result_tdata(cmp_res[core_i][cmp_i])          // output wire [7 : 0]
+                    .aclk(clk),
+                    .s_axis_a_tvalid(cmp_in_valid),
+                    .s_axis_a_tdata(x_regs[core_i*FP_WIDTH +:FP_WIDTH]),
+                    .s_axis_b_tvalid(cmp_in_valid),
+                    .s_axis_b_tdata(breakpoint_regs[cmp_i*FP_WIDTH +: FP_WIDTH]),
+                    .m_axis_result_tvalid(cmp_res_valid[core_i][cmp_i]),
+                    .m_axis_result_tdata(cmp_res[core_i][cmp_i])
                 );
-            end else if (FP_WIDTH == 16) begin: FP16_LEQ
-                fp16_compare_leq fp_leq_inst (
-                    .aclk(clk), 
-                    .s_axis_a_tvalid(cmp_in_valid), 
-                    .s_axis_a_tdata(x_regs[core_i*FP_WIDTH +:FP_WIDTH]), 
-                    .s_axis_b_tvalid(cmp_in_valid), 
-                    .s_axis_b_tdata(breakpoint_regs[cmp_i*FP_WIDTH +: FP_WIDTH]), 
-                    .m_axis_result_tvalid(cmp_res_valid[core_i][cmp_i]),  // output wire
-                    .m_axis_result_tdata(cmp_res[core_i][cmp_i])          // output wire [7 : 0]
-                );
+                assign leq_res[core_i][cmp_i] = cmp_res[core_i][cmp_i][0] | cmp_res[core_i][cmp_i][1];
+                assign core_valid[core_i] = &cmp_res_valid[core_i];
             end
+        end
+    end else begin: GEN_FP16_LEQ
+        for (core_i = 0; core_i < FP_CORE_NUM; core_i = core_i + 1) begin: CORE_ARRAY
+            for (cmp_i = 0; cmp_i < NEURON_NUM; cmp_i = cmp_i + 1) begin: CMP_LEQ_ARRAY
+                fp16_compare_leq fp_leq_inst (
+                    .aclk(clk),
+                    .s_axis_a_tvalid(cmp_in_valid),
+                    .s_axis_a_tdata(x_regs[core_i*FP_WIDTH +:FP_WIDTH]),
+                    .s_axis_b_tvalid(cmp_in_valid),
+                    .s_axis_b_tdata(breakpoint_regs[cmp_i*FP_WIDTH +: FP_WIDTH]),
+                    .m_axis_result_tvalid(cmp_res_valid[core_i][cmp_i]),
+                    .m_axis_result_tdata(cmp_res[core_i][cmp_i])
+                );
+                assign leq_res[core_i][cmp_i] = cmp_res[core_i][cmp_i][0] | cmp_res[core_i][cmp_i][1];
+                assign core_valid[core_i] = &cmp_res_valid[core_i];
+            end
+        end
+    end
+endgenerate
 
-            // ¼ÆËã±È½Ï½á¹û
-            assign leq_res[core_i][cmp_i] = cmp_res[core_i][cmp_i][0] | cmp_res[core_i][cmp_i][1];
-            assign core_valid[core_i] = &cmp_res_valid[core_i];
-
-            integer i;
-            reg first;
-            always @(*) begin
-                index[core_i] = NEURON_NUM;  // ³õÊ¼»¯
-                first = 0;
-                for (i = 0; i < NEURON_NUM; i = i + 1) begin
-                    if (leq_res[core_i][i] & (~first)) begin
-                        index[core_i] = i[ADDR_WIDTH-1:0];
-                        first = 1'b1;
-                    end
+// 优先编码器：找最小满足条件的断点 index
+// loop_i 为 integer（32-bit），截位时用 ADDR_WIDTH'() 显式转型避免 part-select 问题
+generate
+    for (core_i = 0; core_i < FP_CORE_NUM; core_i = core_i + 1) begin: INDEX_ENC_ARRAY
+        integer loop_i;
+        reg first_enc;
+        reg [ADDR_WIDTH-1:0] idx_tmp;
+        always @(*) begin
+            index[core_i] = NEURON_NUM[ADDR_WIDTH-1:0];
+            first_enc = 1'b0;
+            for (loop_i = 0; loop_i < NEURON_NUM; loop_i = loop_i + 1) begin
+                idx_tmp = loop_i[ADDR_WIDTH-1:0];
+                if (leq_res[core_i][loop_i] & (~first_enc)) begin
+                    index[core_i] = idx_tmp;
+                    first_enc = 1'b1;
                 end
             end
         end
@@ -306,14 +319,9 @@ endgenerate
                 gb_enb = 1'b1;
             end
             NN_WAIT_X: begin
-                // valid 未到：保持 enb 和地址，等待 URAM 数据返回
-                if (!gb_doutb_valid) begin
-                    gb_addrb = nn_src_addr_block + nn_r_cnt + (x_loads << $clog2(R_BEATS));
-                    gb_enb = 1'b1;
-                end else begin
-                    gb_addrb = 0;
-                    gb_enb = 0;
-                end
+                // 只在 LOAD_X 发出一次读请求，WAIT_X 期间不重复发送，避免流水线积压
+                gb_addrb = 0;
+                gb_enb = 0;
             end
 
             //---------------------------------

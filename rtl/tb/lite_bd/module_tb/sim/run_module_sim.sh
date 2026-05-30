@@ -17,6 +17,8 @@ MODULE_CASE="${MODULE_CASE:-dcim_matmul}"
 MODULE_VARIANT="${MODULE_VARIANT:-default}"
 MODULE_VARIANTS="${MODULE_VARIANTS:-}"
 MODULE_VERIFY_WORDS="${MODULE_VERIFY_WORDS:-0}"
+MODULE_QUANT="${MODULE_QUANT:-int8}"
+MODULE_DIM="${MODULE_DIM:-}"
 FSDB="${FSDB:-0}"
 RUN_EXPORT="${RUN_EXPORT:-0}"
 FAST="${FAST:-1}"
@@ -26,7 +28,7 @@ ACTION="${ACTION:-sim}"
 SKIP_LITE_COMPILE="${SKIP_LITE_COMPILE:-1}"
 TB_TOP="tb_lite_bd_module"
 
-_VARIANT_SLUG="${MODULE_CASE}_${MODULE_VARIANT}"
+_VARIANT_SLUG="${MODULE_CASE}_${MODULE_VARIANT}_q${MODULE_QUANT}"
 RUN_DIR="${RUN_DIR:-$MODULE_SIM_DIR/run_${_VARIANT_SLUG}}"
 SUITE_DIR="${SUITE_DIR:-$MODULE_SIM_DIR/suite_${MODULE_CASE}}"
 COMPILE_DIR="${COMPILE_DIR:-$MODULE_SIM_DIR/build_shared}"
@@ -66,11 +68,19 @@ compile_simv() {
       echo "INFO: lite module missing, recompiling..."
       (cd "$EXPORT_VCS_DIR"; ./lite.sh -lib_map_path "$XILINX_VCS_LIB" -step compile \
         2>&1 | tee "$COMPILE_DIR/export_compile.log")
+      # rm -rf "$EXPORT_VCS_DIR/vcs_lib/hbm_v1_0_16"  # 保留库，只替换顶层
     fi
   else
     (cd "$EXPORT_VCS_DIR"; ./lite.sh -lib_map_path "$XILINX_VCS_LIB" -step compile \
       2>&1 | tee "$COMPILE_DIR/export_compile.log")
   fi
+
+  # HBM 行为仿真模型包含 PHY calibration 序列，会导致仿真极慢（数小时）。
+  # module_tb 数据路径完全走片上 URAM（OBUF/IBUF），不经过 HBM。
+  # 保留 hbm_v1_0_16 库（内部子模块），仅用 lite_hbm_stub.sv 替换 lite_hbm_0_0 顶层
+  # （apb_complete_0=1，AXI 输出置零，无 PHY calibration 行为）。
+  # echo "=== Removing HBM PHY sim model from vcs_lib (replaced by fast stub) ==="
+  # rm -rf "$EXPORT_VCS_DIR/vcs_lib/hbm_v1_0_16"
 
   rm -f "$SIMV" "$COMPILE_DIR/vlogan_rtl_extra.log" "$COMPILE_DIR/vlogan_tb.log" \
     "$COMPILE_DIR/compile.log" "$COMPILE_DIR/rtl_extra.f"
@@ -103,6 +113,9 @@ compile_simv() {
     "+incdir+$REPO_ROOT/bd/lite/ipshared/7b8c/verif/model"
     "+define+SIMULATION"
   )
+  if [[ "${FP32_2_INT16_BEHAVIORAL:-1}" == "1" ]]; then
+    inc+=("+define+FP32_2_INT16_BEHAVIORAL")
+  fi
 
   echo "=== Vlogan user RTL into xil_defaultlib ==="
   EXTRA_FL="$COMPILE_DIR/rtl_extra.f"
@@ -110,6 +123,12 @@ compile_simv() {
   (cd "$EXPORT_VCS_DIR"
     "$VLOGAN" "${vcs_parallel_opts[@]}" -full64 -sverilog +v2k "${inc[@]}" -work xil_defaultlib \
       -f "$EXTRA_FL" -l "$COMPILE_DIR/vlogan_rtl_extra.log")
+
+  echo "=== Vlogan HBM fast stub (replaces PHY calibration model) ==="
+  (cd "$EXPORT_VCS_DIR"
+    "$VLOGAN" "${vcs_parallel_opts[@]}" -full64 -sverilog +v2k "${inc[@]}" -work xil_defaultlib \
+      "$LITE_BD_DIR/lite_hbm_stub.sv" \
+      -l "$COMPILE_DIR/vlogan_hbm_stub.log")
 
   echo "=== Vlogan module TB (work) ==="
   (cd "$EXPORT_VCS_DIR"
@@ -129,9 +148,12 @@ compile_simv() {
 
 generate_run_dir() {
   mkdir -p "$RUN_DIR"
-  echo "=== Generate module golden module=$MODULE_CASE case=$MODULE_VARIANT ==="
+  echo "=== Generate module golden module=$MODULE_CASE case=$MODULE_VARIANT quant=$MODULE_QUANT ==="
+  extra_args=()
+  [[ -n "$MODULE_QUANT" ]] && extra_args+=(--quant "$MODULE_QUANT")
+  [[ -n "$MODULE_DIM"   ]] && extra_args+=(--dim "$MODULE_DIM")
   python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$MODULE_VARIANT" \
-    --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$RUN_DIR"
+    --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$RUN_DIR" "${extra_args[@]}"
 }
 
 ensure_simv() {
@@ -153,7 +175,7 @@ run_simv() {
     echo "  → run ACTION=gen bash $0 or make data" >&2
     exit 1
   }
-  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$RUN_DIR")
+  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$RUN_DIR" -no_save)
   if [[ "$SIMV_JOBS" =~ ^[0-9]+$ && "$SIMV_JOBS" -gt 1 ]]; then
     sim_opts=(-j"$SIMV_JOBS" "${sim_opts[@]}")
   fi
@@ -162,12 +184,11 @@ run_simv() {
   fi
   echo "=== VCS simulate module BD test (reuse simv) ==="
   (cd "$RUN_DIR"
-    "$SIMV" "${sim_opts[@]}" 2>&1 \
-    | grep -v '^IEEE1500' \
-    | tee sim.log)
+    "$SIMV" "${sim_opts[@]}" > sim.log 2>&1)
+  grep -v '^IEEE1500' "$RUN_DIR/sim.log" | tail -200
 
   summarize_log "$RUN_DIR/sim.log"
-  check_log_pass "$RUN_DIR/sim.log" "module=$MODULE_CASE case=$MODULE_VARIANT"
+  check_log_pass "$RUN_DIR/sim.log" "module=$MODULE_CASE case=$MODULE_VARIANT quant=$MODULE_QUANT"
 }
 
 generate_suite_dir() {
@@ -180,10 +201,13 @@ generate_suite_dir() {
   : > "$SUITE_DIR/suite.txt"
   echo "=== Generate suite module=$MODULE_CASE variants=$MODULE_VARIANTS ==="
   for v in $MODULE_VARIANTS; do
-    case_dir="$SUITE_DIR/run_${MODULE_CASE}_${v}"
+    case_dir="$SUITE_DIR/run_${MODULE_CASE}_${v}_q${MODULE_QUANT}"
+    extra_args=()
+    [[ -n "$MODULE_QUANT" ]] && extra_args+=(--quant "$MODULE_QUANT")
+    [[ -n "$MODULE_DIM"   ]] && extra_args+=(--dim "$MODULE_DIM")
     python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$v" \
-      --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir"
-    printf 'run_%s_%s\n' "$MODULE_CASE" "$v" >> "$SUITE_DIR/suite.txt"
+      --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir" "${extra_args[@]}"
+    printf 'run_%s_%s_q%s\n' "$MODULE_CASE" "$v" "$MODULE_QUANT" >> "$SUITE_DIR/suite.txt"
   done
   echo "Generated suite dir: $SUITE_DIR"
 }
@@ -199,7 +223,7 @@ run_suite_simv() {
     echo "  → run ACTION=gen-suite bash $0 or make data-suite" >&2
     exit 1
   }
-  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$SUITE_DIR" "+SUITE_FILE=$SUITE_DIR/suite.txt")
+  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$SUITE_DIR" "+SUITE_FILE=$SUITE_DIR/suite.txt" -no_save)
   if [[ "$SIMV_JOBS" =~ ^[0-9]+$ && "$SIMV_JOBS" -gt 1 ]]; then
     sim_opts=(-j"$SIMV_JOBS" "${sim_opts[@]}")
   fi
@@ -207,10 +231,10 @@ run_suite_simv() {
     sim_opts+=(+FSDB)
   fi
   echo "=== VCS simulate module suite in one process ==="
+  echo "=== VCS simulate module BD suite (reuse simv) ==="
   (cd "$SUITE_DIR"
-    "$SIMV" "${sim_opts[@]}" 2>&1 \
-    | grep -v '^IEEE1500' \
-    | tee sim.log)
+    "$SIMV" "${sim_opts[@]}" > sim.log 2>&1)
+  grep -v '^IEEE1500' "$SUITE_DIR/sim.log" | tail -200
 
   summarize_log "$SUITE_DIR/sim.log"
   check_log_pass "$SUITE_DIR/sim.log" "suite=$SUITE_DIR"

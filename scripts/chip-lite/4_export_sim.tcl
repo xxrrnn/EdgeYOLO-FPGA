@@ -2,7 +2,7 @@
 # Prerequisite: build/lite project exists (source 0_build.tcl + 1_bd.tcl + synth if needed).
 #
 # Usage (from repo root):
-#   vivado -mode batch -source scripts/chip-lite/3_export_sim.tcl
+#   vivado -mode batch -source scripts/chip-lite/4_export_sim.tcl
 #
 # Output: sim/lite_bd_export/vcs/  (+ optional copy of bd/lite/sim/lite.v)
 
@@ -74,8 +74,14 @@ export_simulation \
   -use_ip_compiled_libs
 
 # Keep a stable copy of BD sim netlist beside export (filelist fallback)
+# Optional: only copy if generate_target produced the sim netlist at the expected path.
 set bdSimCopy [file normalize "$exportRoot/$bdName.v"]
-file copy -force $bdSimV $bdSimCopy
+if {[file exists $bdSimV]} {
+    file copy -force $bdSimV $bdSimCopy
+    puts "INFO: copied BD sim netlist to $bdSimCopy"
+} else {
+    puts "WARNING: BD sim netlist not found at $bdSimV (OK if export_simulation regenerated it)"
+}
 
 puts "INFO: BD export simulation complete."
 puts "INFO:   export dir : $exportDir"

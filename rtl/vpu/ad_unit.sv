@@ -157,7 +157,7 @@ module ad_unit #(
 
     assign ad_x_load_addr    = (ad_src_addr_reg >> BYTE_ADDR_SHIFT)   + ad_x_load_block_cnt + ad_x_load_cnt;
     assign ad_x2_load_addr   = (ad_src2_addr_reg >> BYTE_ADDR_SHIFT)  + ad_x_load_block_cnt + ad_x_load_cnt;
-    assign ad_save_addr      = (ad_dst_addr_reg >> BYTE_ADDR_SHIFT)   + ad_save_cnt + ad_x_load_cnt / ad_single_compute_blocks * ad_single_compute_save_blocks;
+    assign ad_save_addr      = (ad_dst_addr_reg >> BYTE_ADDR_SHIFT)   + ad_save_cnt + ad_x_load_cnt;
 
 
     /*  X LOAD   */
@@ -218,19 +218,7 @@ module ad_unit #(
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
-        end else if(c_state == AD_WAIT_X && !gb_doutb_valid) begin
-            // valid 未到：保持地址和 enb，等待 URAM 数据返回
-            gb_addrb = ad_x_load_addr;
-            gb_enb   = 1'b1;
-            gb_web   = '0;
-            gb_dinb  = '0;
         end else if(c_state == AD_LOAD_X_2 ) begin
-            gb_addrb = ad_x2_load_addr;
-            gb_enb   = 1'b1;
-            gb_web   = '0;
-            gb_dinb  = '0;
-        end else if(c_state == AD_WAIT_X_2 && !gb_doutb_valid) begin
-            // valid 未到：保持地址和 enb，等待 URAM 数据返回
             gb_addrb = ad_x2_load_addr;
             gb_enb   = 1'b1;
             gb_web   = '0;

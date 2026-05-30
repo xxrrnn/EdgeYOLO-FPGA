@@ -237,7 +237,7 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 |-------------|-------------|----------|
 | `dcim_int8` | `dcim_matmul` | `dcim_tiny_1x1`、`conv6_s2_c3_to16`、`conv3_s2_c32_to64`、`conv1_c64_to32`、`conv3_c128_to128` |
 | `dcim_int16` | `dcim_matmul` | `int16_tiny_1x1`、`int16_conv3_c32_c64`、`int16_conv1_c128` |
-| `dcim_extreme_small` | `dcim_matmul` | `extreme_int8_1x1_c512_to512`、`extreme_int8_3x3_c128_to512`、`extreme_int8_6x6_c3_to64`、`extreme_int16_3x3_c128` |
+| `dcim_extreme` | `dcim_matmul` | `extreme_int8_1x1_c512_to512`、`extreme_int8_3x3_c128_to512`、`extreme_int8_6x6_c3_to64`、`extreme_int16_3x3_c128` |
 | `dcim_all` | `dcim_matmul` | `dcim_int8` + `dcim_int16` |
 | `dcim_network` | `dcim_matmul` | `dcim_model_3_conv`、`dcim_model_5_conv`、`dcim_model_7_conv` |
 | `qa_all` | `qa` | `qa_c16_signed`、`qa_c64_clip`、`qa_c128_dense` |
@@ -249,25 +249,94 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 ---
 
-## 当前验证状态（2026-05-28）
+## 当前验证状态（2026-05-30）
 
 硬件拓扑策略更新：DCIM lite 目标为 **1 group × 64 Tile**，共享一套 2MB IBUF 和一套 16MB OBUF。不要把 `NUM_GROUPS` 扩成 8 个物理 group；当前 RTL 的 group 会实例化独立 IBUF/OBUF，直接复制大容量 URAM，不适合容量约束。等效 64 个 DCIM 通过单 group 内 64 Tile 实现，映射更简单。
 
 注意：Vivado module_ref wrapper 会把 `NUM_GROUPS/TILES_PER_GROUP/NUM_TILES` 固化到 `lite_dcim_array_0_0.v`。修改拓扑后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`；否则仿真仍可能使用旧的 8 Tile wrapper，表现为 64 Tile 用例只有前 8 Tile 有输出。
 
-验证策略更新：RTL 仿真不再把完整网络大尺寸层作为常规回归目标。常规 RTL 重点跑小规模但极端的 `dcim_extreme_small`，覆盖 64 Tile 配置、高 acc_depth、INT8/INT16 和 1×1/3×3/6×6 kernel；完整网络/60 层端到端主要留给综合实现后上板验证。
+### 行为模型与综合 RTL 一致性约定
 
-推荐命令：
+影响综合编译结果的开关不再使用默认打开的 RTL parameter。`fp32_2_int16_array` 默认实例化 Vivado `fp32_to_int16` IP，是可综合且用于上板的 RTL 路径；只有仿真脚本显式加入 `` `FP32_2_INT16_BEHAVIORAL`` 时，才替换成 `shortreal` 行为模型，避免行为代码进入综合默认路径。
+
+- 默认综合/上板：不定义 `` `FP32_2_INT16_BEHAVIORAL``，使用真实 `fp32_to_int16` IP。
+- module_tb 默认仿真：`FP32_2_INT16_BEHAVIORAL=1`，脚本加入 `+define+FP32_2_INT16_BEHAVIORAL`，加快 QA INT16 路径仿真。
+- 如需用真实 IP 模型做仿真一致性抽查：在命令前加 `FP32_2_INT16_BEHAVIORAL=0`。
+
+该行为模型只影响 `qa_unit` 内的 FP32→INT16 转换分支。当前 W8A8 主路径与 conv pipeline 主要使用 INT8 QA，和上板 RTL 一致；INT16/行为模型相关测试应视为功能快速回归，最终上板一致性以真实 IP 仿真或综合后板上测试为准。
+
+验证策略更新：RTL 仿真不再把完整网络大尺寸层作为常规回归目标。常规 RTL 重点跑小规模但极端的 `dcim_extreme`，覆盖 64 Tile 配置、高 acc_depth、INT8/INT16 和 1×1/3×3/6×6 kernel；完整网络/60 层端到端主要留给综合实现后上板验证。
+
+### 推荐执行命令
+
+基础准备（首次或 BD/拓扑变化后）：
 
 ```bash
-make sim-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small
+cd rtl/tb/lite_bd/module_tb
+make export
+make compile
 ```
 
-如果刚改过 RTL，需要强制重编：
+当前优先级最高的 DCIM 小规模极限回归：
 
 ```bash
-make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small
+cd rtl/tb/lite_bd/module_tb
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=0 LOG=1
 ```
+
+完整 conv pipeline 链路（im2col → CDMA → DCIM → DQA/QA）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all STOP_ON_FAIL=0 LOG=1
+```
+
+VPU 单元回归（改过 VPU/OBUF 接口后建议跑）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 2h make rebuild-suite MODULE_CASE=im2col BATCH_SUITE=im2col_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=dqa BATCH_SUITE=dqa_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=us BATCH_SUITE=us_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=mp BATCH_SUITE=mp_all STOP_ON_FAIL=0 LOG=1
+```
+
+真实 IP 抽查 FP32→INT16 转换路径（非默认，较慢，用于对齐上板 RTL）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+FP32_2_INT16_BEHAVIORAL=0 timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all STOP_ON_FAIL=0 LOG=1
+```
+
+DCIM 网络真实尺寸 smoke（可选，不作为常规 RTL 回归）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network STOP_ON_FAIL=0 LOG=1
+```
+
+综合检查（默认不定义行为模型，使用上板 RTL）：
+
+```bash
+vivado -mode batch -source scripts/chip-lite/2_synth.tcl
+```
+
+### 当前测试内容与上板一致性
+
+当前 module_tb 是完整 lite BD 上的模块级/小链路数值验证，测试数据由 `golden_module_tb.py` 生成，运行时通过 `inst.hex` 指令流、`preload.txt` 输入预加载和 `checks.txt` 检查点驱动。已覆盖/建议覆盖的内容包括：
+
+- `dcim_matmul`：DCIM IBUF → Tile 阵列 → OBUF，覆盖 INT8/INT16、1×1/3×3/6×6 kernel、64 Tile 配置和高 `acc_depth`。
+- `im2col`：VPU 从 OBUF 读 feature 并写 OBUF im2col 结果。
+- `conv_pipeline`：`im2col → CDMA(OBUF→IBUF) → DCIM → DQA → QA`，是最接近单层卷积上板数据流的 RTL 链路。
+- `dqa` / `qa` / `mp` / `us` / `concat_by_cdma`：分别验证 VPU 后处理、量化、池化、上采样和 CDMA 拼接路径。
+
+与上板 RTL 的一致性：
+
+- BD 拓扑、地址映射、OBUF/IBUF、INST_Decoder、CDMA、VPU、DCIM_Array 主数据路径与 lite 上板设计一致。
+- 仿真为提速替换了外设/非关键行为：XDMA 由 BFM 驱动，HBM 顶层用 fast stub；当前 lite 主路径不经过 HBM，因此不影响 OBUF/IBUF/DCIM/VPU 数值验证。
+- `FP32_2_INT16_BEHAVIORAL=1` 只在仿真编译时打开，默认综合不打开。需要严格对齐上板时，用 `FP32_2_INT16_BEHAVIORAL=0` 重跑相关 QA INT16 测试。
+- 完整 60 层网络没有作为常规 RTL 仿真目标；RTL 回归验证小规模但覆盖关键边界的 case，完整端到端一致性仍需综合/实现后在板上跑 `tests/chip`。
 
 状态说明：
 
@@ -483,7 +552,7 @@ make sim MODULE_CASE=large_channel_pressure MODULE_VARIANT=qa_c256_pressure
 1. **DCIM 小规模极限回归**：这是当前 RTL 阶段优先级最高的 DCIM 验证，覆盖 64 Tile 配置路径、INT8/INT16、不同 kernel 和较高 acc_depth，但保持 M 很小，避免完整网络 RTL 仿真过重。
 
 ```bash
-timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme_small STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=0 LOG=1
 ```
 
 2. **完整 conv pipeline**：覆盖 `im2col + CDMA + DCIM + DQA/QA` 的组合路径，是单元都 PASS 后最关键的链路测试。

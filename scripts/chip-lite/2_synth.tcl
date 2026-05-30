@@ -76,6 +76,27 @@ if {[llength [get_runs -quiet impl_1]]} {
 # xcvu37p 有 9024 个 DSP；设计原始需要 16384 个（182%）
 # multiplier.v 的 (* use_dsp = "yes" *) 已删除，综合器可自由 LUT/DSP 混用
 # max_dsp=8800 让综合器把约 2.5% 的乘法器映射到 LUT，确保 DRC 通过
+
+# 顶层 synth_design 前，显式等待关键 RTL-module-reference IP（vpu_0）的 OOC run 完成。
+# 原因：vpu_0 是 module reference 而非 catalog IP，其 OOC run 有时不在 ipSynthRuns 列表内，
+# 顶层 synth_design 开始时若该 run 尚未完成，Vivado 找不到其 DCP 就报 "module not found"。
+set vpuRun [get_runs -quiet lite_vpu_0_0_synth_1]
+if {[llength $vpuRun] > 0} {
+    set vpuStatus [get_property STATUS [get_runs $vpuRun]]
+    if {![string match "*Complete*" $vpuStatus] && ![string match "*cached*" $vpuStatus]} {
+        puts "INFO: Waiting for lite_vpu_0_0_synth_1 to complete before top-level synth..."
+        wait_on_run $vpuRun
+    }
+    set vpuStatus [get_property STATUS [get_runs $vpuRun]]
+    if {![string match "*Complete*" $vpuStatus] && ![string match "*cached*" $vpuStatus]} {
+        error "lite_vpu_0_0_synth_1 did not complete successfully: $vpuStatus"
+    }
+}
+
+# IP OOC run 全部完成后，刷新 compile order 使 Vivado 将 IP DCP 关联到顶层 fileset，
+# 避免顶层 synth_design 找不到 lite_vpu_0_0 模块（module not found）
+update_compile_order -fileset sources_1
+
 synth_design -top $topName -part $part -directive $synDirective \
     -max_dsp 8800 -resource_sharing auto
 write_checkpoint -force [file normalize "$SynOutputDir/post_synth.dcp"]
@@ -146,6 +167,76 @@ place_design -directive $placeDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
+
+# ============================================================================
+# Post-place 时序门控（setup violation 超阈值则中止，避免浪费 phys_opt/route 时间）
+# 阈值说明：
+#   wns_stop   = -3.5 ns  : WNS 超过此值则强制停止（已超过 1 个时钟周期的 87%，
+#                            phys_opt 无法修复结构性问题）
+#   tns_stop   = -80000 ns: TNS 总违例超过此值则停止（约 60K 个 × 平均 -1.3ns）
+#   fail_stop  = 50000    : Failing Endpoints 超过此数则停止
+#   wns_warn   = -2.0 ns  : WNS 超过此值打印警告但允许继续
+# ============================================================================
+proc check_place_timing_gate_synth {} {
+    set wns_stop   -3.5
+    set tns_stop   -80000
+    set fail_stop  50000
+    set wns_warn   -2.0
+
+    # 获取最差 setup 路径的 WNS
+    set setup_paths [get_timing_paths -max_paths 1 -delay_type max \
+                        -filter {SLACK < 0}]
+    if {[llength $setup_paths] == 0} {
+        puts "INFO: \[timing_gate\] post-place: No setup violations. Timing clean."
+        return
+    }
+    set wns [get_property SLACK [lindex $setup_paths 0]]
+
+    # 从 report_timing_summary 提取 TNS / Failing Endpoints
+    set rpt [report_timing_summary -no_detailed_paths -return_string]
+    set tns     0.0
+    set failing 0
+    foreach line [split $rpt "\n"] {
+        # 匹配 Design Timing Summary 表格的数据行（格式：WNS TNS fail_ep total_ep WHS THS ...）
+        if {[regexp {^\s*([-0-9.]+)\s+([-0-9.]+)\s+(\d+)\s+\d+\s+([-0-9.]+)} \
+                $line -> wns_val tns_val fail_val whs_val]} {
+            set tns     [expr {double($tns_val)}]
+            set failing [expr {int($fail_val)}]
+            break
+        }
+    }
+
+    set stop 0
+    set reasons {}
+    if {$wns < $wns_stop} {
+        lappend reasons "WNS = ${wns} ns  (threshold: ${wns_stop} ns)"
+        set stop 1
+    }
+    if {$tns < $tns_stop} {
+        lappend reasons "TNS = ${tns} ns  (threshold: ${tns_stop} ns)"
+        set stop 1
+    }
+    if {$failing > $fail_stop} {
+        lappend reasons "Failing Endpoints = ${failing}  (threshold: ${fail_stop})"
+        set stop 1
+    }
+
+    if {$stop} {
+        puts "ERROR: \[timing_gate\] post-place setup violation exceeds threshold — stopping."
+        foreach r $reasons { puts "ERROR:   - $r" }
+        puts "ERROR: Checkpoint saved at: $::ImplOutputDir/post_place.dcp"
+        puts "ERROR: Fix RTL / constraints then re-run from post_opt.dcp or post_synth.dcp."
+        error "\[timing_gate\] Aborting: post-place timing too poor to continue."
+    }
+
+    if {$wns < $wns_warn} {
+        puts "WARNING: \[timing_gate\] WNS = ${wns} ns (< ${wns_warn} ns). Proceeding but convergence uncertain."
+        puts "WARNING:   TNS = ${tns} ns,  Failing = ${failing} endpoints."
+    } else {
+        puts "INFO: \[timing_gate\] post-place timing OK. WNS = ${wns} ns,  TNS = ${tns} ns,  Failing = ${failing} ep."
+    }
+}
+check_place_timing_gate_synth
 
 phys_opt_design -directive $physOptDirectiveAp
 write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt_ap.dcp"]

@@ -475,18 +475,12 @@ module tb_lite_bd_module;
             force dut.lite_i.xdma_0_axi_aresetn = 1'b1;
         repeat (20) @(posedge aclk);
 
-        $display("[%0t] MODULE_TB: waiting for HBM clock PLLs locked ...", $time);
-        wait (`LITE_BD_HBM_REF_CLK_LOCKED === 1'b1 &&
-              `LITE_BD_HBM_AXI_CLK_LOCKED === 1'b1 &&
-              `LITE_BD_HBM_ARESETN === 1'b1);
-        begin : wait_hbm_cal
-            integer wc;
-            wc = 0;
-            while (wc < 60000) begin
-                @(posedge aclk); wc++;
-            end
-        end
-        $display("[%0t] MODULE_TB: HBM init wait done — fabric ready", $time);
+        $display("[%0t] MODULE_TB: bypass HBM init", $time);
+        // module_tb does not access HBM; lite_hbm_stub.sv replaces the full HBM PHY model.
+        // Avoid waiting for or forcing HBM clkwiz/proc_sys_reset signals, which can trigger
+        // zero-time event storms in the vendor simulation models.
+        repeat (64) @(posedge aclk);
+        $display("[%0t] MODULE_TB: fabric ready", $time);
 
         if (suite_mode) begin
             $display("============================================================");

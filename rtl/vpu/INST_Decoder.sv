@@ -93,6 +93,7 @@ module INST_Decoder #(
     localparam [3:0] OP_WAIT_DCIM = 4'h7;
     localparam [3:0] OP_DCIM_CFG  = 4'h8;
     localparam [3:0] OP_DCIM_LAYER = 4'h9;
+    localparam [3:0] OP_CDMA_STRIDE = 4'hA;
     localparam [3:0] OP_END       = 4'hF;
     
     // 状态码定义
@@ -143,7 +144,11 @@ module INST_Decoder #(
         S_DCIM_LAYER_START    = 6'd50,
         S_DCIM_LAYER_WAIT     = 6'd51,
         S_DCIM_LAYER_NEXT     = 6'd52,
-        S_DCIM_LAYER_CFG_TILE_HI = 6'd53
+        S_DCIM_LAYER_CFG_TILE_HI = 6'd53,
+        S_CDMA_STRIDE_INIT       = 6'd54,
+        S_CDMA_STRIDE_ISSUE      = 6'd55,
+        S_CDMA_STRIDE_WAIT       = 6'd56,
+        S_CDMA_STRIDE_NEXT       = 6'd57
     } state_t;
 
     localparam int DCIM_NUM_TILES_L = `DCIM_NUM_TILES;
@@ -180,6 +185,15 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_act_base;
     reg [31:0] dcim_layer_act_stride;
     reg [31:0] dcim_layer_out_stride;
+
+    // OP_CDMA_STRIDE internal registers
+    reg [31:0] cstride_src_cur;
+    reg [31:0] cstride_dst_cur;
+    reg [31:0] cstride_copy_bytes;
+    reg [31:0] cstride_src_stride;
+    reg [31:0] cstride_dst_stride;
+    reg [31:0] cstride_count;
+    reg [31:0] cstride_idx;
     reg [31:0] dcim_layer_act_current;
     reg [31:0] dcim_layer_out_offset;
     reg [31:0] dcim_layer_wei_base [0:DCIM_NUM_TILES_L-1];
@@ -263,6 +277,7 @@ module INST_Decoder #(
                     OP_DCIM_EXEC: next_state = S_EXEC_DCIM;
                     OP_DCIM_CFG:  next_state = S_DCIM_CFG_INIT;
                     OP_DCIM_LAYER: next_state = (inst_rd_data_pipe[23:0] == (DCIM_LAYER_BODY_WORDS << 2)) ? S_FETCH_BODY : S_ERROR;
+                    OP_CDMA_STRIDE: next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
                     OP_WAIT_CDMA: next_state = S_EXEC_WAIT_CDMA;
                     OP_WAIT_VPU:  next_state = S_EXEC_WAIT_VPU;
                     OP_WAIT_DCIM: next_state = S_EXEC_WAIT_DCIM;
@@ -304,6 +319,7 @@ module INST_Decoder #(
                         OP_VPU_EXEC:  next_state = S_EXEC_VPU;
                         OP_DCIM_CFG:  next_state = S_DCIM_CFG_APPLY;
                         OP_DCIM_LAYER: next_state = S_DCIM_LAYER_INIT;
+                        OP_CDMA_STRIDE: next_state = S_CDMA_STRIDE_INIT;
                         default:      next_state = S_ERROR;
                     endcase
                 end else begin
@@ -371,6 +387,27 @@ module INST_Decoder #(
                     next_state = S_NEXT_INST;
             end
             
+            // ---- OP_CDMA_STRIDE: loop-driven strided CDMA for Concat ----
+            S_CDMA_STRIDE_INIT: begin
+                next_state = S_CDMA_STRIDE_ISSUE;
+            end
+
+            S_CDMA_STRIDE_ISSUE: begin
+                next_state = S_CDMA_STRIDE_WAIT;
+            end
+
+            S_CDMA_STRIDE_WAIT: begin
+                if (cdma_config_ready)
+                    next_state = S_CDMA_STRIDE_NEXT;
+            end
+
+            S_CDMA_STRIDE_NEXT: begin
+                if (cstride_idx + 1 >= cstride_count)
+                    next_state = S_NEXT_INST;
+                else
+                    next_state = S_CDMA_STRIDE_ISSUE;
+            end
+
             S_DCIM_CFG_INIT: begin
                 next_state = S_FETCH_BODY;
             end
@@ -512,6 +549,13 @@ module INST_Decoder #(
             dcim_layer_act_base <= '0;
             dcim_layer_act_stride <= '0;
             dcim_layer_act_current <= '0;
+            cstride_src_cur <= '0;
+            cstride_dst_cur <= '0;
+            cstride_copy_bytes <= '0;
+            cstride_src_stride <= '0;
+            cstride_dst_stride <= '0;
+            cstride_count <= '0;
+            cstride_idx <= '0;
             dcim_layer_out_offset <= '0;
             dcim_layer_out_stride <= '0;
             dcim_layer_tile_idx <= '0;
@@ -812,6 +856,41 @@ module INST_Decoder #(
                     dcim_layer_pixel_idx <= dcim_layer_pixel_idx + 1'b1;
                     dcim_layer_act_current <= dcim_layer_act_current + dcim_layer_act_stride;
                     dcim_layer_out_offset <= dcim_layer_out_offset + dcim_layer_out_stride;
+                end
+
+                // ---- OP_CDMA_STRIDE sequential logic ----
+                S_CDMA_STRIDE_INIT: begin
+                    cstride_src_cur    <= body_buffer[0];
+                    cstride_dst_cur    <= body_buffer[1];
+                    cstride_copy_bytes <= body_buffer[2];
+                    cstride_src_stride <= body_buffer[3];
+                    cstride_dst_stride <= body_buffer[4];
+                    cstride_count      <= body_buffer[5];
+                    cstride_idx        <= '0;
+                end
+
+                S_CDMA_STRIDE_ISSUE: begin
+                    cdma_src_addr_msb <= 32'h0;
+                    cdma_src_addr_lsb <= cstride_src_cur;
+                    cdma_dst_addr_msb <= 32'h0;
+                    cdma_dst_addr_lsb <= cstride_dst_cur;
+                    cdma_length       <= cstride_copy_bytes;
+                    cdma_config_valid <= 1'b1;
+                    cdma_start        <= 1'b1;
+                end
+
+                S_CDMA_STRIDE_WAIT: begin
+                    cdma_start <= 1'b1;
+                    if (cdma_config_ready) begin
+                        cdma_config_valid <= 1'b0;
+                        cdma_start <= 1'b0;
+                    end
+                end
+
+                S_CDMA_STRIDE_NEXT: begin
+                    cstride_idx     <= cstride_idx + 1'b1;
+                    cstride_src_cur <= cstride_src_cur + cstride_src_stride;
+                    cstride_dst_cur <= cstride_dst_cur + cstride_dst_stride;
                 end
                 
                 S_NEXT_INST: begin

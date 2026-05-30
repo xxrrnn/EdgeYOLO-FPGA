@@ -108,15 +108,19 @@ generate
         wire bank_hit_b_q1 = mem_enb_reg && (bank_sel_b_q1 == bank);
 
         // 第 2 级 per-bank 输入寄存器（综合后会被放在该 bank URAM cascade 附近）
-        (* shreg_extract = "no" *) reg [NUM_COL-1:0]      wea_reg2;
-        (* shreg_extract = "no" *) reg                    mem_ena_reg2;
-        (* shreg_extract = "no" *) reg [DWIDTH-1:0]       dina_reg2;
-        (* shreg_extract = "no" *) reg [BANK_AWIDTH-1:0]  addra_reg2;
+        // DONT_TOUCH: 每个 bank 的 reg2 值虽然与其他 bank 相同（均来自 wea_reg），
+        // 但必须保留独立的物理寄存器——Vivado 否则会把四个 bank 合并成一个物理 FF，
+        // 放在 SLR0 附近，导致 bank[2]/bank[3] 的 URAM cascade 需要 2+ SLR 穿越。
+        // DONT_TOUCH 确保每个 bank 的 reg2 被 placer 放在本 bank 的 URAM 旁边。
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [NUM_COL-1:0]      wea_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg                    mem_ena_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [DWIDTH-1:0]       dina_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [BANK_AWIDTH-1:0]  addra_reg2;
 
-        (* shreg_extract = "no" *) reg [NUM_COL-1:0]      web_reg2;
-        (* shreg_extract = "no" *) reg                    mem_enb_reg2;
-        (* shreg_extract = "no" *) reg [DWIDTH-1:0]       dinb_reg2;
-        (* shreg_extract = "no" *) reg [BANK_AWIDTH-1:0]  addrb_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [NUM_COL-1:0]      web_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg                    mem_enb_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [DWIDTH-1:0]       dinb_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [BANK_AWIDTH-1:0]  addrb_reg2;
 
         initial begin
             wea_reg2 = 0; mem_ena_reg2 = 0;

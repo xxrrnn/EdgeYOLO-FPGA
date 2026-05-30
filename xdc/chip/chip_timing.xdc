@@ -206,6 +206,8 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 # ============================================================================
 # SLR Pblock 约束 (lite: 仅 1 group)
 # ============================================================================
+# pblock_group_0: DCIM 计算核（Tile、IBUF、仲裁器等）锁在 SLR0
+# 注意：u_obuf 不包含在此 pblock 内，它有自己的 per-bank pblock（见下方）
 create_pblock pblock_group_0
 add_cells_to_pblock [get_pblocks pblock_group_0] [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_top/u_dcim_array/gen_groups\[0\].u_group}]
 resize_pblock [get_pblocks pblock_group_0] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y4}
@@ -222,13 +224,60 @@ resize_pblock [get_pblocks pblock_axi_vpu] -add {CLOCKREGION_X4Y0:CLOCKREGION_X7
 set_property IS_SOFT FALSE [get_pblocks pblock_axi_vpu]
 
 # ============================================================================
-# SLR 分配 (lite: 所有逻辑在 SLR0)
+# SLR 分配 (lite: DCIM 核逻辑在 SLR0，OBUF 各 bank 分散到各 SLR)
 # ============================================================================
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ *gen_groups\[0\].u_group*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_decoder/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/cdma_ctrl/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_bram/*}]
+
+# ============================================================================
+# OBUF per-bank Pblock（时序修复核心）
+# ============================================================================
+# 背景：OBUF 是 16MB（AWIDTH=20），分 4 个 bank，每 bank 4MB 需 ~128 URAM。
+# VU37P 每个 SLR 约有 570 URAM，每 bank 独占一个 SLR 资源充足。
+#
+# 问题根源：所有 bank 的 wea_reg2 值相同（均来自 wea_reg），Vivado 将其合并
+# 为一个物理 FF 放在 SLR0，但 bank[1~3] 的 URAM cascade 在 SLR1~3，
+# 造成 2+ SLR 穿越，路由延迟高达 5.3ns，远超 4ns 时钟周期。
+#
+# 修复：obuf.v 已给 reg2 加 DONT_TOUCH 防止合并；此处每 bank 锁一个 SLR，
+# 使 reg2 与对应 URAM cascade 共处同一 SLR，消除跨 SLR 路由。
+#
+# 约束优先级：per-bank hard Pblock > soft pblock_group_0 > USER_SLR_ASSIGNMENT
+# （Vivado 以最严格约束为准，OBUF bank 的放置以下方 hard pblock 为准）
+# ============================================================================
+
+# bank[0] → SLR0（与 DCIM 控制逻辑同层，AXI 接口延迟最小）
+create_pblock pblock_obuf_bank0
+add_cells_to_pblock [get_pblocks pblock_obuf_bank0] \
+  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[0].*}]
+resize_pblock [get_pblocks pblock_obuf_bank0] -add {SLR0}
+set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank0]
+
+# bank[1] → SLR1
+create_pblock pblock_obuf_bank1
+add_cells_to_pblock [get_pblocks pblock_obuf_bank1] \
+  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[1].*}]
+resize_pblock [get_pblocks pblock_obuf_bank1] -add {SLR1}
+set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank1]
+
+# bank[2] → SLR2
+create_pblock pblock_obuf_bank2
+add_cells_to_pblock [get_pblocks pblock_obuf_bank2] \
+  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[2].*}]
+resize_pblock [get_pblocks pblock_obuf_bank2] -add {SLR2}
+set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank2]
+
+# bank[3] → SLR3
+create_pblock pblock_obuf_bank3
+add_cells_to_pblock [get_pblocks pblock_obuf_bank3] \
+  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[3].*}]
+resize_pblock [get_pblocks pblock_obuf_bank3] -add {SLR3}
+set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank3]
+
+puts "INFO: OBUF per-bank Pblocks created: bank[0]→SLR0, bank[1]→SLR1, bank[2]→SLR2, bank[3]→SLR3"
 
 # ============================================================================
 # OBUF URAM cascade multicycle path

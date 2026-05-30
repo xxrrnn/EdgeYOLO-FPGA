@@ -51,6 +51,7 @@ $REPO_ROOT/rtl/vpu/fp_array/fp_mac_array.v
 $REPO_ROOT/rtl/vpu/fp_array/fp_add_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/int32_2_fp32_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/fp32_2_int8_array.sv
+$REPO_ROOT/rtl/vpu/fp_array/fp32_2_int16_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/int32_2_fp16_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/fp16_2_int8_array.sv
 $REPO_ROOT/rtl/vpu/INST_Decoder.sv

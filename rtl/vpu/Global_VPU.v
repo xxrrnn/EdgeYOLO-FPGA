@@ -82,6 +82,8 @@ module Global_VPU #(
   localparam UNIT_US  = 32'd05;
   localparam UNIT_AD  = 32'd06;
   localparam UNIT_IM2COL = 32'd07;  // lite: im2col_unit
+  localparam VPU_FLAG_RELU_EN = 0;
+  localparam VPU_FLAG_INT16   = 1;
 
 
     wire   rst_n_local;
@@ -175,6 +177,7 @@ module Global_VPU #(
   wire [ADDR_WIDTH-1:0] active_addr_s      = start ? addr_s        : addr_s_reg;
   wire [ADDR_WIDTH-1:0] active_addr_t      = start ? addr_t        : addr_t_reg;
   wire [3:0]            active_vpu_flags   = start ? vpu_flags     : vpu_flags_reg;
+  wire                  active_int16_mode  = active_vpu_flags[VPU_FLAG_INT16];
 
 
     wire [GB_ADDR_WIDTH-1:0]    gb_addrb, dqa_gb_addrb, nn_gb_addrb, qa_gb_addrb, mp_gb_addrb, us_gb_addrb, ad_gb_addrb, im2col_gb_addrb;
@@ -210,7 +213,7 @@ module Global_VPU #(
 
 
 
-    // mp_unit_fixed: 硬编码 5×5 MaxPooling (C=128, H=10, W=10, HWC, 256-bit BRAM)
+    // mp_unit_fixed: 可配置 MaxPool/GAP (MODE 由 mp_cfg = addr_break[1:0] 选择)
     mp_unit_fixed #(
       .ADDR_WIDTH         (ADDR_WIDTH),
       .GB_BANDWIDTH       (GB_BANDWIDTH),
@@ -224,7 +227,11 @@ module Global_VPU #(
       
       .mp_src_addr        (active_src_addr),
       .mp_dst_addr        (active_dst_addr),
-      
+      .mp_src_c           (active_src_c),
+      .mp_src_h           (active_src_h),
+      .mp_src_w           (active_src_w),
+      .mp_cfg             (active_addr_break),  // [1:0] = MODE
+
       .gb_addrb           (mp_gb_addrb), 
       .gb_dinb            (mp_gb_dinb), 
       .gb_web             (mp_gb_web),
@@ -260,59 +267,67 @@ module Global_VPU #(
       .gb_doutb_valid     (obuf_rd_valid)
   );
 
-nn_lut_unit #(
-    .ADDR_WIDTH(ADDR_WIDTH),
-    .INTERVAL_NUM(INTERVAL_NUM),
-    .BREAK_WIDTH(BREAK_WIDTH),
-    .WEIGHT_WIDTH(WEIGHT_WIDTH),
-    .BIAS_WIDTH(BIAS_WIDTH),
-    .FP_CORE_NUM(FP_CORE_NUM),
-    .FP_WIDTH(FP_WIDTH),
-    .WB_BANDWIDTH(WB_BANDWIDTH),
-    .RAM_DEPTH_WB(RAM_DEPTH_WB),
-    .GB_BANDWIDTH(GB_BANDWIDTH),
-    .GB_ADDR_WIDTH(GB_ADDR_WIDTH)
-)nn_lut_inst(
-    // --- Control/Status Ports ---
-    .clk(clk),
-    .rst_n(rst_n_local),
-    .nn_unit_start(nn_unit_start),
-    .nn_unit_ready(nn_unit_ready),
-    
-    // --- Configuration/Address Ports ---
-    .nn_addr_break(active_addr_break),
-    .nn_addr_s(active_addr_s),
-    .nn_addr_t(active_addr_t),
-    .nn_src_addr(active_src_addr),
-    .nn_src_c(active_src_c),
-    .nn_src_h(active_src_h),
-    .nn_src_w(active_src_w),
-    .nn_dst_addr(active_dst_addr),
+// nn_lut_unit 未经测试，暂时注释掉，nn_unit_ready 由 tie-off 拉高，不阻塞 config_ready
+// nn_lut_unit #(
+//     .ADDR_WIDTH(ADDR_WIDTH),
+//     .INTERVAL_NUM(INTERVAL_NUM),
+//     .BREAK_WIDTH(BREAK_WIDTH),
+//     .WEIGHT_WIDTH(WEIGHT_WIDTH),
+//     .BIAS_WIDTH(BIAS_WIDTH),
+//     .FP_CORE_NUM(FP_CORE_NUM),
+//     .FP_WIDTH(FP_WIDTH),
+//     .WB_BANDWIDTH(WB_BANDWIDTH),
+//     .RAM_DEPTH_WB(RAM_DEPTH_WB),
+//     .GB_BANDWIDTH(GB_BANDWIDTH),
+//     .GB_ADDR_WIDTH(GB_ADDR_WIDTH)
+// )nn_lut_inst(
+//     .clk(clk),
+//     .rst_n(rst_n_local),
+//     .nn_unit_start(nn_unit_start),
+//     .nn_unit_ready(nn_unit_ready),
+//     .nn_addr_break(active_addr_break),
+//     .nn_addr_s(active_addr_s),
+//     .nn_addr_t(active_addr_t),
+//     .nn_src_addr(active_src_addr),
+//     .nn_src_c(active_src_c),
+//     .nn_src_h(active_src_h),
+//     .nn_src_w(active_src_w),
+//     .nn_dst_addr(active_dst_addr),
+//     .fp_array_tready(fp_array_tready),
+//     .fp_array_tvalid(nn_fp_array_tvalid),
+//     .fp_a_tdata(nn_fp_a_tdata),
+//     .fp_b_tdata(nn_fp_b_tdata),
+//     .fp_c_tdata(nn_fp_c_tdata),
+//     .fp_res(fp_res),
+//     .fp_res_tvalid(fp_res_tvalid),
+//     .gb_addrb(nn_gb_addrb),
+//     .gb_dinb(nn_gb_dinb),
+//     .gb_web(nn_gb_web),
+//     .gb_enb(nn_gb_enb),
+//     .gb_doutb(gb_doutb),
+//     .gb_doutb_valid(obuf_rd_valid),
+//     .wb_addrb(nn_wb_addrb),
+//     .wb_dinb(nn_wb_dinb),
+//     .wb_web(nn_wb_web),
+//     .wb_enb(nn_wb_enb),
+//     .wb_doutb(wb_doutb)
+// );
 
-    // --- Floating Point Array Ports (AXI Stream-like interfaces) ---
-    .fp_array_tready(fp_array_tready),
-    .fp_array_tvalid(nn_fp_array_tvalid),
-    .fp_a_tdata(nn_fp_a_tdata), 
-    .fp_b_tdata(nn_fp_b_tdata),
-    .fp_c_tdata(nn_fp_c_tdata),
-    .fp_res(fp_res),
-    .fp_res_tvalid(fp_res_tvalid),
-
-    // --- Global Buffer (GB) Ports (Simple Dual-Port BRAM-like interface) ---
-    .gb_addrb(nn_gb_addrb), 
-    .gb_dinb(nn_gb_dinb),  
-    .gb_web(nn_gb_web),   
-    .gb_enb(nn_gb_enb),    
-    .gb_doutb(gb_doutb),
-    .gb_doutb_valid(obuf_rd_valid),
-
-    // --- Weight Buffer (WB) Ports (Simple Dual-Port BRAM-like interface) ---
-    .wb_addrb(nn_wb_addrb),
-    .wb_dinb(nn_wb_dinb),
-    .wb_web(nn_wb_web),
-    .wb_enb(nn_wb_enb),
-    .wb_doutb(wb_doutb)
-);
+// nn_lut_unit 输出信号 tie-off（避免 undriven wire warning）
+assign nn_unit_ready      = 1'b1;
+assign nn_unit_start      = 1'b0;
+assign nn_gb_addrb        = {GB_ADDR_WIDTH{1'b0}};
+assign nn_gb_dinb         = {GB_BANDWIDTH{1'b0}};
+assign nn_gb_web          = {GB_BANDWIDTH/8{1'b0}};
+assign nn_gb_enb          = 1'b0;
+assign nn_wb_addrb        = {WB_ADDR_WIDTH{1'b0}};
+assign nn_wb_dinb         = {WB_BANDWIDTH{1'b0}};
+assign nn_wb_web          = {WB_BANDWIDTH/8{1'b0}};
+assign nn_wb_enb          = 1'b0;
+assign nn_fp_array_tvalid = 1'b0;
+assign nn_fp_a_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
+assign nn_fp_b_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
+assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
 
 
 
@@ -343,6 +358,7 @@ nn_lut_unit #(
       .qa_src_w(active_src_w),
       .qa_scale_addr(active_scale_addr),
       .qa_dst_addr(active_dst_addr),
+      .qa_int16_mode(active_int16_mode),
 
       // --- Floating Point Array Ports (AXI Stream-like interfaces) ---
       .fp_array_tready(fp_array_tready),
@@ -409,6 +425,7 @@ nn_lut_unit #(
         .rst_n(rst_n_local),
         .im2col_unit_start(im2col_unit_start),
         .im2col_unit_ready(im2col_unit_ready),
+        .im2col_elem_bytes(active_int16_mode ? 2'd2 : 2'd1),
 
         .im2col_src_addr  (active_src_addr),
         .im2col_dst_addr  (active_dst_addr),
@@ -453,7 +470,8 @@ nn_lut_unit #(
         .rst_n(rst_n_local),
         .dqa_unit_start(dqa_unit_start),
         .dqa_unit_ready(dqa_unit_ready),
-        .dqa_relu_en(active_vpu_flags[0]),
+        .dqa_relu_en(active_vpu_flags[VPU_FLAG_RELU_EN]),
+        .dqa_int16_mode(active_int16_mode),
         .dqa_src_addr(active_src_addr),
         .dqa_src_c(active_src_c),
         .dqa_src_h(active_src_h),
@@ -484,11 +502,11 @@ nn_lut_unit #(
         .wb_doutb(wb_doutb)
     );
 
-    assign config_ready = nn_unit_ready & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready;
+    assign config_ready = 1'b1/*nn_unit_ready*/ & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready;
     // unit_active：start 同拍用 decoder 端口，运行中用 _reg
     assign dqa_unit_start = (unit_active == UNIT_DQA) ? start : 1'b0;
     assign qa_unit_start  = (unit_active == UNIT_QA ) ? start : 1'b0;
-    assign nn_unit_start  = (unit_active == UNIT_NN ) ? start : 1'b0;
+    // assign nn_unit_start  = (unit_active == UNIT_NN ) ? start : 1'b0;  // nn_lut_unit 未启用
     assign mp_unit_start  = (unit_active == UNIT_MP ) ? start : 1'b0;
     assign us_unit_start  = (unit_active == UNIT_US ) ? start : 1'b0;
     assign ad_unit_start  = (unit_active == UNIT_AD ) ? start : 1'b0;
@@ -505,7 +523,7 @@ nn_lut_unit #(
 
  // GB Address (Output from Unit to BRAM) → 通过 obuf_addr 输出到 OBUF
 assign gb_addrb = (unit_active == UNIT_DQA) ? dqa_gb_addrb : 
-                  (unit_active == UNIT_NN) ? nn_gb_addrb : 
+                  // (unit_active == UNIT_NN) ? nn_gb_addrb :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_gb_addrb :
                   (unit_active == UNIT_MP) ? mp_gb_addrb : 
                   (unit_active == UNIT_US) ? us_gb_addrb : 
@@ -515,7 +533,7 @@ assign gb_addrb = (unit_active == UNIT_DQA) ? dqa_gb_addrb :
 
 // GB Data Input (Output from Unit to BRAM write port)
 assign gb_dinb = (unit_active == UNIT_DQA) ? dqa_gb_dinb : 
-                  (unit_active == UNIT_NN) ? nn_gb_dinb  : 
+                  // (unit_active == UNIT_NN) ? nn_gb_dinb  :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_gb_dinb  :
                   (unit_active == UNIT_MP) ? mp_gb_dinb  : 
                   (unit_active == UNIT_US) ? us_gb_dinb  : 
@@ -525,7 +543,7 @@ assign gb_dinb = (unit_active == UNIT_DQA) ? dqa_gb_dinb :
 
 // GB Write Enable (Output from Unit to BRAM)
 assign gb_web  = (unit_active == UNIT_DQA) ? dqa_gb_web  : 
-                  (unit_active == UNIT_NN) ? nn_gb_web  : 
+                  // (unit_active == UNIT_NN) ? nn_gb_web  :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_gb_web  :
                   (unit_active == UNIT_MP) ? mp_gb_web  : 
                   (unit_active == UNIT_US) ? us_gb_web  : 
@@ -535,7 +553,7 @@ assign gb_web  = (unit_active == UNIT_DQA) ? dqa_gb_web  :
 
 // GB Enable (Output from Unit to BRAM)
 assign gb_enb  = (unit_active == UNIT_DQA) ? dqa_gb_enb  : 
-                  (unit_active == UNIT_NN) ? nn_gb_enb  : 
+                  // (unit_active == UNIT_NN) ? nn_gb_enb  :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_gb_enb  :
                   (unit_active == UNIT_MP) ? mp_gb_enb  : 
                   (unit_active == UNIT_US) ? us_gb_enb  : 
@@ -559,22 +577,22 @@ assign gb_enb  = (unit_active == UNIT_DQA) ? dqa_gb_enb  :
 
 // WB Address (Output from Unit to BRAM)
 assign wb_addrb = (unit_active == UNIT_DQA) ? dqa_wb_addrb : 
-                  (unit_active == UNIT_NN) ? nn_wb_addrb : 
+                  // (unit_active == UNIT_NN) ? nn_wb_addrb :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_wb_addrb :
                                                   {WB_ADDR_WIDTH{1'b0}};
 
 assign wb_dinb = (unit_active == UNIT_DQA) ? dqa_wb_dinb : 
-                  (unit_active == UNIT_NN) ? nn_wb_dinb  : 
+                  // (unit_active == UNIT_NN) ? nn_wb_dinb  :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_wb_dinb  :
                                                   {WB_BANDWIDTH{1'b0}};
 
 assign wb_web  = (unit_active == UNIT_DQA) ? dqa_wb_web  : 
-                  (unit_active == UNIT_NN) ? nn_wb_web  : 
+                  // (unit_active == UNIT_NN) ? nn_wb_web  :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_wb_web  :
                                                   {WB_BANDWIDTH/8{1'b0}};
 
 assign wb_enb  = (unit_active == UNIT_DQA) ? dqa_wb_enb  : 
-                  (unit_active == UNIT_NN) ? nn_wb_enb  : 
+                  // (unit_active == UNIT_NN) ? nn_wb_enb  :  // nn_lut_unit 未启用
                   (unit_active == UNIT_QA) ? qa_wb_enb  :
                                                   1'b0;
 
@@ -586,23 +604,23 @@ assign wb_enb  = (unit_active == UNIT_DQA) ? dqa_wb_enb  :
 
 // FP Array Valid (Output from Unit to MAC Array)
 assign fp_array_tvalid = (unit_active == UNIT_DQA) ? dqa_fp_array_tvalid : 
-                         (unit_active == UNIT_NN) ? nn_fp_array_tvalid : 
+                         // (unit_active == UNIT_NN) ? nn_fp_array_tvalid :  // nn_lut_unit 未启用
                          (unit_active == UNIT_QA) ? qa_fp_array_tvalid :
                                                          1'b0;
 
 // FP Array Data A (Operand A)
 assign fp_a_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_a_tdata  : 
-                         (unit_active == UNIT_NN) ? nn_fp_a_tdata   : 
+                         // (unit_active == UNIT_NN) ? nn_fp_a_tdata   :  // nn_lut_unit 未启用
                          (unit_active == UNIT_QA) ? qa_fp_a_tdata   :
                                                          {FP_CORE_NUM*FP_WIDTH{1'b0}};
                          
 assign fp_b_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_b_tdata  : 
-                         (unit_active == UNIT_NN) ? nn_fp_b_tdata   : 
+                         // (unit_active == UNIT_NN) ? nn_fp_b_tdata   :  // nn_lut_unit 未启用
                          (unit_active == UNIT_QA) ? qa_fp_b_tdata   :
                                                          {FP_CORE_NUM*FP_WIDTH{1'b0}};
                          
 assign fp_c_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_c_tdata  : 
-                         (unit_active == UNIT_NN) ? nn_fp_c_tdata   : 
+                         // (unit_active == UNIT_NN) ? nn_fp_c_tdata   :  // nn_lut_unit 未启用
                          (unit_active == UNIT_QA) ? qa_fp_c_tdata   :
                                                          {FP_CORE_NUM*FP_WIDTH{1'b0}};
 

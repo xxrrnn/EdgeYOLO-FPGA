@@ -126,7 +126,14 @@ set_property -dict [list \
     CONFIG.TILES_PER_GROUP {64} \
     CONFIG.NUM_TILES {64} \
 ] [get_bd_cells dcim_array_0]
+# 禁用 dcim_array_0 的 OOC 综合（同 vpu_0，避免 project 重建后 DCP 关联失效）
+catch {set_property generate_synth_checkpoint false [get_bd_cells dcim_array_0]}
 create_bd_cell -type module -reference Global_VPU_top vpu_0
+# 禁用 vpu_0 的 OOC 综合：module reference 类型的 BD cell 在 project 重建后
+# OOC run DCP 有时无法被顶层 synth_design 找到（Vivado bug）。
+# 设置 OOC 属性使 Vivado 在顶层综合中内联展开 RTL，
+# 避免 "module 'lite_vpu_0_0' not found" 错误。
+catch {set_property generate_synth_checkpoint false [get_bd_cells vpu_0]}
 
 # ============================================================================
 # 加载 IP 配置和连接脚本

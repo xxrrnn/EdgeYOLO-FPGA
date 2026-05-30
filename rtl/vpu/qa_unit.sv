@@ -27,6 +27,7 @@ module qa_unit #(
     input   wire[ADDR_WIDTH - 1:0]   qa_src_w,
     input   wire[ADDR_WIDTH - 1:0]   qa_scale_addr,
     input   wire[ADDR_WIDTH - 1:0]   qa_dst_addr,
+    input   wire                     qa_int16_mode,
 
     output  reg                                 fp_array_tvalid,
     input   wire                                 fp_array_tready,
@@ -52,23 +53,26 @@ module qa_unit #(
 
     localparam QA_FP_BITS        = FP_CORE_NUM * FP_WIDTH;
     localparam FP32_PER_READ     = GB_BANDWIDTH / FP_WIDTH;
-    localparam SAVE_DATA_BITS    = FP_CORE_NUM * Q_INT_WIDTH_OUT;
-    localparam SAVE_DATA_BYTES   = SAVE_DATA_BITS / 8;
-    localparam SAVES_PER_WORD    = GB_BANDWIDTH / SAVE_DATA_BITS;
-    localparam SLOT_IDX_BITS     = $clog2(SAVES_PER_WORD);
+    localparam SAVE_DATA_BITS8   = FP_CORE_NUM * 8;
+    localparam SAVE_DATA_BITS16  = FP_CORE_NUM * 16;
+    localparam SAVES_PER_WORD8   = GB_BANDWIDTH / SAVE_DATA_BITS8;
+    localparam SAVES_PER_WORD16  = GB_BANDWIDTH / SAVE_DATA_BITS16;
+    localparam MAX_SAVES_PER_WORD = (SAVES_PER_WORD8 > SAVES_PER_WORD16) ? SAVES_PER_WORD8 : SAVES_PER_WORD16;
+    localparam SLOT_IDX_BITS     = (MAX_SAVES_PER_WORD <= 1) ? 1 : $clog2(MAX_SAVES_PER_WORD);
     localparam FP_WIDTH_SHIFT    = $clog2(FP_WIDTH);
     localparam GB_BW_SHIFT       = $clog2(GB_BANDWIDTH);
     localparam BYTE_ADDR_SHIFT   = $clog2(GB_BANDWIDTH / 8);
 
-    // 对齐约束：一次 OBUF 读 = FP_CORE_NUM 个 FP32；SAVES_PER_WORD 次后凑满 128-bit 输出 word
-    // INT8+4core: 读 4 次/写 1 word；INT16+4core: 读 2 次/写 1 word（不处理凑不满）
+    // 对齐约束：一次 OBUF 读 = FP_CORE_NUM 个 FP32；INT8/INT16 运行时选择打包密度。
     initial begin
-        if (GB_BANDWIDTH % SAVE_DATA_BITS != 0)
-            $error("qa_unit: GB_BANDWIDTH must be multiple of FP_CORE_NUM*Q_INT_WIDTH_OUT");
+        if (GB_BANDWIDTH % SAVE_DATA_BITS8 != 0)
+            $error("qa_unit: GB_BANDWIDTH must be multiple of FP_CORE_NUM*8");
+        if (GB_BANDWIDTH % SAVE_DATA_BITS16 != 0)
+            $error("qa_unit: GB_BANDWIDTH must be multiple of FP_CORE_NUM*16");
         if (FP32_PER_READ != FP_CORE_NUM)
             $error("qa_unit: one OBUF read must carry FP_CORE_NUM FP32 values");
         if (Q_INT_WIDTH_OUT != 8)
-            $error("qa_unit: only Q_INT_WIDTH_OUT==8 (fp32_2_int8_array) is supported in lite");
+            $error("qa_unit: Q_INT_WIDTH_OUT should remain 8; INT16 is selected by qa_int16_mode");
     end
 
     typedef enum logic [4:0] {
@@ -95,7 +99,7 @@ module qa_unit #(
     reg [4:0]                                           qa_rd_wait_cnt;
     reg [FP_CORE_NUM * FP_WIDTH - 1 : 0]                qa_fp_in_reg;
     reg [FP_CORE_NUM * FP_WIDTH - 1 : 0]                qa_out_q_reg;
-    reg [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]               qa_quant_pack_data_reg;
+    reg [FP_TRAN_NUM*16-1:0]                            qa_quant_pack_data_reg;
     reg [GB_BANDWIDTH-1:0]                              qa_word_buf;
 
     reg [ADDR_WIDTH - 1 : 0]                            qa_src_addr_reg;
@@ -118,19 +122,31 @@ module qa_unit #(
     wire                                                qa_x_tran_done;
     wire                                                qa_done;
     wire [GB_ADDR_WIDTH-1:0]                            qa_obuf_write_addr;
+    wire [SLOT_IDX_BITS-1:0]                            saves_per_word_active;
+    wire [6:0]                                          save_data_bits_active;
 
-    assign pack_slot        = qa_iter_cnt[SLOT_IDX_BITS-1:0];
-    assign qa_out_word_idx  = qa_iter_cnt >> SLOT_IDX_BITS;
-    assign pack_word_done   = (pack_slot == SAVES_PER_WORD - 1);
+    assign saves_per_word_active = qa_int16_mode ? SAVES_PER_WORD16[SLOT_IDX_BITS-1:0] : SAVES_PER_WORD8[SLOT_IDX_BITS-1:0];
+    assign save_data_bits_active = qa_int16_mode ? 7'd64 : 7'd32;
+    assign pack_slot        = qa_int16_mode ? {{(SLOT_IDX_BITS-1){1'b0}}, qa_iter_cnt[0]}
+                                            : qa_iter_cnt[1:0];
+    assign qa_out_word_idx  = qa_int16_mode ? (qa_iter_cnt >> 1) : (qa_iter_cnt >> 2);
+    assign pack_word_done   = (pack_slot == saves_per_word_active - 1'b1);
     assign qa_x_tran_done   = (qa_x_tran_cnt == (FP_CORE_NUM / FP_TRAN_NUM) - 1);
     assign qa_done          = (c_state == QA_SAVE_HOLD) && (qa_iter_cnt == qa_total_iters_reg - 1);
     assign qa_x_load_addr   = (qa_src_addr_reg >> BYTE_ADDR_SHIFT) + qa_iter_cnt;
     assign qa_obuf_write_addr = (qa_dst_addr_reg >> BYTE_ADDR_SHIFT) + qa_out_word_idx;
 
     logic                               s_axis_tvalid;
-    logic                               m_axis_int_tvalid;
-    wire [FP_TRAN_NUM*FP_WIDTH-1:0]              s_axis_tdata;
-    wire [FP_TRAN_NUM*Q_INT_WIDTH_OUT-1:0]       m_axis_int_tdata;
+    wire                                m_axis_int8_tvalid;
+    wire                                m_axis_int16_tvalid;
+    wire                                m_axis_int_tvalid;
+    wire [FP_TRAN_NUM*FP_WIDTH-1:0]     s_axis_tdata;
+    wire [FP_TRAN_NUM*8-1:0]            m_axis_int8_tdata;
+    wire [FP_TRAN_NUM*16-1:0]           m_axis_int16_tdata;
+    wire [FP_TRAN_NUM*16-1:0]           m_axis_int_tdata;
+
+    assign m_axis_int_tvalid = qa_int16_mode ? m_axis_int16_tvalid : m_axis_int8_tvalid;
+    assign m_axis_int_tdata  = qa_int16_mode ? m_axis_int16_tdata : {{(FP_TRAN_NUM*8){1'b0}}, m_axis_int8_tdata};
 
     assign wb_addrb = (c_state == QA_LOAD_SCALE) ? (qa_scale_addr_reg >> BYTE_ADDR_SHIFT) : '0;
     assign wb_enb   = (c_state == QA_LOAD_SCALE) ? 1'b1 : 1'b0;
@@ -138,7 +154,7 @@ module qa_unit #(
     assign wb_dinb  = '0;
 
     wire [ADDR_WIDTH-1:0] qa_scale_block_index;
-    assign qa_scale_block_index = qa_scale_addr_reg[BYTE_ADDR_SHIFT-1:0];
+    assign qa_scale_block_index = qa_scale_addr_reg[BYTE_ADDR_SHIFT-1:2];
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -196,8 +212,10 @@ module qa_unit #(
                 QA_INT_WAIT: begin
                     if (m_axis_int_tvalid) begin
                         qa_quant_pack_data_reg <= m_axis_int_tdata;
-                        qa_word_buf[pack_slot * SAVE_DATA_BITS +: SAVE_DATA_BITS]
-                            <= m_axis_int_tdata[SAVE_DATA_BITS-1:0];
+                        if (qa_int16_mode)
+                            qa_word_buf[pack_slot * 64 +: 64] <= m_axis_int_tdata[63:0];
+                        else
+                            qa_word_buf[pack_slot * 32 +: 32] <= m_axis_int_tdata[31:0];
                     end
                 end
                 default: ;
@@ -212,7 +230,7 @@ module qa_unit #(
         gb_dinb  = '0;
 
         unique case (c_state)
-            QA_LOAD_X, QA_WAIT_X: begin
+            QA_LOAD_X: begin
                 gb_addrb = qa_x_load_addr;
                 gb_enb   = 1'b1;
                 gb_web   = '0;
@@ -239,10 +257,20 @@ module qa_unit #(
         .FP_TRAN_NUM(FP_TRAN_NUM)
     ) fp32_2_int8_array_inst (
         .clk(clk),
-        .s_axis_a_tvalid(s_axis_tvalid),
+        .s_axis_a_tvalid(s_axis_tvalid && !qa_int16_mode),
         .s_axis_a_tdata(s_axis_tdata),
-        .m_axis_result_tdata(m_axis_int_tdata),
-        .m_axis_result_tvalid(m_axis_int_tvalid)
+        .m_axis_result_tdata(m_axis_int8_tdata),
+        .m_axis_result_tvalid(m_axis_int8_tvalid)
+    );
+
+    fp32_2_int16_array #(
+        .FP_TRAN_NUM(FP_TRAN_NUM)
+    ) fp32_2_int16_array_inst (
+        .clk(clk),
+        .s_axis_a_tvalid(s_axis_tvalid && qa_int16_mode),
+        .s_axis_a_tdata(s_axis_tdata),
+        .m_axis_result_tdata(m_axis_int16_tdata),
+        .m_axis_result_tvalid(m_axis_int16_tvalid)
     );
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -293,8 +321,8 @@ module qa_unit #(
             qa_src_h_reg      <= qa_src_h;
             qa_src_w_reg      <= qa_src_w;
 `ifdef PROBE_QA
-            $display("[qa] START src=0x%08h dst=0x%08h scale=0x%08h c=%0d h=%0d w=%0d saves_per_word=%0d",
-                     qa_src_addr, qa_dst_addr, qa_scale_addr, qa_src_c, qa_src_h, qa_src_w, SAVES_PER_WORD);
+            $display("[qa] START src=0x%08h dst=0x%08h scale=0x%08h c=%0d h=%0d w=%0d int16=%0d saves_per_word=%0d",
+                     qa_src_addr, qa_dst_addr, qa_scale_addr, qa_src_c, qa_src_h, qa_src_w, qa_int16_mode, saves_per_word_active);
 `endif
         end
     end
@@ -315,7 +343,7 @@ module qa_unit #(
             end else if (c_state == QA_WAIT_X && qa_rd_wait_cnt[3:0] == 4'h0) begin
 `ifdef PROBE_QA
                 $display("[qa] WAIT_X in_word=0x%0h slot=%0d/%0d valid=%0b",
-                         qa_x_load_addr, pack_slot, SAVES_PER_WORD, gb_doutb_valid);
+                         qa_x_load_addr, pack_slot, saves_per_word_active, gb_doutb_valid);
 `endif
             end
         end
@@ -333,7 +361,7 @@ module qa_unit #(
             QA_LOAD_SCALE:   n_state = QA_WAIT_SCALE;
             QA_WAIT_SCALE:   n_state = QA_LOAD_X;
             QA_LOAD_X:       n_state = QA_WAIT_X;
-            QA_WAIT_X:       n_state = gb_doutb_valid ? QA_COMPUTE : QA_WAIT_X;  // enb 保持至 valid
+            QA_WAIT_X:       n_state = gb_doutb_valid ? QA_COMPUTE : QA_WAIT_X;
             QA_COMPUTE:      n_state = fp_array_tready ? QA_COMPUTE_WAIT : QA_COMPUTE;
             QA_COMPUTE_WAIT: n_state = fp_res_tvalid ? QA_INT : QA_COMPUTE_WAIT;
             QA_INT:          n_state = QA_INT_WAIT;

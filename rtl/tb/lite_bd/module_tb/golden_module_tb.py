@@ -122,18 +122,24 @@ MODULE_CASES = {
         {'name': 'dqa_nrelu_c24_in64',  'layer': 'model.24.m.0',         'hwc': (4, 4, 24),  'relu_en': False},  # head, no-relu, in_ch=64
         {'name': 'dqa_nrelu_c24_in128', 'layer': 'model.24.m.1',         'hwc': (3, 3, 24),  'relu_en': False},  # head, no-relu, in_ch=128
         {'name': 'dqa_nrelu_c24_in256', 'layer': 'model.24.m.2',         'hwc': (2, 2, 24),  'relu_en': False},  # head, no-relu, in_ch=256
+        # INT16 accumulator 输入（DCIM INT16 模式下 accum16→fp32，降低 DCIM 输出带宽）
+        {'name': 'dqa_accum16_c32',     'layer': 'model.2.m.0.cv1.conv', 'hwc': (3, 5, 32),  'relu_en': True,  'int16': True},
+        {'name': 'dqa_accum16_c64',     'layer': 'model.3.conv',         'hwc': (3, 5, 64),  'relu_en': True,  'int16': True},
     ],
     'qa': [
         {'name': 'qa_c16_signed', 'layer': 'model.0.conv', 'hwc': (4, 4, 16)},
         {'name': 'qa_c64_clip', 'layer': 'model.3.conv', 'hwc': (3, 5, 64)},
         {'name': 'qa_c128_dense', 'layer': 'model.9.cv1.conv', 'hwc': (2, 5, 128)},
+        {'name': 'qa_int16_c32_signed', 'layer': 'model.2.m.0.cv1.conv', 'hwc': (3, 5, 32), 'int16': True},  # fp32→int16
     ],
     'us': [
         {'name': 'us_128_10_to20', 'source': 'model.10.conv', 'hwc': (10, 10, 128)},
         {'name': 'us_64_20_to40', 'source': 'model.14.conv', 'hwc': (20, 20, 64)},
     ],
     'mp': [
-        {'name': 'mp_sppf_128_10', 'source': 'model.9.cv1.conv', 'hwc': (10, 10, 128)},
+        {'name': 'mp_sppf_128_10',    'source': 'model.9.cv1.conv',  'hwc': (10, 10, 128), 'cfg': 0},  # SPPF 5x5 s1 p2
+        {'name': 'mp_resnet_stem',     'source': 'model.0.conv',       'hwc': (8,  8,  64),  'cfg': 1},  # 3x3 s2 p1
+        {'name': 'mp_gap_7x7_c512',    'source': 'model.6.m.0.cv2.conv', 'hwc': (7,  7,  128), 'cfg': 2},  # GAP (小规模验证)
     ],
     'add': [
         {'name': 'add_residual_16', 'source': 'model.2.m.0.cv2.conv', 'hwc': (4, 4, 16)},
@@ -453,6 +459,13 @@ def fp32_hwc_words(arr: np.ndarray) -> List[str]:
     h, w, c = arr.shape
     assert c % 4 == 0, 'FP32 HWC channel count must align to 4 lanes for 128-bit OBUF words'
     blob = b''.join(struct.pack('<f', float(v)) for v in arr.astype(np.float32).flatten())
+    return bytes_to_128_words(blob)
+
+
+def int16_hwc_words(arr: np.ndarray) -> List[str]:
+    h, w, c = arr.shape
+    assert c % 4 == 0, 'INT16 HWC channel count should align to 4 lanes for VPU QA'
+    blob = arr.astype(np.int16).tobytes()
     return bytes_to_128_words(blob)
 
 
@@ -803,6 +816,26 @@ def random_fp32(rng: np.random.Generator, shape: Tuple[int, ...], scale: float =
     return rng.normal(0.0, scale, size=shape).astype(np.float32)
 
 
+def maxpool_generic(x: np.ndarray, kernel: int, stride: int, pad: int) -> np.ndarray:
+    """通用 MaxPool (same-like padding)，支持 kernel/stride/pad。"""
+    h, w, c = x.shape
+    oh = (h + 2 * pad - kernel) // stride + 1
+    ow = (w + 2 * pad - kernel) // stride + 1
+    y = np.full((oh, ow, c), -np.inf, dtype=np.float32)
+    for oy in range(oh):
+        for ox in range(ow):
+            vals = []
+            for ky in range(kernel):
+                iy = oy * stride + ky - pad
+                for kx in range(kernel):
+                    ix = ox * stride + kx - pad
+                    if 0 <= iy < h and 0 <= ix < w:
+                        vals.append(x[iy, ix, :])
+            if vals:
+                y[oy, ox, :] = np.maximum.reduce(vals)
+    return y
+
+
 def maxpool5_same(x: np.ndarray) -> np.ndarray:
     h, w, c = x.shape
     y = np.empty_like(x)
@@ -960,6 +993,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     meta = conv_meta(net, spec['layer'])
     h, w = spec['in_hw']
     oh, ow = out_hw(h, w, meta)
+    use_int16: bool = spec.get('int16', False)
     npz = load_layer_npz_checked(meta, net, require_activation=True)
     weights = npz['weight_int8']
     scale = npz['dqa_scale'].astype(np.float32)
@@ -971,6 +1005,40 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         bias = bias[:meta.out_ch]
     qscale = np.float32(1.0 / float(npz['act_scale']))
     feat = random_int8(rng, (h, w, meta.in_ch))
+    if use_int16:
+        # DCIM INT16 mode: im2col output is INT16 layout
+        cols16 = im2col_int16(feat, meta)
+        acc = meta.acc_depth_int16
+        K = acc * DCIM_CH_IN
+        num_logical_oc = meta.num_tiles * DCIM_LOGICAL_OUT_PER_TILE
+        w16 = rng.integers(-2048, 2048, size=(num_logical_oc, K), dtype=np.int32).astype(np.int16)
+        # Golden: int16 act × int16 weight → int32 → DQA(fp32) → QA(int16)
+        accum16 = (cols16.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
+        dqa = np.maximum(accum16.astype(np.float32) * scale[:num_logical_oc][None, :] + bias[:num_logical_oc][None, :], 0.0)
+        qa = np.clip(np.round(dqa * qscale), -32768, 32767).astype(np.int16).reshape(oh, ow, num_logical_oc)
+        exp_words = int16_hwc_words(qa.reshape(1, 1, oh * ow * num_logical_oc))
+        weight_words = []
+        for t in range(meta.num_tiles):
+            weight_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, int16=True)]
+        src_words = int8_hwc_words_packed(feat)
+        write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
+        write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
+        write_hex(os.path.join(out_dir, 'weight.hex'), weight_words)
+        # Instructions: im2col(INT16) → DCIM(INT16) → DQA(accum16→fp32) → QA(fp32→int16)
+        fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_AUX,
+                             encode_addr_break(meta), oh, ow, flags=0x2)
+        fast_inst += dcim_layer_inst(meta, oh * ow, OBUF_AUX, OBUF_SRC1, IBUF_ACT, IBUF_WEI, int16=True)
+        fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, num_logical_oc, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x3)
+        fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, OBUF_DST, flags=0x2)
+        fast_inst += [header(OP_END, 0, 0)]
+        make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0), ('weight.hex', IBUF_PHY_BASE + IBUF_WEI)], out_dir)
+        wb = wb_blob([(WB_SCALE, fp32_blob(scale[:num_logical_oc])), (WB_BIAS, fp32_blob(bias[:num_logical_oc])),
+                      (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
+        hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(weight_words))])
+        return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST, 'words': len(exp_words),
+                'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
+                'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{num_logical_oc} INT16 acc={acc} tiles={meta.num_tiles}'}
+    # INT8 path (original)
     cols = im2col(feat, meta)
     wflat = weights.reshape(meta.out_ch, -1).astype(np.int32)
     if wflat.shape[1] < meta.acc_depth * DCIM_CH_IN:
@@ -1041,17 +1109,26 @@ def make_concat_by_cdma_case(out_dir: str, spec: dict, rng: np.random.Generator)
 def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
     meta = conv_meta(net, spec['layer'])
     h, w, c = spec['hwc']
-    relu_en: bool = spec.get('relu_en', True)   # 默认带 ReLU，head 层显式传 False
+    relu_en: bool = spec.get('relu_en', True)
+    use_int16: bool = spec.get('int16', False)
     npz = load_layer_npz_checked(meta, net, require_activation=relu_en)
     scale = np.resize(npz['dqa_scale'].astype(np.float32), c)
     bias = np.resize(npz['dqa_bias'].astype(np.float32), c)
-    x = rng.integers(-5000, 5001, size=(h * w, c), dtype=np.int32)
+    if use_int16:
+        # INT16 accumulator: DQA 读 INT16 word 并 sign-extend → INT32 → FP32
+        x_int16 = rng.integers(-8192, 8192, size=(h * w, c), dtype=np.int32).astype(np.int16)
+        x = x_int16.astype(np.int32)
+        src_words = int16_accum_to_words(x_int16, c)
+    else:
+        x = rng.integers(-5000, 5001, size=(h * w, c), dtype=np.int32)
+        src_words = int32_to_words(x)
     acc = x.astype(np.float32) * scale[None, :] + bias[None, :]
-    y = np.maximum(acc, 0.0) if relu_en else acc   # relu_en=False → 线性直通
-    src_words = int32_to_words(x)
+    y = np.maximum(acc, 0.0) if relu_en else acc
     write_hex(os.path.join(out_dir, 'expected.hex'), fp32_to_words(y))
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    flags = 0x1 if relu_en else 0x0              # flags[0] = relu_en
+    relu_flag = 0x1 if relu_en else 0x0
+    int16_flag = 0x2 if use_int16 else 0x0
+    flags = relu_flag | int16_flag
     fast_inst = vpu_exec(UNIT_DQA, OBUF_SRC0, 0, c, h, w, WB_BIAS, WB_SCALE, OBUF_DST, flags=flags)
     fast_inst += [header(OP_END, 0, 0)]
     make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
@@ -1059,29 +1136,50 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
     return {'module': 'dqa', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST,
             'words': len(fp32_to_words(y)), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
-            'wb': wb, 'shape': f'hwc={h}x{w}x{c} relu_en={relu_en}',
+            'wb': wb, 'shape': f'hwc={h}x{w}x{c} relu_en={relu_en} int16={use_int16}',
             'relu_en': relu_en}
+
+
+def int16_accum_to_words(arr_int16: np.ndarray, c: int) -> List[str]:
+    """将 INT16 accumulator 数组打包为 128-bit OBUF words（HWC 排列，每 word 8 个 INT16）。
+    arr_int16: shape (h*w, c), dtype int16
+    INT16 模式 DQA 从 OBUF 读 INT16，布局与 int8_hwc_words 同构，但步长为 2B。
+    对齐到 8 个 INT16 / word（= 128-bit）。
+    """
+    n, cols = arr_int16.shape
+    assert cols == c
+    align8 = ((c + 7) // 8) * 8
+    padded = np.zeros((n, align8), dtype=np.int16)
+    padded[:, :c] = arr_int16
+    return bytes_to_128_words(padded.tobytes())
 
 
 def make_qa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
     meta = conv_meta(net, spec['layer'])
     h, w, c = spec['hwc']
+    use_int16 = spec.get('int16', False)
     act_scale = float(load_layer_npz_checked(meta, net)['act_scale'])
     qscale = np.float32(1.0 / act_scale)
     x = random_fp32(rng, (h * w, c), scale=2.0 / max(qscale, 1.0))
     x.flat[::7] *= 40.0
-    y = np.clip(np.round(x * qscale), -128, 127).astype(np.int8).reshape(h, w, c)
     src_words = fp32_to_words(x)
-    write_hex(os.path.join(out_dir, 'expected.hex'), int8_hwc_words(y))
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    fast_inst = vpu_exec(UNIT_QA, OBUF_SRC0, 0, c, h, w, 0, WB_QSCALE, OBUF_DST)
+    flags = 0x2 if use_int16 else 0x0
+    fast_inst = vpu_exec(UNIT_QA, OBUF_SRC0, 0, c, h, w, 0, WB_QSCALE, OBUF_DST, flags=flags)
     fast_inst += [header(OP_END, 0, 0)]
     make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
     wb = wb_blob([(WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
+    if use_int16:
+        y = np.clip(np.round(x * qscale), -32768, 32767).astype(np.int16).reshape(h * w, c)
+        exp_words = int16_hwc_words(y.reshape(1, 1, h * w * c))
+    else:
+        y = np.clip(np.round(x * qscale), -128, 127).astype(np.int8).reshape(h, w, c)
+        exp_words = int8_hwc_words(y)
+    write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     return {'module': 'qa', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST,
-            'words': len(int8_hwc_words(y)), 'fast_inst': fast_inst,
+            'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
-            'wb': wb, 'shape': f'hwc={h}x{w}x{c}'}
+            'wb': wb, 'shape': f'hwc={h}x{w}x{c} out_int16={use_int16}'}
 
 
 def make_us_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
@@ -1103,19 +1201,36 @@ def make_us_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
 
 def make_mp_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
     h, w, c = spec['hwc']
+    cfg = spec.get('cfg', 0)
     x = random_fp32(rng, (h, w, c))
-    y = maxpool5_same(x)
-    src_words = fp32_hwc_words(x)
+    if cfg == 0:
+        y = maxpool_generic(x, kernel=5, stride=1, pad=2)   # SPPF 5×5 s1 p2
+        mode_name = 'maxpool5x5s1p2'
+    elif cfg == 1:
+        y = maxpool_generic(x, kernel=3, stride=2, pad=1)   # ResNet stem 3×3 s2 p1
+        mode_name = 'maxpool3x3s2p1'
+    elif cfg == 2:
+        # GAP: output SUM (hardware outputs sum, host divides by H*W)
+        y_sum = x.sum(axis=(0, 1), keepdims=True).astype(np.float32)
+        y = y_sum  # shape (1, 1, C)
+        mode_name = 'gap_sum'
+    else:
+        y = maxpool_generic(x, kernel=5, stride=1, pad=2)
+        mode_name = 'maxpool5x5s1p2'
+    # encode addr_break[1:0] = cfg into instruction
+    addr_break_cfg = int(cfg) & 0x3
+    src_words = fp32_hwc_words(x) if cfg in (0, 1) else fp32_hwc_words(x)
     exp_words = fp32_hwc_words(y)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    fast_inst = vpu_exec(UNIT_MP, OBUF_SRC0, 0, c, h, w, 0, 0, OBUF_DST)
+    fast_inst = vpu_exec(UNIT_MP, OBUF_SRC0, 0, c, h, w, 0, 0, OBUF_DST, addr_break_cfg)
     fast_inst += [header(OP_END, 0, 0)]
     make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
     return {'module': 'mp', 'name': spec['name'], 'layer': spec['source'], 'dst': OBUF_DST,
             'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
-            'wb': bytes(WB_SIZE_BYTES), 'shape': f'5x5 same maxpool hwc={h}x{w}x{c}'}
+            'wb': bytes(WB_SIZE_BYTES),
+            'shape': f'{mode_name} hwc={h}x{w}x{c}->{y.shape[0]}x{y.shape[1]}x{c}'}
 
 
 def make_add_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
@@ -1140,28 +1255,26 @@ def make_add_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
 
 def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
     """Multi-layer network test: chain conv layers with optional residual add.
+    Supports QUANT=int8 (default) and QUANT=int16 via spec['int16'].
+    INT16: DCIM INT16, DQA accum16→fp32, QA fp32→int16.
+    All layers use the same quant mode within one mini_network test.
 
     OBUF slot plan (each 1MB region, OBUF total 16MB):
       SLOT_A = 0x000000  input feature (INT8)
-      SLOT_B = 0x100000  layer 0 QA output / layer 1 input (INT8)
-      SLOT_C = 0x200000  DCIM accumulator scratch (INT32) / final output
+      SLOT_B = 0x100000  layer 0 QA output / layer 1 input (INT8 or INT16)
+      SLOT_C = 0x200000  DCIM accumulator scratch / final output
       SLOT_D = 0x300000  im2col scratch / DQA scratch
       SLOT_E = 0x400000  layer 0 DQA output (FP32, saved for residual add)
       SLOT_F = 0x500000  layer 1 DQA output (FP32, saved for residual add)
-
-    For non-residual 2-layer:
-      L0: input@A → im2col@D → DCIM@C → DQA@D → QA@B
-      L1: input@B → im2col@D → DCIM@C → DQA@D → QA@SLOT_C (final)
-
-    For residual 2-layer (CSP pattern):
-      L0: input@A → im2col@D → DCIM@C → DQA@E (save fp32) → QA@B
-      L1: input@B → im2col@D → DCIM@C → DQA@F (save fp32)
-      ADD: E + F → D (fp32)
-      QA:  D → C (final, INT8)
     """
     layer_specs = spec['layers']
     has_residual = spec.get('residual_add', False)
     num_layers = len(layer_specs)
+    use_int16: bool = spec.get('int16', False)
+    # flags for instructions
+    _dqa_flags = 0x3 if use_int16 else 0x1  # bit0=relu, bit1=int16_mode
+    _qa_flags  = 0x2 if use_int16 else 0x0   # bit1=int16_mode
+    _im2col_flags = 0x2 if use_int16 else 0x0  # bit1=int16_mode
 
     WB_LAYER_STRIDE = 0x100   # 256 bytes per layer (fits up to 64 channels × 4B)
     WB_BIAS_BASE = 0x1000
@@ -1224,8 +1337,10 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         accum = cols.astype(np.int32) @ wflat.T
         dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
         layer_dqa_fp32.append(dqa)
-        qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta.out_ch)
-        current_int8 = qa
+        qa_out_dtype = np.int16 if use_int16 else np.int8
+        qa_clip = (-32768, 32767) if use_int16 else (-128, 127)
+        qa = np.clip(np.round(dqa * qscale), qa_clip[0], qa_clip[1]).astype(qa_out_dtype).reshape(oh, ow, meta.out_ch)
+        current_int8 = qa.astype(np.int8)  # next layer still reads INT8 feature (re-quant)
         layer_oh_ow.append((oh, ow))
         cur_h, cur_w = oh, ow
 
@@ -1242,12 +1357,20 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         fp32_sum = (layer_dqa_fp32[0] + layer_dqa_fp32[1]).astype(np.float32)
         qscale_final = layer_qscales[-1]
         oh_f, ow_f = layer_oh_ow[1]
-        final = np.clip(np.round(fp32_sum * qscale_final), -128, 127).astype(np.int8)
+        qa_clip = (-32768, 32767) if use_int16 else (-128, 127)
+        qa_out_dtype = np.int16 if use_int16 else np.int8
+        final = np.clip(np.round(fp32_sum * qscale_final), qa_clip[0], qa_clip[1]).astype(qa_out_dtype)
         final = final.reshape(oh_f, ow_f, metas[1].out_ch)
-        exp_words = int8_hwc_words(final)
+        if use_int16:
+            exp_words = int16_hwc_words(final.reshape(1, 1, oh_f * ow_f * metas[1].out_ch))
+        else:
+            exp_words = int8_hwc_words(final)
         final_dst = SLOT_C
     else:
-        exp_words = int8_hwc_words(current_int8)
+        if use_int16:
+            exp_words = int16_hwc_words(current_int8.astype(np.int16).reshape(1, 1, -1))
+        else:
+            exp_words = int8_hwc_words(current_int8)
         final_dst = SLOT_C
 
     # --- Build instruction stream ---
@@ -1266,32 +1389,32 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
 
         # im2col: src → SLOT_D
         fast_inst += vpu_exec(UNIT_IM2COL, src_slot, 0, meta.in_ch, lh, lw,
-                              0, 0, SLOT_D, encode_addr_break(meta), oh_i, ow_i)
+                              0, 0, SLOT_D, encode_addr_break(meta), oh_i, ow_i, flags=_im2col_flags)
         # DCIM: SLOT_D(→IBUF via CDMA) × weight → SLOT_C
         fast_inst += dcim_layer_inst(meta, oh_i * ow_i, SLOT_D, SLOT_C,
-                                     IBUF_ACT, ibuf_wei_off)
+                                     IBUF_ACT, ibuf_wei_off, int16=use_int16)
 
         if has_residual:
             # DQA/ReLU: SLOT_C → SLOT_E (layer 0) or SLOT_F (layer 1)
             dqa_dst = SLOT_E if i == 0 else SLOT_F
             fast_inst += vpu_exec(UNIT_DQA, SLOT_C, 0, meta.out_ch, oh_i, ow_i,
-                                  wb_b, wb_s, dqa_dst, flags=0x1)
+                                  wb_b, wb_s, dqa_dst, flags=_dqa_flags)
             if i < num_layers - 1:
                 # QA: dqa_dst → SLOT_B (feed next layer)
                 fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, meta.out_ch, oh_i, ow_i,
-                                      0, wb_q, SLOT_B)
+                                      0, wb_q, SLOT_B, flags=_qa_flags)
         else:
             # DQA/ReLU: SLOT_C → SLOT_D
             fast_inst += vpu_exec(UNIT_DQA, SLOT_C, 0, meta.out_ch, oh_i, ow_i,
-                                  wb_b, wb_s, SLOT_D, flags=0x1)
+                                  wb_b, wb_s, SLOT_D, flags=_dqa_flags)
             if i < num_layers - 1:
                 # QA: SLOT_D → SLOT_B (feed next layer)
                 fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, meta.out_ch, oh_i, ow_i,
-                                      0, wb_q, SLOT_B)
+                                      0, wb_q, SLOT_B, flags=_qa_flags)
             else:
                 # Last layer QA: SLOT_D → final_dst
                 fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, meta.out_ch, oh_i, ow_i,
-                                      0, wb_q, final_dst)
+                                      0, wb_q, final_dst, flags=_qa_flags)
 
     if has_residual:
         # ADD: SLOT_E + SLOT_F → SLOT_D
@@ -1302,7 +1425,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         # Final QA: SLOT_D → SLOT_C
         wb_q_final = WB_QSCALE_BASE + 4 * (num_layers - 1)
         fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, out_ch, oh_f, ow_f,
-                              0, wb_q_final, final_dst)
+                              0, wb_q_final, final_dst, flags=_qa_flags)
 
     fast_inst += [header(OP_END, 0, 0)]
 
@@ -1324,7 +1447,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
             'layer': metas[0].name, 'dst': final_dst,
             'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm, 'wb': bytes(wb_data),
-            'shape': f'{num_layers}-layer {total_shape} residual={has_residual}'}
+            'shape': f'{num_layers}-layer {total_shape} residual={has_residual} int16={use_int16}'}
 
 
 
@@ -1372,6 +1495,64 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
         f.write('runtime_files: inst.hex preload.txt checks.txt\n')
 
 
+def _apply_dim_overrides(spec: dict, args: argparse.Namespace) -> dict:
+    """Apply --quant and --dim overrides to a case spec (returns modified copy)."""
+    spec = dict(spec)
+
+    # quant override: set/override the int16 flag in the spec
+    if args.quant == 'int16':
+        spec['int16'] = True
+    elif args.quant == 'int8':
+        spec.pop('int16', None)
+        spec['int16'] = False
+
+    # dim override: format "C=N" or "H=N,W=N,C=N" or "HW=HxW"
+    if args.dim:
+        for part in args.dim.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            key, _, val = part.partition('=')
+            key = key.strip().upper()
+            val = val.strip()
+            if key == 'C':
+                if 'hwc' in spec:
+                    h, w, _ = spec['hwc']
+                    spec['hwc'] = (h, w, int(val))
+                elif 'channels' in spec:
+                    spec['channels'] = [int(val)] * len(spec['channels'])
+            elif key == 'H':
+                if 'hwc' in spec:
+                    _, w, c = spec['hwc']
+                    spec['hwc'] = (int(val), w, c)
+                elif 'in_hw' in spec:
+                    _, w = spec['in_hw']
+                    spec['in_hw'] = (int(val), w)
+                elif 'hw' in spec:
+                    _, w = spec['hw']
+                    spec['hw'] = (int(val), w)
+            elif key == 'W':
+                if 'hwc' in spec:
+                    h, _, c = spec['hwc']
+                    spec['hwc'] = (h, int(val), c)
+                elif 'in_hw' in spec:
+                    h, _ = spec['in_hw']
+                    spec['in_hw'] = (h, int(val))
+                elif 'hw' in spec:
+                    h, _ = spec['hw']
+                    spec['hw'] = (h, int(val))
+            elif key == 'HW':
+                hw_h, hw_w = (int(v) for v in val.lower().split('x'))
+                if 'hwc' in spec:
+                    _, _, c = spec['hwc']
+                    spec['hwc'] = (hw_h, hw_w, c)
+                elif 'in_hw' in spec:
+                    spec['in_hw'] = (hw_h, hw_w)
+                elif 'hw' in spec:
+                    spec['hw'] = (hw_h, hw_w)
+    return spec
+
+
 def generate(args: argparse.Namespace) -> None:
     net = load_network(args.network_json)
     network = load_network_file(args.network_json)
@@ -1389,6 +1570,9 @@ def generate(args: argparse.Namespace) -> None:
     spec = next((c for c in cases if c['name'] == args.case), cases[0] if args.case == 'default' else None)
     if spec is None:
         raise SystemExit(f'Unknown case {args.case!r} for module {module}; use --case list')
+
+    # apply --quant and --dim overrides
+    spec = _apply_dim_overrides(spec, args)
 
     out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -1438,6 +1622,10 @@ def main() -> int:
     p.add_argument('--verify-words', type=int, default=256, help='0 means compare all expected words')
     p.add_argument('--network-json', default=NETWORK_JSON)
     p.add_argument('--out-dir', default=os.path.join(os.path.dirname(__file__), 'build'))
+    p.add_argument('--quant', choices=['int8', 'int16'], default='int8',
+                   help='int8（默认）或 int16；覆盖 case spec 中的 int16 标志')
+    p.add_argument('--dim', default='',
+                   help='维度覆盖，格式：C=N 或 H=N,W=N,C=N 或 HW=HxW,C=N；不指定则用 case 默认值')
     args = p.parse_args()
     generate(args)
     return 0

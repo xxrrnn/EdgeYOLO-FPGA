@@ -239,6 +239,24 @@ proc fp32_mac_ips_create {} {
         puts "Info: IP fp32_to_fixed8 already exists, skipping create."
     }
 
+    # ============================================================================
+    # FP32 to INT16 (Float to Fixed conversion)
+    # ============================================================================
+    if {[llength [get_ips -quiet fp32_to_int16]] == 0} {
+        create_ip -vlnv $vlnv -module_name fp32_to_int16
+        set_property -dict [list \
+            CONFIG.Operation_Type {Float_to_fixed} \
+            CONFIG.A_Precision_Type {Single} \
+            CONFIG.Result_Precision_Type {Custom} \
+            CONFIG.C_Result_Exponent_Width {16} \
+            CONFIG.C_Result_Fraction_Width {0} \
+            CONFIG.Flow_Control {NonBlocking} \
+        ] [get_ips fp32_to_int16]
+        puts "Info: Created IP fp32_to_int16 (FP32 → INT16, signed 16-bit)."
+    } else {
+        puts "Info: IP fp32_to_int16 already exists, skipping create."
+    }
+
     if {[llength [get_ips -quiet fixed32_to_fp32]] == 0} {
         create_ip -vlnv $vlnv -module_name fixed32_to_fp32
         set_property -dict [list \
@@ -257,7 +275,7 @@ proc fp32_mac_ips_create {} {
     set all_ips {
         fp32_mac fp16_mac fp32_add fp16_add 
         int32_2_fp32 fp32_2_fp16 fp16_2_int8
-        fp32_mult_lane fp32_add_lane fp32_compare_leq fp32_to_int8 fp32_to_fixed8 fixed32_to_fp32
+        fp32_mult_lane fp32_add_lane fp32_compare_leq fp32_to_int8 fp32_to_fixed8 fp32_to_int16 fixed32_to_fp32
     }
     foreach ipname $all_ips {
         if {[llength [get_ips -quiet $ipname]] != 0} {

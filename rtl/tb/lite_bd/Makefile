@@ -1,42 +1,36 @@
-# lite BD VCS simulation helpers
-#
 # ==============================================================================
-# 什么时候需要重新 Vivado export_simulation？
+# lite BD VCS 仿真 — 顶层 Makefile
+# 工作目录：rtl/tb/lite_bd/
 # ==============================================================================
-# 不需要重新 export 的情况（最常见）：
-#   - 只修改 rtl/ 下普通用户 RTL，例如 VPU、DCIM、INST_Decoder、TB、BFM。
-#   - 只修改 Python golden / hex 数据生成脚本。
-#   - 只修改 tb_lite_bd_e2e.sv、host_axi_master_bfm.sv、lite_bd_hier.svh。
-#   处理方式：直接 make sim-fast / make sim-hbm / make sim-fsdb。
-#   原因：sim/run_bd_sim.sh 每次都会重新生成 golden，并重新 vlogan 用户 RTL/TB。
 #
-# 需要重新 export 的情况：
-#   - 修改 Vivado BD 结构，例如增删 IP、改 SmartConnect、改端口连接。
-#   - 修改 scripts/ip/bd/lite/*.tcl 或 scripts/chip-lite/* 影响 BD/IP 生成。
-#   - 修改地址映射，导致 BD address editor 输出变化。
-#   - 重新生成 build/lite/lite.xpr 或 bd/lite/lite.bd。
-#   - 修改 IP 配置、IP 版本、BD wrapper 端口。
-#   处理方式：先 make export，或直接 make sim-export / make sim-hbm-export。
+# ── 何时需要重新 export？─────────────────────────────────────────────────────
+# 不需要（最常见）：修改 RTL / Python golden / TB SV → 直接 make sim-fast
+# 需要（约 5~10min）：增删 Vivado IP、改 BD 结构/地址映射 → make export
 #
-# 速度档位：
-#   make sim-fast : 层级B，Host 直写 OBUF/IBUF，仍跑 lite BD + axi_cdma/VPU/DCIM。
-#   make sim-hbm  : HBM-first，最接近硬件，但非常慢，仅建议 sign-off 用。
+# ── E2E 仿真档位 ─────────────────────────────────────────────────────────────
+# make sim-fast   快速（Host 直写 OBUF/IBUF，不经 HBM）  ← 日常推荐
+# make sim-hbm    HBM-first（最接近硬件，慢）           ← sign-off 用
 #
-# FSDB/Verdi：
-#   make sim-fsdb : fast 模式 + FSDB dump。
-#   make verdi    : 打开生成的 FSDB。
+# ── 完整功能验证（一键）─────────────────────────────────────────────────────
+# 覆盖 DCIM INT8/INT16、VPU QA/DQA INT8/INT16、im2col/MP/US、端到端链路：
 #
-# 典型命令：
-#   make sim-fast SKIP_LITE_COMPILE=1 BD_VERIFY_WORDS=8
-#   make sim-hbm  SKIP_LITE_COMPILE=1 BD_VERIFY_WORDS=8
-#   make export
-#   make sim-export
+#   make module-sim-all                  # 从本目录调 module_tb sim-all
 #
-# module_tb 子测试（从本目录转发，无需 cd module_tb）：
-#   make module-sim MODULE_CASE=im2col MODULE_VARIANT=im2col_3x3_s2_c32
-#   make module-sim-batch BATCH_SUITE=dcim_smoke
-#   make module-list-cases MODULE_CASE=dcim_matmul
-# ===============================================================================
+# ── 分类测试快查 ─────────────────────────────────────────────────────────────
+# DCIM：
+#   make module-sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all
+# VPU（量化/反量化）：
+#   make module-sim-batch MODULE_CASE=qa  BATCH_SUITE=qa_all
+#   make module-sim-batch MODULE_CASE=dqa BATCH_SUITE=dqa_all
+#   make module-sim-batch MODULE_CASE=dqa BATCH_SUITE=dqa_int16_all
+# im2col：
+#   make module-sim-batch MODULE_CASE=im2col BATCH_SUITE=im2col_all
+# 端到端链路（im2col→DCIM→DQA→QA）：
+#   make module-sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all
+# 单用例调试：
+#   make module-sim MODULE_CASE=dqa MODULE_VARIANT=dqa_accum16_c32
+#   make module-fsdb MODULE_CASE=qa  MODULE_VARIANT=qa_int16_c32_signed
+# ==============================================================================
 
 REPO_ROOT := $(abspath ../../..)
 SIM_DIR   := $(abspath sim)
@@ -62,11 +56,13 @@ MODULE_RUN_EXPORT ?= 0
 BATCH_SUITE ?=
 MODULE_VARIANTS ?=
 STOP_ON_FAIL ?= 1
+QUANT ?= int8
+DIM ?=
 
 MODULE_MAKE = $(MAKE) -C $(MODULE_TB_DIR)
 
 .PHONY: help export sim sim-fast sim-export sim-hbm sim-hbm-export sim-fsdb sim-fsdb-export verdi waves summary clean
-.PHONY: module-sim module-sim-export module-fsdb module-fsdb-export module-export
+.PHONY: module-sim module-sim-export module-fsdb module-fsdb-export module-export module-sim-all module-sim-results
 .PHONY: module-verdi module-data module-list-cases module-clean module-help
 .PHONY: module-sim-batch module-sim-batch-export module-data-batch module-list-suites
 .PHONY: module-sim-ps module-sim-watch module-sim-done
@@ -150,7 +146,8 @@ clean:
 # ── module_tb 转发（实现见 module_tb/Makefile）────────────────────────────────
 module-sim:
 	$(MODULE_MAKE) sim MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-		MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) RUN_EXPORT=$(MODULE_RUN_EXPORT)
+		MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) RUN_EXPORT=$(MODULE_RUN_EXPORT) \
+		QUANT=$(QUANT) DIM="$(DIM)"
 
 module-sim-export:
 	$(MODULE_MAKE) sim-export MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
@@ -167,6 +164,12 @@ module-fsdb-export:
 # BD/IP 变更后：与 E2E 共用同一套 Vivado export
 module-export: export
 
+module-sim-all:
+	$(MODULE_MAKE) sim-all STOP_ON_FAIL=$(STOP_ON_FAIL)
+
+module-sim-results:
+	$(MODULE_MAKE) sim-results
+
 module-verdi:
 	$(MODULE_MAKE) verdi
 
@@ -180,7 +183,7 @@ module-list-cases:
 module-sim-batch:
 	$(MODULE_MAKE) sim-batch MODULE_CASE=$(MODULE_CASE) BATCH_SUITE=$(BATCH_SUITE) \
 		MODULE_VARIANTS="$(MODULE_VARIANTS)" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-		RUN_EXPORT=$(MODULE_RUN_EXPORT) STOP_ON_FAIL=$(STOP_ON_FAIL)
+		RUN_EXPORT=$(MODULE_RUN_EXPORT) STOP_ON_FAIL=$(STOP_ON_FAIL) QUANT=$(QUANT) DIM="$(DIM)"
 
 module-sim-batch-export:
 	$(MODULE_MAKE) sim-batch-export MODULE_CASE=$(MODULE_CASE) BATCH_SUITE=$(BATCH_SUITE) \
@@ -210,51 +213,30 @@ module-help:
 	$(MODULE_MAKE) help
 
 help:
-	@echo "lite BD VCS Makefile"
+	@echo "lite BD VCS Makefile  (工作目录: rtl/tb/lite_bd/)"
 	@echo ""
-	@echo "Re-export rule:"
-	@echo "  RTL/TB/Python-only changes: do NOT export; run make sim-fast/sim-hbm/sim-fsdb."
-	@echo "  BD/IP/address/wrapper changes: run make export or make sim-export."
+	@echo "完整功能验证（一键）："
+	@echo "  make module-sim-all              覆盖所有模块 INT8+INT16"
+	@echo "  make module-sim-results          查看全量 PASS/FAIL 汇总（sim-all 后运行）"
 	@echo ""
-	@echo "Targets:"
-	@echo "  make export                Vivado export_simulation only"
-	@echo "  make sim / sim-fast        Fast BD mode; recommended daily flow"
-	@echo "  make sim-export            Export first, then fast BD mode"
-	@echo "  make sim-hbm               HBM-first mode; closest to hardware, slow"
-	@echo "  make sim-hbm-export        Export first, then HBM-first mode"
-	@echo "  make sim-fsdb              Fast BD mode with FSDB dump"
-	@echo "  make sim-fsdb-export       Export first, then FSDB simulation"
-	@echo "  make summary               Print key PASS/FAIL lines from sim.log"
-	@echo "  make verdi                 Open $(FSDB)"
-	@echo "  make clean                 Remove $(BUILD_DIR)"
+	@echo "E2E 仿真（整包 BD，含 PCIe/XDMA 路径）："
+	@echo "  make sim-fast                    快速 (Host 直写)，日常 RTL 改动后用"
+	@echo "  make sim-hbm                     HBM-first，最接近硬件，sign-off 用"
+	@echo "  make sim-export                  export 后跑 fast"
+	@echo "  make sim-fsdb                    fast + 波形 dump"
+	@echo "  make summary                     打印上次仿真 PASS/FAIL 摘要"
 	@echo ""
-	@echo "module_tb (forward to $(MODULE_TB_DIR)):"
-	@echo "  make module-sim            Single-module BD test"
-	@echo "  make module-sim-batch      BATCH_SUITE=dcim_tiny | dcim_smoke | dcim_network"
-	@echo "  make module-sim-export     Export first, then module test"
-	@echo "  make module-sim-batch-export  Export first, then batch"
-	@echo "  make module-fsdb           Module test with FSDB"
-	@echo "  make module-fsdb-export    Export first, then module FSDB"
-	@echo "  make module-export         Alias of make export (shared BD export)"
-	@echo "  make module-verdi          Open module_tb FSDB / KDB"
-	@echo "  make module-data           Generate module hex/manifest only"
-	@echo "  make module-list-cases     List variants for MODULE_CASE"
-	@echo "  make module-list-suites    List BATCH_SUITE presets"
-	@echo "  make module-data-batch     Generate hex for a batch (no sim)"
-	@echo "  make module-sim-ps         sim running? (PID, CPU%%)"
-	@echo "  make module-sim-watch      refresh every 5s"
-	@echo "  make module-sim-done       PASS / FAIL / RUNNING"
-	@echo "  make module-clean          Remove module_tb build dir"
-	@echo "  make module-help           module_tb target help"
+	@echo "module_tb（单模块驱动 BD，速度快，覆盖全）："
+	@echo "  make module-sim-all              全量（推荐）"
+	@echo "  make module-sim-results          全量 PASS/FAIL 汇总"
+	@echo "  make module-sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all QUANT=all"
+	@echo "  make module-sim-batch MODULE_CASE=qa          BATCH_SUITE=qa_all   QUANT=all"
+	@echo "  make module-sim-batch MODULE_CASE=dqa         BATCH_SUITE=dqa_all  QUANT=all"
+	@echo "  make module-sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all"
+	@echo "  make module-sim MODULE_CASE=dqa MODULE_VARIANT=dqa_c64_mid QUANT=int16"
+	@echo "  make module-sim MODULE_CASE=qa  MODULE_VARIANT=qa_c16_signed DIM=HW=6x6,C=32"
+	@echo "  make module-list-suites          列出全部 BATCH_SUITE"
 	@echo ""
-	@echo "E2E variables:"
-	@echo "  BD_CASE=$(BD_CASE)"
-	@echo "  BD_SCALE=$(BD_SCALE)"
-	@echo "  BD_VERIFY_WORDS=$(BD_VERIFY_WORDS)"
-	@echo "  SKIP_LITE_COMPILE=$(SKIP_LITE_COMPILE)"
-	@echo ""
-	@echo "module_tb variables:"
-	@echo "  MODULE_CASE=$(MODULE_CASE)"
-	@echo "  MODULE_VARIANT=$(MODULE_VARIANT)"
-	@echo "  MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS)"
-	@echo "  MODULE_RUN_EXPORT=$(MODULE_RUN_EXPORT)"
+	@echo "需要重新 export（增删 IP / 改 BD 结构）："
+	@echo "  make export"
+	@echo "  make module-sim-all              export 后接上面即可"
