@@ -23,7 +23,9 @@ set ImplOutputDir [file normalize "$projPath/ImplOutputDir"]
 
 set synDirective Default
 set optDirective ExploreWithRemap
-set placeDirective Explore
+# NOTE: "Explore" / "AltSpreadLogic_high" triggered Vivado 2024.2 placer SIGSEGV
+# (Phase 2.6.2 HAPLFTypeUtils::buildTypeToIdMap crash). Use Default for stability.
+set placeDirective Default
 set physOptDirectiveAp AggressiveExplore
 set routeDirective AggressiveExplore
 set physOptDirectiveAr AggressiveExplore

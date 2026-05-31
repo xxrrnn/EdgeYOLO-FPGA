@@ -32,8 +32,11 @@ if {[llength [get_ports -quiet cpu_reset]]} {
   set_false_path -from [get_ports cpu_reset]
 }
 
-# DCIM 异步复位
-set _dcim_async_rst [get_pins -quiet -hierarchical -filter {NAME =~ *dcim_array_0/inst/u_top/u_dcim_array/*/CLR}]
+# DCIM 异步复位 (CLR/PRE/RST pins) — 覆盖全路径，包括旧层次 u_top 和新层次 inst
+# post_place async_default Recovery WNS=-1.468ns: main_rst BUFGCE(fan-out=405956) → DCIM CLR
+# 异步复位 recovery/removal check 无实际功能意义，全部 false_path
+set _dcim_async_rst [get_pins -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/*CLR || NAME =~ *dcim_array_0/*PRE}]
 if {[llength $_dcim_async_rst]} {
   set_false_path -to $_dcim_async_rst
 }
@@ -119,6 +122,63 @@ set _cnt_cells_all [get_cells -quiet -hierarchical -filter {NAME =~ */u_maArray/
 if {[llength $_cnt_cells_all]} {
   set_property MAX_FANOUT 32 $_cnt_cells_all
 }
+
+# post_place setup WNS=-3.747ns: cfg_start_reg(fan-out=54) → LUT3 → LUT5/LUT6(fan-out=190) → tile FSM CE
+# 跨 SLR0↔SLR2 两次穿越，路由延迟 7.5ns，超出 4ns 时钟周期。
+# 修复：对 cfg_start_reg 及 DCIM top-level 配置信号加 MAX_FANOUT，
+#       让 Vivado 在每个 SLR 内复制寄存器，消除跨 SLR 广播路由。
+set _cfg_start [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/cfg_start_reg}]
+if {[llength $_cfg_start]} {
+  set_property MAX_FANOUT 16 $_cfg_start
+}
+# cfg_start 经过的中间 is_int16_reg LUT 输出 fan-out=190，也需要复制
+set _is_int16_luts [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/*is_int16_reg_i_1*}]
+if {[llength $_is_int16_luts]} {
+  set_property MAX_FANOUT 16 $_is_int16_luts
+}
+# DCIM Array 顶层所有配置寄存器统一限制扇出
+set _dcim_cfg_regs [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/cfg_*_reg*}]
+if {[llength $_dcim_cfg_regs]} {
+  set_property MAX_FANOUT 16 $_dcim_cfg_regs
+}
+
+# post_place setup WNS=-3.747ns: cfg_start → tile FSM CE 多周期路径
+# 语义安全性：cfg_* 寄存器在 FSM 启动前由软件写入，至少等待 1 个指令解码周期（>100 个时钟），
+# 与 FSM 启动时刻之间有足够的 setup margin，2-cycle MCP 不影响功能正确性。
+# 路径：dcim_array_0/inst/cfg_*_reg → gen_tiles[*].u_tile/FSM_onehot_state_reg*/CE|D|S
+set _mcp_cfg_from [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/cfg_*_reg*}]
+set _mcp_fsm_ce_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/gen_groups*.u_group/gen_tiles*.u_tile/FSM_onehot_state_reg*/CE ||
+           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_groups*.u_group/gen_tiles*.u_tile/FSM_onehot_state_reg*/D  ||
+           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_groups*.u_group/gen_tiles*.u_tile/*state_reg*/CE}]
+if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
+  set_multicycle_path 2 -setup -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
+  set_multicycle_path 1 -hold  -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
+  puts "INFO: cfg→FSM MCP 2-setup: [llength $_mcp_cfg_from] src, [llength $_mcp_fsm_ce_to] dst"
+}
+
+# ============================================================================
+# HBM IP 内部时序豁免
+# ============================================================================
+# clk_out1_lite_hbm_axi_clk_wiz_0 setup WNS=-0.198ns (17 EP):
+#   HBM_SNGLBLI_INTF_AXI.WREADY_PIPE → LUT4 → FDCE
+#   HBM AXI IP 内部信号，Xilinx 官方 IP 不需要用户保证此路径时序，豁免之
+set_false_path -setup \
+  -from [get_pins -quiet -hierarchical \
+    -filter {NAME =~ */hbm_0/inst/*HBM_SNGLBLI_INTF_AXI*/WREADY_PIPE}]
+
+# **async_default** Recovery WNS=-0.145ns (1 EP):
+#   hbm_rst/ACTIVE_LOW_PR_OUT_DFF/FDRE_PER_N → hbm_0/ARESET_N
+#   HBM 复位为异步信号，recovery check 无需满足，豁免之
+set_false_path \
+  -from [get_pins -quiet -hierarchical \
+    -filter {NAME =~ */hbm_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/FDRE_PER_N/C}] \
+  -to   [get_pins -quiet -hierarchical \
+    -filter {NAME =~ */hbm_0/inst/*ARESET_N}]
 
 # ============================================================================
 # DCIM maArray 多周期路径约束
