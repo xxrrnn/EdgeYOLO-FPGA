@@ -243,9 +243,13 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 | `qa_all` | `qa` | `qa_c16_signed`、`qa_c64_clip`、`qa_c128_dense` |
 | `dqa_all` | `dqa` | `dqa_c16_small`、`dqa_c64_mid`、`dqa_c128_sppf` |
 | `im2col_all` | `im2col` | `im2col_6x6_s2_c3`、`im2col_3x3_s2_c32`、`im2col_3x3_s1_c128`、`im2col_1x1_c512` |
-| `mp_all` | `mp` | `mp_sppf_128_10` |
+| `mp_all` | `mp` | `mp_sppf_128_10`、`mp_resnet_stem`、`mp_gap_7x7_c512` |
 | `us_all` | `us` | `us_128_10_to20`、`us_64_20_to40` |
+| `add_all` | `add` | `add_residual_16`、`add_residual_32`、`add_pan_64` |
 | `conv_pipe_all` | `conv_pipeline` | `pipe_conv3_s2_c32_to64`、`pipe_conv1_c512_to64_tilepass` |
+| `concat_all` | `concat_by_cdma` | `concat_2src_c64_c64_hw8x8`、`concat_2src_c128_c128_hw10x10`、`concat_4src_sppf_c128_hw10x10` |
+| `large_channel_all` | `large_channel_pressure` | `dcim_conv1_c512_to64_tilepass`、`pipe_conv1_c512_to64_tilepass`、`dqa_c256_pressure`、`qa_c256_pressure`、`concat_c128_c128_to256` |
+| `mini_network_all` | `mini_network` | `mini_2conv_c16`、`mini_3conv_residual_c32` |
 
 ---
 
@@ -267,6 +271,16 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 验证策略更新：RTL 仿真不再把完整网络大尺寸层作为常规回归目标。常规 RTL 重点跑小规模但极端的 `dcim_extreme`，覆盖 64 Tile 配置、高 acc_depth、INT8/INT16 和 1×1/3×3/6×6 kernel；完整网络/60 层端到端主要留给综合实现后上板验证。
 
+### 新仿真方法：数值回归默认 backdoor preload
+
+当前 `module_tb` 分成两类 preload 模式：
+
+- `PRELOAD_MODE=backdoor`（默认）：直接把 `preload.txt` 指定的 `*.hex` 写入 RTL 内部 IBUF/OBUF/WB 存储数组。这样跳过最慢的 host AXI 逐 beat preload，但 **不跳过计算路径**：`inst.hex` 仍由 `INST_Decoder` 执行，CDMA/VPU/DCIM 仍在完整 lite BD RTL 中运行，最后从 OBUF 读回并与 `golden_module_tb.py` 的 `expected.hex` 逐 word 比较。
+- `PRELOAD_MODE=axi`：通过 `host_axi_master_bfm` 走 XDMA M_AXI → SmartConnect → AXI BRAM ctrl，用于小规模地址映射/AXI 通路 smoke。大权重 case 不建议用该模式。
+- `QUANT=all`：`sim-batch` 和 `sim-suite/rebuild-suite` 都支持，会展开成 `int8`、`int16` 两套 run 目录；若某个 module 本身不受量化模式影响，建议保持默认 `QUANT=int8`。
+
+因此，上板前功能完备性验证的主路径是 `backdoor` 数值回归，补充少量 `axi` smoke 验证总线窗口仍可达。
+
 ### 推荐执行命令
 
 基础准备（首次或 BD/拓扑变化后）：
@@ -276,6 +290,8 @@ cd rtl/tb/lite_bd/module_tb
 make export
 make compile
 ```
+
+`module_tb` 默认使用 `PRELOAD_MODE=backdoor`：测试数据由 testbench 直接写入 IBUF/OBUF/WB 的 RTL 存储数组，跳过 host AXI 逐 beat 预加载；随后仍通过同一套 `INST_Decoder → CDMA/VPU/DCIM → OBUF` RTL 数据路径执行，并与 `golden_module_tb.py` 生成的 `expected.hex` 逐 word 比较。该模式用于上板前的高覆盖数值级 RTL 回归。
 
 当前优先级最高的 DCIM 小规模极限回归：
 
@@ -288,7 +304,14 @@ timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme S
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
-timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all STOP_ON_FAIL=0 LOG=1
+timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all STOP_ON_FAIL=0 LOG=1
+```
+
+mini_network 多层链路：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 4h make rebuild-suite MODULE_CASE=mini_network BATCH_SUITE=mini_network_all QUANT=all STOP_ON_FAIL=0 LOG=1
 ```
 
 VPU 单元回归（改过 VPU/OBUF 接口后建议跑）：
@@ -296,24 +319,47 @@ VPU 单元回归（改过 VPU/OBUF 接口后建议跑）：
 ```bash
 cd rtl/tb/lite_bd/module_tb
 timeout 2h make rebuild-suite MODULE_CASE=im2col BATCH_SUITE=im2col_all STOP_ON_FAIL=0 LOG=1
-timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all STOP_ON_FAIL=0 LOG=1
-timeout 1h make rebuild-suite MODULE_CASE=dqa BATCH_SUITE=dqa_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dqa BATCH_SUITE=dqa_all QUANT=all STOP_ON_FAIL=0 LOG=1
 timeout 1h make rebuild-suite MODULE_CASE=us BATCH_SUITE=us_all STOP_ON_FAIL=0 LOG=1
 timeout 1h make rebuild-suite MODULE_CASE=mp BATCH_SUITE=mp_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=add BATCH_SUITE=add_all STOP_ON_FAIL=0 LOG=1
+```
+
+CDMA 拼接和大通道压力：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 2h make rebuild-suite MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all STOP_ON_FAIL=0 LOG=1
+timeout 3h make rebuild-suite MODULE_CASE=large_channel_pressure BATCH_SUITE=large_channel_all STOP_ON_FAIL=0 LOG=1
+```
+
+一键全量数值回归（默认 `PRELOAD_MODE=backdoor`）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 8h make sim-all STOP_ON_FAIL=0 LOG=1
+```
+
+AXI/地址映射 smoke（非默认）：如果要确认 host BFM → XDMA/SmartConnect → IBUF/OBUF/WB AXI 窗口仍可达，只跑小 case，避免大权重 AXI 预加载拖慢仿真。
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+PRELOAD_MODE=axi timeout 1h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_smoke STOP_ON_FAIL=0 LOG=1
 ```
 
 真实 IP 抽查 FP32→INT16 转换路径（非默认，较慢，用于对齐上板 RTL）：
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
-FP32_2_INT16_BEHAVIORAL=0 timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all STOP_ON_FAIL=0 LOG=1
+FP32_2_INT16_BEHAVIORAL=0 timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all STOP_ON_FAIL=0 LOG=1
 ```
 
 DCIM 网络真实尺寸 smoke（可选，不作为常规 RTL 回归）：
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
-timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network STOP_ON_FAIL=0 LOG=1
+timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network QUANT=all STOP_ON_FAIL=0 LOG=1
 ```
 
 综合检查（默认不定义行为模型，使用上板 RTL）：
@@ -334,6 +380,8 @@ vivado -mode batch -source scripts/chip-lite/2_synth.tcl
 与上板 RTL 的一致性：
 
 - BD 拓扑、地址映射、OBUF/IBUF、INST_Decoder、CDMA、VPU、DCIM_Array 主数据路径与 lite 上板设计一致。
+- 默认 `PRELOAD_MODE=backdoor` 只跳过 host AXI 写入初始数据这一步，直接初始化 IBUF/OBUF/WB RTL 存储；decoder 指令执行、CDMA 搬运、VPU/DCIM 计算和 OBUF 检查仍走 RTL 数值路径。
+- `PRELOAD_MODE=axi` 保留用于小规模 smoke，覆盖 XDMA/SmartConnect/AXI BRAM ctrl 地址映射，但不建议用于大权重回归。
 - 仿真为提速替换了外设/非关键行为：XDMA 由 BFM 驱动，HBM 顶层用 fast stub；当前 lite 主路径不经过 HBM，因此不影响 OBUF/IBUF/DCIM/VPU 数值验证。
 - `FP32_2_INT16_BEHAVIORAL=1` 只在仿真编译时打开，默认综合不打开。需要严格对齐上板时，用 `FP32_2_INT16_BEHAVIORAL=0` 重跑相关 QA INT16 测试。
 - 完整 60 层网络没有作为常规 RTL 仿真目标；RTL 回归验证小规模但覆盖关键边界的 case，完整端到端一致性仍需综合/实现后在板上跑 `tests/chip`。
@@ -508,73 +556,118 @@ make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all
 
 | 用例 | 状态 |
 |------|------|
-| `concat_2src_c64_c64_hw8x8` | UNTESTED |
-| `concat_2src_c128_c128_hw10x10` | UNTESTED |
-| `concat_4src_sppf_c128_hw10x10` | UNTESTED |
+| `concat_2src_c64_c64_hw8x8` | 待用 backdoor suite 重跑确认 |
+| `concat_2src_c128_c128_hw10x10` | 待用 backdoor suite 重跑确认 |
+| `concat_4src_sppf_c128_hw10x10` | 待用 backdoor suite 重跑确认 |
 
 运行：
 
 ```bash
-make list-cases MODULE_CASE=concat_by_cdma
-make sim MODULE_CASE=concat_by_cdma MODULE_VARIANT=concat_2src_c64_c64_hw8x8
+make rebuild-suite MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all STOP_ON_FAIL=0 LOG=1
 ```
 
 ### large_channel_pressure
 
 | 用例 | 实际模块 | 状态 |
 |------|----------|------|
-| `dcim_conv1_c512_to64_tilepass` | `dcim_matmul` | UNTESTED |
-| `pipe_conv1_c512_to64_tilepass` | `conv_pipeline` | UNTESTED |
-| `dqa_c256_pressure` | `dqa` | UNTESTED |
-| `qa_c256_pressure` | `qa` | UNTESTED |
-| `concat_c128_c128_to256` | `concat_by_cdma` | UNTESTED |
+| `dcim_conv1_c512_to64_tilepass` | `dcim_matmul` | 待用 backdoor suite 重跑确认 |
+| `pipe_conv1_c512_to64_tilepass` | `conv_pipeline` | 待用 backdoor suite 重跑确认 |
+| `dqa_c256_pressure` | `dqa` | 待用 backdoor suite 重跑确认 |
+| `qa_c256_pressure` | `qa` | 待用 backdoor suite 重跑确认 |
+| `concat_c128_c128_to256` | `concat_by_cdma` | 待用 backdoor suite 重跑确认 |
 
 运行：
 
 ```bash
-make list-cases MODULE_CASE=large_channel_pressure
-make sim MODULE_CASE=large_channel_pressure MODULE_VARIANT=qa_c256_pressure
+make rebuild-suite MODULE_CASE=large_channel_pressure BATCH_SUITE=large_channel_all STOP_ON_FAIL=0 LOG=1
 ```
 
 ---
 
-## 下一步建议测试顺序
+## 下一步建议测试顺序（基于 `PRELOAD_MODE=backdoor`）
 
-当前已确认：
+当前验证策略：默认用 `PRELOAD_MODE=backdoor` 做数值级 RTL 回归，尽量充分覆盖 RTL 功能；只用 `PRELOAD_MODE=axi` 做小规模总线/地址映射 smoke。
 
-- `dcim_all`：8 case，`1272 PASS / 0 FAIL`
-- `us_all`：2 case，`38400 PASS / 0 FAIL`
-- `mp_all`：1 case，`3200 PASS / 0 FAIL`
-- `im2col_all`、`qa_all`、`dqa_all`：已有 PASS 记录
-
-仍建议优先补跑：
-
-1. **DCIM 小规模极限回归**：这是当前 RTL 阶段优先级最高的 DCIM 验证，覆盖 64 Tile 配置路径、INT8/INT16、不同 kernel 和较高 acc_depth，但保持 M 很小，避免完整网络 RTL 仿真过重。
+### 1. 快速确认仿真框架
 
 ```bash
-timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=0 LOG=1
+make compile FAST=1
+make sim MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1 PRELOAD_MODE=backdoor
+make sim MODULE_CASE=qa MODULE_VARIANT=qa_c16_signed PRELOAD_MODE=backdoor
 ```
 
-2. **完整 conv pipeline**：覆盖 `im2col + CDMA + DCIM + DQA/QA` 的组合路径，是单元都 PASS 后最关键的链路测试。
+预期：两条单 case 都应出现 `MODULE CHECK PASSED`。这两条已用于确认 IBUF/OBUF/WB backdoor preload 路径可用。
+
+### 2. DCIM 主路径和极限路径
 
 ```bash
-timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all QUANT=all STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme QUANT=all STOP_ON_FAIL=0 LOG=1
 ```
 
-3. **DCIM 网络真实尺寸 smoke（可选，不作为常规 RTL 回归）**：`dcim_model_3/5/7_conv` 这类真实网络层 M 大，即使用 `OP_DCIM_LAYER` 压缩指令后，RTL 逐周期仿真仍会很慢；主要用于必要时抽查，完整 60 层建议放到 bitstream/板上验证。
+覆盖：INT8/INT16、1×1/3×3/6×6、64 Tile 配置、高 `acc_depth`、大通道 tilepass。
 
-```bash
-timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network STOP_ON_FAIL=0 LOG=1
-```
-
-4. **可选重跑 VPU 单元回归**：如果最近改过 VPU/OBUF 接口，可重跑以下 suite 做回归。
+### 3. VPU 单元完整回归
 
 ```bash
 timeout 2h make rebuild-suite MODULE_CASE=im2col BATCH_SUITE=im2col_all STOP_ON_FAIL=0 LOG=1
-timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all STOP_ON_FAIL=0 LOG=1
-timeout 1h make rebuild-suite MODULE_CASE=dqa BATCH_SUITE=dqa_all STOP_ON_FAIL=0 LOG=1
-timeout 1h make rebuild-suite MODULE_CASE=us BATCH_SUITE=us_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dqa BATCH_SUITE=dqa_all QUANT=all STOP_ON_FAIL=0 LOG=1
 timeout 1h make rebuild-suite MODULE_CASE=mp BATCH_SUITE=mp_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=us BATCH_SUITE=us_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=add BATCH_SUITE=add_all STOP_ON_FAIL=0 LOG=1
+```
+
+覆盖：im2col、QA INT8/INT16、DQA ReLU/No-ReLU/accum16、MaxPool/SPPF/GAP、Upsample、Residual Add。
+
+### 4. CDMA/拼接/单层端到端
+
+```bash
+timeout 2h make rebuild-suite MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all STOP_ON_FAIL=0 LOG=1
+timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all STOP_ON_FAIL=0 LOG=1
+```
+
+覆盖：OBUF 内 CDMA copy/concat，以及 `im2col → CDMA → DCIM → DQA/ReLU → QA` 单层完整链路。
+
+### 5. 多层链路和大通道压力
+
+```bash
+timeout 4h make rebuild-suite MODULE_CASE=mini_network BATCH_SUITE=mini_network_all QUANT=all STOP_ON_FAIL=0 LOG=1
+timeout 3h make rebuild-suite MODULE_CASE=large_channel_pressure BATCH_SUITE=large_channel_all STOP_ON_FAIL=0 LOG=1
+```
+
+覆盖：多层 conv、residual add、c512/tilepass、c256 DQA/QA、大通道 concat。
+
+### 6. AXI smoke（非默认，慢但更贴近 host 写入）
+
+```bash
+PRELOAD_MODE=axi timeout 1h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_smoke STOP_ON_FAIL=0 LOG=1
+```
+
+只用于确认 XDMA BFM/SmartConnect/AXI BRAM ctrl 地址窗口可达，不作为大规模数值回归方式。
+
+### 7. 真实 IP 抽查 FP32→INT16
+
+```bash
+FP32_2_INT16_BEHAVIORAL=0 timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all STOP_ON_FAIL=0 LOG=1
+```
+
+用于抽查 QA INT16 路径与上板真实 `fp32_to_int16` IP 的一致性。
+
+### 8. 结果汇总和实时监控
+
+`simv` 输出默认写入 `sim.log`，终端停在 `=== VCS simulate ... ===` 不代表卡死。查看实时进度：
+
+```bash
+less +F sim/run_<MODULE_CASE>_<MODULE_VARIANT>_q<QUANT>/sim.log
+# 或单 case 监控
+make sim-watch MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
+```
+
+汇总 batch 单 case 日志：
+
+```bash
+make sim-results
 ```
 
 ---
@@ -588,6 +681,9 @@ timeout 1h make rebuild-suite MODULE_CASE=mp BATCH_SUITE=mp_all STOP_ON_FAIL=0 L
 | 改了 `tb_lite_bd_module.sv` / BFM | `make compile` → `make run`，或直接 `make sim` |
 | 改了 `golden_module_tb.py` | `make data` → `make run`，或直接 `make sim` |
 | 只想换 case / 指令 / 输入 | `make data` → `make run`，共享 `simv` 可复用 |
+| 需要快速数值回归 | 默认 `PRELOAD_MODE=backdoor`，直接 `make sim` / `make rebuild-suite` |
+| 需要 AXI 地址映射 smoke | `PRELOAD_MODE=axi make sim ...`，只建议小 case |
+| 需要观察运行进度 | `less +F <run_dir>/sim.log` 或 `make sim-watch ...` |
 | 需要波形 | `make fsdb` |
 
 ---

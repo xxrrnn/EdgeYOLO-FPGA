@@ -172,6 +172,13 @@ module tb_lite_bd_module;
     integer total_pass, total_fail;
     int tb_inst_count;
     reg [127:0] expected [0:GOLDEN_DEPTH-1];
+    string preload_mode;
+
+    function automatic bit addr_in_range(input [63:0] addr, input [63:0] base, input [63:0] size);
+        begin
+            addr_in_range = (addr >= base) && (addr < (base + size));
+        end
+    endfunction
 
     function automatic string make_path(input string base, input string fname);
         begin
@@ -267,6 +274,76 @@ module tb_lite_bd_module;
         end
     endtask
 
+    task automatic backdoor_write_ibuf_word(input int unsigned word_addr, input [127:0] word128);
+        int unsigned bank_sel, bank_addr;
+        begin
+            bank_sel  = word_addr >> (`DCIM_IBUF_ADDR_WIDTH - 1);
+            bank_addr = word_addr & ((1 << (`DCIM_IBUF_ADDR_WIDTH - 1)) - 1);
+            case (bank_sel)
+                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_ibuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
+                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_ibuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
+                default: begin
+                    $display("FATAL: IBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
+                    $finish(1);
+                end
+            endcase
+        end
+    endtask
+
+    task automatic backdoor_write_obuf_word(input int unsigned word_addr, input [127:0] word128);
+        int unsigned bank_sel, bank_addr;
+        begin
+            bank_sel  = word_addr >> (`DCIM_OBUF_ADDR_WIDTH - 1);
+            bank_addr = word_addr & ((1 << (`DCIM_OBUF_ADDR_WIDTH - 1)) - 1);
+            case (bank_sel)
+                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
+                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
+                default: begin
+                    $display("FATAL: OBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
+                    $finish(1);
+                end
+            endcase
+        end
+    endtask
+
+    task automatic backdoor_load_memh128(input string fname, input [63:0] base_addr);
+        integer i, nwords, max_words;
+        int unsigned word_addr;
+        reg [127:0] mem [0:GOLDEN_DEPTH-1];
+        begin
+            max_words = GOLDEN_DEPTH;
+            for (i = 0; i < max_words; i = i + 1)
+                mem[i] = 128'hx;
+            $display("[%0t] MODULE_TB: backdoor begin load %s -> 0x%016h", $time, fname, base_addr);
+            $readmemh(fname, mem, 0, max_words - 1);
+            nwords = 0;
+            for (i = 0; i < max_words; i = i + 1) begin
+                if (mem[i] !== 128'hx)
+                    nwords = i + 1;
+                else if (i > 0 && nwords > 0)
+                    i = max_words;
+            end
+
+            if (addr_in_range(base_addr, E2E_IBUF_BASE, E2E_IBUF_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_OBUF_BASE, E2E_OBUF_SIZE)) begin
+                word_addr = (base_addr - E2E_OBUF_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_obuf_word(word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_WB_BASE, E2E_WB_SIZE)) begin
+                word_addr = (base_addr - E2E_WB_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    dut.lite_i.vpu_0.inst.u_global_vpu.wb_bram.BRAM[word_addr + i] = mem[i];
+            end else begin
+                $display("FATAL: unsupported backdoor preload address 0x%016h for %s", base_addr, fname);
+                $finish(1);
+            end
+            $display("[%0t] MODULE_TB: backdoor done load %s, %0d x128b words", $time, fname, nwords);
+        end
+    endtask
+
     task automatic run_preloads(input string preload_fname);
         integer fd, rc, n;
         string mem_fname, mem_path;
@@ -284,8 +361,11 @@ module tb_lite_bd_module;
                 rc = $fscanf(fd, "%s %h\n", mem_fname, base_addr);
                 if (rc == 2) begin
                     mem_path = run_path(mem_fname);
-                    $display("[%0t] MODULE_TB: preload[%0d] %s -> 0x%016h", $time, n, mem_path, base_addr);
-                    host.load_memh128(mem_path, base_addr);
+                    $display("[%0t] MODULE_TB: preload[%0d] mode=%s %s -> 0x%016h", $time, n, preload_mode, mem_path, base_addr);
+                    if (preload_mode == "axi")
+                        host.load_memh128(mem_path, base_addr);
+                    else
+                        backdoor_load_memh128(mem_path, base_addr);
                     n++;
                     if (n >= MAX_PRELOADS) begin
                         $display("FATAL: too many preload entries");
@@ -456,6 +536,12 @@ module tb_lite_bd_module;
         run_dir = ".";
         if (!$value$plusargs("RUN_DIR=%s", run_dir))
             run_dir = ".";
+        if (!$value$plusargs("PRELOAD_MODE=%s", preload_mode))
+            preload_mode = "backdoor";
+        if (preload_mode != "backdoor" && preload_mode != "axi") begin
+            $display("FATAL: invalid PRELOAD_MODE=%s (use backdoor or axi)", preload_mode);
+            $finish(1);
+        end
         suite_base_dir = run_dir;
         suite_file = run_path("suite.txt");
         suite_mode = $value$plusargs("SUITE_FILE=%s", suite_file);
@@ -486,6 +572,7 @@ module tb_lite_bd_module;
             $display("============================================================");
             $display("  tb_lite_bd_module SUITE suite_file=%s", suite_file);
             $display("  suite_base_dir=%s", suite_base_dir);
+            $display("  preload_mode=%s", preload_mode);
             $display("============================================================");
             run_suite(suite_file);
         end else begin

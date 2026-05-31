@@ -48,6 +48,8 @@
 #   MODULE_VERIFY_WORDS=N  只校验前 N 个 128-bit word（0=全量，默认全量）
 #   LOG=1                  sim-batch 同时写 sim_batch.log
 #   FAST=1（默认）编译跳过 -debug_access；=0 保留（Verdi 需要）
+#   PRELOAD_MODE=backdoor（默认）直接初始化 IBUF/OBUF/WB RTL 存储，做快速数值回归
+#   PRELOAD_MODE=axi 通过 host AXI BFM 预加载，仅建议小 smoke 抽查地址映射
 # ==============================================================================
 
 MODULE_CASE ?= dcim_matmul
@@ -61,6 +63,10 @@ FAST ?= 1
 VCS_JOBS ?= 64
 SIMV_JOBS ?= 32
 WATCH_INTERVAL ?= 5
+# PRELOAD_MODE:
+#   backdoor  → 默认，直接写 RTL 内部 IBUF/OBUF/WB 存储，保留 decoder/DCIM/VPU 数值路径
+#   axi       → 通过 host AXI BFM 预加载，用于抽查 SmartConnect/地址映射，但大 case 很慢
+PRELOAD_MODE ?= backdoor
 # QUANT: int8 | int16 | all
 #   int8  → 只跑 INT8 版本（默认）
 #   int16 → 只跑 INT16 版本
@@ -98,14 +104,17 @@ BATCH_SUITE_dcim_all        := dcim_tiny_1x1 conv6_s2_c3_to16 conv3_s2_c32_to64 
 BATCH_SUITE_dcim_extreme    := extreme_int8_1x1_c512_to512 extreme_int8_3x3_c128_to512 extreme_int8_6x6_c3_to64 extreme_int16_3x3_c128
 BATCH_SUITE_dcim_network    := dcim_model_3_conv dcim_model_5_conv dcim_model_7_conv
 # ── VPU 量化（QUANT=int8|int16|all 控制 fp32→int8 或 fp32→int16）────────────
-BATCH_SUITE_qa_all          := qa_c16_signed qa_c64_clip qa_c128_dense
+BATCH_SUITE_qa_all          := qa_c16_signed qa_c64_clip qa_c128_dense qa_int16_c32_signed
 # ── VPU 反量化（QUANT=int8→int32 accum，int16→accum16 输入）─────────────────
-BATCH_SUITE_dqa_all         := dqa_c16_small dqa_c64_mid dqa_c128_sppf
+BATCH_SUITE_dqa_all         := dqa_c16_small dqa_c32_mid dqa_c64_mid dqa_c128_sppf dqa_c256_head dqa_nrelu_c24_in64 dqa_nrelu_c24_in128 dqa_nrelu_c24_in256 dqa_accum16_c32 dqa_accum16_c64
 # ── 其他（QUANT 不影响这些模块，保持 int8 即可）──────────────────────────────
 BATCH_SUITE_im2col_all      := im2col_6x6_s2_c3 im2col_3x3_s2_c32 im2col_3x3_s1_c128 im2col_1x1_c512
 BATCH_SUITE_mp_all          := mp_sppf_128_10 mp_resnet_stem mp_gap_7x7_c512
 BATCH_SUITE_us_all          := us_128_10_to20 us_64_20_to40
+BATCH_SUITE_add_all         := add_residual_16 add_residual_32 add_pan_64
 BATCH_SUITE_conv_pipe_all   := pipe_conv3_s2_c32_to64 pipe_conv1_c512_to64_tilepass
+BATCH_SUITE_concat_all      := concat_2src_c64_c64_hw8x8 concat_2src_c128_c128_hw10x10 concat_4src_sppf_c128_hw10x10
+BATCH_SUITE_large_channel_all := dcim_conv1_c512_to64_tilepass pipe_conv1_c512_to64_tilepass dqa_c256_pressure qa_c256_pressure concat_c128_c128_to256
 BATCH_SUITE_mini_network_all := mini_2conv_c16 mini_3conv_residual_c32
 .PHONY: export compile run sim sim-export fsdb fsdb-export verdi data clean help
 .PHONY: list-cases list-suites check-export sim-all sim-results
@@ -121,46 +130,53 @@ export:
 		-source $(REPO_ROOT)/scripts/chip-lite/4_export_sim.tcl
 
 compile: check-export
-	ACTION=compile COMPILE_DIR=$(COMPILE_DIR) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	ACTION=compile COMPILE_DIR=$(COMPILE_DIR) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 # sim-all：全量功能验证（顺序跑所有 suite）
-# 覆盖：DCIM INT8/INT16 + VPU QA/DQA INT8/INT16 + im2col/MP/US + 端到端链路
+# 覆盖：DCIM INT8/INT16 + VPU QA/DQA + im2col/MP/US/ADD/concat + 端到端/多层链路
 sim-all: check-export
-	@echo "=== [1/6] DCIM matmul INT8+INT16 (QUANT=all) ==="
+	@echo "=== [1/10] DCIM matmul INT8+INT16 (QUANT=all) ==="
 	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [2/6] QA  fp32→int8 + fp32→int16 (QUANT=all) ==="
+	@echo "=== [2/10] QA  fp32→int8 + fp32→int16 (QUANT=all) ==="
 	$(MAKE) sim-batch MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [3/6] DQA int32_accum + accum16→fp32 (QUANT=all) ==="
+	@echo "=== [3/10] DQA int32_accum + accum16→fp32 (QUANT=all) ==="
 	$(MAKE) sim-batch MODULE_CASE=dqa BATCH_SUITE=dqa_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [4/6] im2col (INT8 only) ==="
+	@echo "=== [4/10] im2col (INT8 only) ==="
 	$(MAKE) sim-batch MODULE_CASE=im2col BATCH_SUITE=im2col_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [5/7] MP（SPPF + ResNet MaxPool + GAP）+ US ==="
+	@echo "=== [5/10] MP + US + ADD（FP32 数据路径）==="
 	$(MAKE) sim-batch MODULE_CASE=mp BATCH_SUITE=mp_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
 	$(MAKE) sim-batch MODULE_CASE=us BATCH_SUITE=us_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [6/6] conv_pipeline（端到端 INT8 + INT16）==="
+	$(MAKE) sim-batch MODULE_CASE=add BATCH_SUITE=add_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== [6/10] concat_by_cdma（通道拼接）==="
+	$(MAKE) sim-batch MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== [7/10] conv_pipeline（端到端 INT8 + INT16）==="
 	$(MAKE) sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [7/7] mini_network（多层链路 INT8 + INT16）==="
+	@echo "=== [8/10] mini_network（多层链路 INT8 + INT16）==="
 	$(MAKE) sim-batch MODULE_CASE=mini_network BATCH_SUITE=mini_network_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== [9/10] large_channel_pressure（大通道压力）==="
+	$(MAKE) sim-batch MODULE_CASE=large_channel_pressure BATCH_SUITE=large_channel_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== [10/10] DCIM extreme（64 Tile / 高 acc_depth）==="
+	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo ""
 	@echo "=== sim-all DONE — 运行 make sim-results 查看汇总 ==="
 
 run: check-export
 	ACTION=run COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 sim: check-export
 	ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
 	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
-	FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 sim-export: export sim
 
 fsdb: check-export
 	ACTION=rebuild-sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=0 VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=1 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=0 VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=1 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 fsdb-export: export fsdb
 
@@ -185,7 +201,7 @@ data-suite:
 
 run-suite: check-export
 	ACTION=run-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
-		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 sim-suite: check-export
 	@variants="$(MODULE_VARIANTS)"; \
@@ -194,16 +210,19 @@ sim-suite: check-export
 	ACTION=sim-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
 		MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
 		MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
-		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 rebuild-suite: check-export
+	# 注意：rebuild-suite 会重新编译共享 simv，不可并行执行多个 rebuild-suite！
+	# 并行运行多个 rebuild-suite 会损坏 build_shared/simv.daidir 数据库。
+	# 如需同时跑多个 suite，先 make compile 一次，然后并行 make sim-suite。
 	@variants="$(MODULE_VARIANTS)"; \
 	[ -n "$$variants" ] || variants="$(BATCH_SUITE_$(BATCH_SUITE))"; \
 	[ -n "$$variants" ] || { echo "用法: make rebuild-suite BATCH_SUITE=dcim_int8"; echo "      make list-suites"; exit 1; }; \
 	ACTION=rebuild-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
 		MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
 		MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
-		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 RUN_EXPORT=0 bash $(RUN_SCRIPT)
+		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 list-cases:
 	python3 $(GOLDEN_PY) --module $(MODULE_CASE) --case list
@@ -218,23 +237,30 @@ list-suites:
 	@echo "    dcim_network  3 个网络真实尺寸（慢）"
 	@echo ""
 	@echo "  [VPU 量化]     MODULE_CASE=qa"
-	@echo "    qa_all        3 个用例（×QUANT=all 跑 fp32→int8 + fp32→int16）"
+	@echo "    qa_all        4 个用例（×QUANT=all 跑 fp32→int8 + fp32→int16）"
 	@echo ""
 	@echo "  [VPU 反量化]   MODULE_CASE=dqa"
-	@echo "    dqa_all       3 个用例（×QUANT=all 跑 int32_accum→fp32 + accum16→fp32）"
+	@echo "    dqa_all       10 个用例（ReLU/No-ReLU/accum16，×QUANT=all）"
 	@echo ""
 	@echo "  [im2col]       MODULE_CASE=im2col   QUANT 不影响，始终 INT8 输入"
 	@echo "    im2col_all    4 种 kernel/stride 组合"
 	@echo ""
-	@echo "  [MP / US]      QUANT 不影响（FP32 数据路径）"
+	@echo "  [MP / US / ADD] QUANT 不影响（FP32 数据路径）"
 	@echo "    mp_all        MODULE_CASE=mp"
 	@echo "    us_all        MODULE_CASE=us"
+	@echo "    add_all       MODULE_CASE=add"
+	@echo ""
+	@echo "  [concat]       MODULE_CASE=concat_by_cdma"
+	@echo "    concat_all    2源/4源通道拼接"
 	@echo ""
 	@echo "  [端到端链路]   MODULE_CASE=conv_pipeline"
 	@echo "    conv_pipe_all      im2col→CDMA→DCIM→DQA/ReLU→QA（2 种）"
 	@echo ""
 	@echo "  [多层完整链路] MODULE_CASE=mini_network"
 	@echo "    mini_network_all   2层线性 + 3层 CSP residual（含 Add + QA）"
+	@echo ""
+	@echo "  [大通道压力]   MODULE_CASE=large_channel_pressure"
+	@echo "    large_channel_all  c512/tilepass/c256/concat 压力用例"
 
 # ── export 检查 ──────────────────────────────────────────────────────────────
 
@@ -278,12 +304,12 @@ _sim_batch_run:
 			( ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR="$$bd" \
 				MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$$v MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
 				MODULE_QUANT=$$q MODULE_DIM="$(DIM)" \
-				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) RUN_EXPORT=0 bash $(RUN_SCRIPT) 2>&1 | tee -a "$$log" ); rc=$${PIPESTATUS[0]}; \
+				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT) 2>&1 | tee -a "$$log" ); rc=$${PIPESTATUS[0]}; \
 		else \
 			( ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR="$$bd" \
 				MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$$v MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
 				MODULE_QUANT=$$q MODULE_DIM="$(DIM)" \
-				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) RUN_EXPORT=0 bash $(RUN_SCRIPT) 2>&1 ); rc=$$?; \
+				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT) 2>&1 ); rc=$$?; \
 		fi; \
 		if [ $$rc -eq 0 ]; then \
 			passed=$$((passed+1)); echo "    PASS ✓  ($(MODULE_CASE)/$$v quant=$$q)"; \

@@ -25,6 +25,14 @@ FAST="${FAST:-1}"
 VCS_JOBS="${VCS_JOBS:-64}"
 SIMV_JOBS="${SIMV_JOBS:-32}"
 ACTION="${ACTION:-sim}"
+PRELOAD_MODE="${PRELOAD_MODE:-backdoor}"
+case "$PRELOAD_MODE" in
+  backdoor|axi) ;;
+  *)
+    echo "ERROR: unknown PRELOAD_MODE=$PRELOAD_MODE (use backdoor or axi)" >&2
+    exit 1
+    ;;
+esac
 SKIP_LITE_COMPILE="${SKIP_LITE_COMPILE:-1}"
 TB_TOP="tb_lite_bd_module"
 
@@ -175,17 +183,17 @@ run_simv() {
     echo "  → run ACTION=gen bash $0 or make data" >&2
     exit 1
   }
-  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$RUN_DIR" -no_save)
+  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$RUN_DIR" "+PRELOAD_MODE=$PRELOAD_MODE" -no_save)
   if [[ "$SIMV_JOBS" =~ ^[0-9]+$ && "$SIMV_JOBS" -gt 1 ]]; then
     sim_opts=(-j"$SIMV_JOBS" "${sim_opts[@]}")
   fi
   if [[ "$FSDB" == "1" ]]; then
     sim_opts+=(+FSDB)
   fi
-  echo "=== VCS simulate module BD test (reuse simv) ==="
+  echo "=== VCS simulate module BD test (reuse simv, PRELOAD_MODE=$PRELOAD_MODE) ==="
   (cd "$RUN_DIR"
-    "$SIMV" "${sim_opts[@]}" > sim.log 2>&1)
-  grep -v '^IEEE1500' "$RUN_DIR/sim.log" | tail -200
+    "$SIMV" "${sim_opts[@]}" 2>&1 | grep -v '^IEEE1500' | tee sim.log)
+  echo "=== sim.log written: $RUN_DIR/sim.log ==="
 
   summarize_log "$RUN_DIR/sim.log"
   check_log_pass "$RUN_DIR/sim.log" "module=$MODULE_CASE case=$MODULE_VARIANT quant=$MODULE_QUANT"
@@ -199,15 +207,19 @@ generate_suite_dir() {
   rm -rf "$SUITE_DIR"
   mkdir -p "$SUITE_DIR"
   : > "$SUITE_DIR/suite.txt"
-  echo "=== Generate suite module=$MODULE_CASE variants=$MODULE_VARIANTS ==="
-  for v in $MODULE_VARIANTS; do
-    case_dir="$SUITE_DIR/run_${MODULE_CASE}_${v}_q${MODULE_QUANT}"
-    extra_args=()
-    [[ -n "$MODULE_QUANT" ]] && extra_args+=(--quant "$MODULE_QUANT")
-    [[ -n "$MODULE_DIM"   ]] && extra_args+=(--dim "$MODULE_DIM")
-    python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$v" \
-      --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir" "${extra_args[@]}"
-    printf 'run_%s_%s_q%s\n' "$MODULE_CASE" "$v" "$MODULE_QUANT" >> "$SUITE_DIR/suite.txt"
+  echo "=== Generate suite module=$MODULE_CASE variants=$MODULE_VARIANTS quant=$MODULE_QUANT ==="
+  quant_list="$MODULE_QUANT"
+  [[ "$quant_list" == "all" ]] && quant_list="int8 int16"
+  for q in $quant_list; do
+    for v in $MODULE_VARIANTS; do
+      case_dir="$SUITE_DIR/run_${MODULE_CASE}_${v}_q${q}"
+      extra_args=()
+      [[ -n "$q" ]] && extra_args+=(--quant "$q")
+      [[ -n "$MODULE_DIM" ]] && extra_args+=(--dim "$MODULE_DIM")
+      python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$v" \
+        --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir" "${extra_args[@]}"
+      printf 'run_%s_%s_q%s\n' "$MODULE_CASE" "$v" "$q" >> "$SUITE_DIR/suite.txt"
+    done
   done
   echo "Generated suite dir: $SUITE_DIR"
 }
@@ -223,18 +235,17 @@ run_suite_simv() {
     echo "  → run ACTION=gen-suite bash $0 or make data-suite" >&2
     exit 1
   }
-  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$SUITE_DIR" "+SUITE_FILE=$SUITE_DIR/suite.txt" -no_save)
+  sim_opts=(+notimingcheck +nospecify "+RUN_DIR=$SUITE_DIR" "+SUITE_FILE=$SUITE_DIR/suite.txt" "+PRELOAD_MODE=$PRELOAD_MODE" -no_save)
   if [[ "$SIMV_JOBS" =~ ^[0-9]+$ && "$SIMV_JOBS" -gt 1 ]]; then
     sim_opts=(-j"$SIMV_JOBS" "${sim_opts[@]}")
   fi
   if [[ "$FSDB" == "1" ]]; then
     sim_opts+=(+FSDB)
   fi
-  echo "=== VCS simulate module suite in one process ==="
-  echo "=== VCS simulate module BD suite (reuse simv) ==="
+  echo "=== VCS simulate module BD suite (reuse simv, PRELOAD_MODE=$PRELOAD_MODE) ==="
   (cd "$SUITE_DIR"
-    "$SIMV" "${sim_opts[@]}" > sim.log 2>&1)
-  grep -v '^IEEE1500' "$SUITE_DIR/sim.log" | tail -200
+    "$SIMV" "${sim_opts[@]}" 2>&1 | grep -v '^IEEE1500' | tee sim.log)
+  echo "=== suite sim.log written: $SUITE_DIR/sim.log ==="
 
   summarize_log "$SUITE_DIR/sim.log"
   check_log_pass "$SUITE_DIR/sim.log" "suite=$SUITE_DIR"

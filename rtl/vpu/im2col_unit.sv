@@ -128,6 +128,7 @@ module im2col_unit #(
     reg [15:0]        c_chunk;       // c-块索引（每块 16 channel = 128-bit）
     reg [15:0]        c_chunk_max;   // = ceil(CH_IN / 16)
     reg [31:0]        c_chunk_byte_offset_r;  // c_chunk * 16，提前寄存以切断写数据路径
+    reg [4:0]         write_chunk_nbyte_r;
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
     // 读延迟：使用 obuf.v douta_valid（NBPIPE=3 时 Port A 端到端 8 拍）
@@ -179,10 +180,7 @@ module im2col_unit #(
     //   LOOP_BITS：限制循环变量位宽，防止综合器静态展开时产生越界 part-select
     localparam LOOP_BITS = $clog2(WORD_BYTES + 1);  // ≥ log2(16+1) = 5 bits
     wire [3:0] out_byte_in_word = out_byte_addr[3:0];
-    wire [31:0] write_rem_bytes = (src_c_r > c_chunk_byte_offset) ?
-                                  (src_c_r - c_chunk_byte_offset) : 32'd0;
-    wire [4:0] write_chunk_nbyte = (write_rem_bytes > C_CHUNK_BYTES) ?
-                                   5'd16 : write_rem_bytes[4:0];
+    wire [4:0] write_chunk_nbyte = write_chunk_nbyte_r;
     // 必须用 6-bit 相加，避免 4-bit out_byte_in_word 截断导致 write_need_tail 恒为 0
     wire [5:0] write_end_pos = {2'b0, out_byte_in_word} + {1'b0, write_chunk_nbyte};
     wire [5:0] write_split_at = (WORD_BYTES > C_CHUNK_BYTES) ? {2'b0, C_CHUNK_BYTES[4:0]}
@@ -260,6 +258,7 @@ module im2col_unit #(
             ih <= 0; iw <= 0;
             c_chunk <= 0; c_chunk_max <= 0;
             c_chunk_byte_offset_r <= '0;
+            write_chunk_nbyte_r <= '0;
             in_bound          <= 1'b0;
             rd_wait_cnt       <= 0;
             rd_data_reg       <= 0;
@@ -312,6 +311,7 @@ module im2col_unit #(
                 S_INIT: begin
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
                     c_chunk_byte_offset_r <= '0;
+                    write_chunk_nbyte_r <= (src_c_r > C_CHUNK_BYTES) ? 5'd16 : src_c_r[4:0];
                     // 一级乘法：像素间距按 ELEM_BYTES 缩放，输出行步长按实际字节计
                     // in_col_stride  = ceil(CH_IN * ELEM_BYTES / 16) * 16
                     // kw_times_c     = kW * CH_IN * ELEM_BYTES  (输出自然字节间隔)
@@ -449,10 +449,15 @@ module im2col_unit #(
                     if (c_chunk + 1 < c_chunk_max) begin
                         c_chunk <= c_chunk + 1;
                         c_chunk_byte_offset_r <= c_chunk_byte_offset_r + C_CHUNK_BYTES;
+                        if ((src_c_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES)) > C_CHUNK_BYTES)
+                            write_chunk_nbyte_r <= 5'd16;
+                        else
+                            write_chunk_nbyte_r <= src_c_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES);
                         state <= S_READ_REQ;
                     end else begin
                         c_chunk <= 0;
                         c_chunk_byte_offset_r <= '0;
+                        write_chunk_nbyte_r <= (src_c_r > C_CHUNK_BYTES) ? 5'd16 : src_c_r[4:0];
                         state <= S_NEXT;
                     end
                 end

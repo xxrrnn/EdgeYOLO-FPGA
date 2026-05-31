@@ -381,7 +381,10 @@ def load_layer_npz_checked(meta: ConvMeta, net: Dict[str, dict], require_activat
     if not os.path.isfile(meta.npz_path):
         raise AssertionError(f'{meta.name}: missing weight npz {meta.npz_path}')
     d = np.load(meta.npz_path)
-    required = {'weight_int8', 'dqa_scale', 'dqa_bias', 'act_scale', 'act_zero_point'}
+    # act_scale / act_zero_point 只在 has_activation=True 的层（即非 head 输出层）有保证
+    always_required = {'weight_int8', 'dqa_scale', 'dqa_bias'}
+    activation_keys = {'act_scale', 'act_zero_point'}
+    required = always_required | (activation_keys if require_activation else set())
     missing = required.difference(d.files)
     if missing:
         raise AssertionError(f'{meta.name}: missing npz keys {sorted(missing)}')
@@ -394,9 +397,9 @@ def load_layer_npz_checked(meta: ConvMeta, net: Dict[str, dict], require_activat
         raise AssertionError(f'{meta.name}: weight_int8 dtype {d["weight_int8"].dtype} != int8')
     if d['dqa_scale'].shape[0] != ly['out_channels'] or d['dqa_bias'].shape[0] != ly['out_channels']:
         raise AssertionError(f'{meta.name}: dqa scale/bias length must equal out_channels={ly["out_channels"]}')
-    if float(d['act_zero_point']) != float(ly.get('act_zero_point', 0.0)):
+    if 'act_zero_point' in d.files and float(d['act_zero_point']) != float(ly.get('act_zero_point', 0.0)):
         raise AssertionError(f'{meta.name}: act_zero_point npz={float(d["act_zero_point"])} network={ly.get("act_zero_point")}')
-    if 'act_scale' in ly and not np.isclose(float(d['act_scale']), float(ly['act_scale']), rtol=1e-6, atol=1e-9):
+    if 'act_scale' in ly and 'act_scale' in d.files and not np.isclose(float(d['act_scale']), float(ly['act_scale']), rtol=1e-6, atol=1e-9):
         raise AssertionError(f'{meta.name}: act_scale npz={float(d["act_scale"])} network={ly["act_scale"]}')
     if require_activation and not ly.get('has_activation', False):
         raise AssertionError(f'{meta.name}: DQA_RELU requested but network has_activation=false')

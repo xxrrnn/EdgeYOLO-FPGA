@@ -79,7 +79,9 @@ module us_unit_fixed #(
         S_SAVE_2,        // 写入输出位置 2: (2*ih+1, 2*iw)
         S_SAVE_3,        // 写入输出位置 3: (2*ih+1, 2*iw+1)
         S_NEXT,          // 推进到下一个位置
-        S_DONE
+        S_DONE,
+        S_FLUSH_0,   // 等待 OBUF 写流水第 1 拍
+        S_FLUSH_1    // 等待 OBUF 写流水第 2 拍（IN_REG2 + URAM pipeline）
     } state_t;
 
     state_t state;
@@ -166,33 +168,34 @@ module us_unit_fixed #(
                 // ---------------------------------------------------------
                 S_IDLE: begin
                     if (us_unit_start) begin
-                        // 锁存配置参数
+                        // 第 1 拍：锁存配置参数和步长（步长需要一拍才能被下一状态读到）
                         in_h          <= us_src_h;
                         in_w          <= us_src_w;
-                        c_blocks      <= us_src_c >> LANES_BITS;  // 除以8用移位
+                        c_blocks      <= us_src_c >> LANES_BITS;
                         src_base_word <= us_src_addr >> BYTE_ADDR_SHIFT;
                         dst_base_word <= us_dst_addr >> BYTE_ADDR_SHIFT;
-                        
-                        // 预计算步长（只做一次乘法，后续全部增量更新）
                         src_row_stride <= us_src_w * (us_src_c >> LANES_BITS);
                         dst_row_stride <= (us_src_w << SCALE_BITS) * (us_src_c >> LANES_BITS);
-                        
                         // 初始化循环计数器
                         ih_cnt <= '0;
                         iw_cnt <= '0;
                         cb_cnt <= '0;
-                        
-                        // 初始化基址（位置 (0,0)）
-                        src_row_base      <= us_src_addr >> BYTE_ADDR_SHIFT;
-                        dst_row_base_even <= us_dst_addr >> BYTE_ADDR_SHIFT;
-                        dst_row_base_odd  <= (us_dst_addr >> BYTE_ADDR_SHIFT) + dst_row_stride;
-                        
-                        src_col_base      <= '0;
-                        dst_col_base_even <= '0;
-                        dst_col_base_odd  <= us_src_c >> LANES_BITS;  // c_blocks
-                        
-                        state <= S_LOAD_REQ;
+                        // dst_row_base_odd 依赖 dst_row_stride，需要等下一拍锁存后才能用
+                        // 放到 S_INIT 里初始化
+                        state <= S_INIT;
                     end
+                end
+
+                // ---------------------------------------------------------
+                S_INIT: begin
+                    // 第 2 拍：此时 src_row_stride/dst_row_stride/c_blocks 已经是新值
+                    src_row_base      <= src_base_word;
+                    dst_row_base_even <= dst_base_word;
+                    dst_row_base_odd  <= dst_base_word + dst_row_stride;  // oh=1 行
+                    src_col_base      <= '0;
+                    dst_col_base_even <= '0;
+                    dst_col_base_odd  <= c_blocks;
+                    state <= S_LOAD_REQ;
                 end
 
                 // ---------------------------------------------------------
@@ -263,8 +266,8 @@ module us_unit_fixed #(
                             iw_cnt <= '0;
                             
                             if (ih_cnt == in_h - 1) begin
-                                // 完成了所有行
-                                state <= S_DONE;
+                                // 完成了所有行 → 等 OBUF 写流水清空再报 ready
+                                state <= S_FLUSH_0;
                             end else begin
                                 // 移动到下一行：ih++
                                 ih_cnt <= ih_cnt + 1;
