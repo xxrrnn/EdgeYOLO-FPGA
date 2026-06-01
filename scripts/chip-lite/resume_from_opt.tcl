@@ -15,8 +15,10 @@ read_xdc -unmanaged [file normalize "$xdcDir/chip/chip.xdc"]
 set placeDirective "Default"
 set routeDirective "Explore"
 
-# Single-thread placement avoids ILR multi-thread race condition that triggers the crash
+# Single-thread + disable ILR: avoid Vivado 2024.2 placer SIGSEGV
+# Bug: HAPLFTypeUtils::buildTypeToIdMap race condition in multi-threaded ILR
 set_param general.maxThreads 1
+set_param place.ILREnabled false
 
 puts "INFO: Resuming from post_opt.dcp — starting place_design..."
 place_design -directive $placeDirective

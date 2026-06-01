@@ -23,10 +23,13 @@ set ImplOutputDir [file normalize "$projPath/ImplOutputDir"]
 
 set synDirective Default
 set optDirective ExploreWithRemap
-# NOTE: "Explore" / "AltSpreadLogic_high" triggered Vivado 2024.2 placer SIGSEGV
-# (Phase 2.6.2 HAPLFTypeUtils::buildTypeToIdMap crash). Use Default for stability.
+# NOTE: "AltSpreadLogic_high" triggered Vivado 2024.2 placer SIGSEGV
+# (Phase 2.6.2 HAPLFTypeUtils::buildTypeToIdMap multi-thread race condition crash).
+# Fix: use Default directive + single thread + disable ILR.
 set placeDirective Default
 set physOptDirectiveAp AggressiveExplore
 set routeDirective AggressiveExplore
 set physOptDirectiveAr AggressiveExplore
-set_param general.maxThreads 32
+# Placer thread limit: single thread to avoid 2024.2 ILR crash
+set_param general.maxThreads 1
+set_param place.ILREnabled false
