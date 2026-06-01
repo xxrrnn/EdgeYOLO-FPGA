@@ -106,7 +106,9 @@ module im2col_unit #(
     // =========================================================================
     localparam S_IDLE       = 4'd0;
     localparam S_INIT       = 4'd1;
-    localparam S_PRECOMPUTE = 4'd9;  // 预算二级乘法（S_INIT 结果 → 最终常量）
+    localparam S_PRECOMPUTE = 4'd9;   // 一级：in_col_stride / kw_times_c
+    localparam S_PRECOMPUTE2 = 4'd14; // 二级：w_times_c / stride_w_c / row_stride
+    localparam S_PRECOMPUTE3 = 4'd15; // 三级：stride_h_wc / in_base
     localparam S_READ_REQ   = 4'd2;  // 发出读请求（单周期 pulse）
     localparam S_READ_WAIT  = 4'd3;  // 等待 douta_valid
     localparam S_READ_LATCH = 4'd4;  // 释放总线
@@ -311,17 +313,10 @@ module im2col_unit #(
                 end
 
                 S_INIT: begin
+                    // 仅索引 / 标量初始化，无宽乘法，一拍完成
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
                     c_chunk_byte_offset_r <= '0;
                     write_chunk_nbyte_r <= (elem_total_bytes_r > C_CHUNK_BYTES) ? 5'd16 : elem_total_bytes_r[4:0];
-                    // 一级乘法：像素间距按 ELEM_BYTES 缩放，输出行步长按实际字节计
-                    // in_col_stride  = ceil(CH_IN * ELEM_BYTES / 16) * 16
-                    // kw_times_c     = kW * CH_IN * ELEM_BYTES  (输出自然字节间隔)
-                    in_col_stride_r  <= ((elem_total_bytes_r + 15) >> 4) << 4;
-                    w_times_c_r      <= src_w_r * (((elem_total_bytes_r + 15) >> 4) << 4);
-                    stride_w_c_r     <= strideW_r * (((elem_total_bytes_r + 15) >> 4) << 4);
-                    kw_times_c_r     <= kW_r * elem_total_bytes_r;
-                    // 增量累加器初始为 0
                     in_oh_acc_r <= 0; in_kh_acc_r <= 0;
                     in_ow_acc_r <= 0; in_kw_acc_r <= 0;
                     out_row_offset_r <= 0; out_col_offset_r <= 0;
@@ -329,16 +324,33 @@ module im2col_unit #(
                 end
 
                 S_PRECOMPUTE: begin
-                    // 二级乘法：使用 S_INIT 已寄存的中间结果（< 2ns 每路）
-                    stride_h_wc_r <= strideH_r * w_times_c_r;   // strideH * W * ceil(CH_IN/16)*16
-                    // 每行按 DCIM acc step 对齐：ceil(K_bytes / DCIM_STEP_BYTES) * DCIM_STEP_BYTES
-                    //   DCIM_STEP_BYTES = DCIM_CH_IN * ELEM_BYTES = 64(INT8) or 128(INT16)
-                    //   使用条件移位消除运行时除法，避免综合时序违例。
-                    //   shift = $clog2(DCIM_CH_IN) + (ELEM_BYTES-1) = 6 (INT8) or 7 (INT16)
+                    // 一级乘法（kW/strideW 均为 ≤8-bit，乘法位宽小，单拍安全）
+                    // in_col_stride = ceil(elem_total_bytes/16)*16 (只移位，无乘)
+                    // kw_times_c    = kW(8-bit) × elem_total_bytes(7-bit)
+                    in_col_stride_r <= ((elem_total_bytes_r + 15) >> 4) << 4;
+                    kw_times_c_r    <= kW_r * elem_total_bytes_r;
+                    state <= S_PRECOMPUTE2;
+                end
+
+                S_PRECOMPUTE2: begin
+                    // 二级乘法：依赖 S_PRECOMPUTE 的 in_col_stride_r / kw_times_c_r
+                    // w_times_c    = W(≤16bit) × in_col_stride(≤16bit) → ≤32bit
+                    // stride_w_c   = strideW(5bit) × in_col_stride(≤16bit) → ≤21bit
+                    // row_stride   用条件移位替代除法（消除组合延迟）
+                    // kH × kw_times_c: kH(8bit) × kw_times_c(≤21bit) → ≤29bit
+                    w_times_c_r   <= src_w_r * in_col_stride_r;
+                    stride_w_c_r  <= strideW_r * in_col_stride_r;
                     row_stride_r  <= (elem_bytes_r == 2'd2) ?
                         (((kH_r * kw_times_c_r) + 7'd127) >> 7) << 7 :
                         (((kH_r * kw_times_c_r) +  7'd63) >> 6) << 6;
-                    // in_base = src_addr - padH*(W*CH_IN) - padW*CH_IN
+                    state <= S_PRECOMPUTE3;
+                end
+
+                S_PRECOMPUTE3: begin
+                    // 三级乘法：依赖 S_PRECOMPUTE2 的 w_times_c_r
+                    // stride_h_wc = strideH(5bit) × w_times_c(≤32bit) → 依赖 S_PC2
+                    // in_base 含两路 signed 乘法（padH/padW 各 5bit × 32bit）
+                    stride_h_wc_r <= strideH_r * w_times_c_r;
                     in_base_r     <= $signed(src_addr_r)
                                    - $signed(padH_r) * $signed(w_times_c_r)
                                    - $signed(padW_r) * $signed(in_col_stride_r);
