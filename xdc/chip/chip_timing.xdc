@@ -264,15 +264,16 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 }
 
 # ============================================================================
-# SLR Pblock 约束 (lite: 仅 1 group)
+# SLR Pblock 约束 (lite: 仅 1 group，4 Tile × 64×64，逻辑量超出原 20 clock region 约束)
 # ============================================================================
-# pblock_group_0: DCIM 计算核（Tile、IBUF、仲裁器等）锁在 SLR0
-# 注意：u_obuf 不包含在此 pblock 内，它有自己的 per-bank pblock（见下方）
+# pblock_group_0: DCIM 计算核锁在 SLR0（整个 SLR，让 Vivado 在 SLR0 内自由 place）
+# IS_SOFT: 保持默认 TRUE，Vivado 在满足约束的前提下可溢出到相邻区域
 create_pblock pblock_group_0
 add_cells_to_pblock [get_pblocks pblock_group_0] [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array}]
-resize_pblock [get_pblocks pblock_group_0] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y4}
+resize_pblock [get_pblocks pblock_group_0] -add {SLR0}
 
-# AXI 互连 + VPU + INST_Decoder + CDMA 放在 SLR0（与 Group 0 同层）
+# AXI 互连 + VPU + INST_Decoder + CDMA 放在 SLR0
+# IS_SOFT TRUE: 两部分共享 SLR0，不强制区域边界
 create_pblock pblock_axi_vpu
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/axi_mem_smc/*}]
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
@@ -280,8 +281,8 @@ add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_decoder/*}]
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/cdma_ctrl/*}]
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_bram/*}]
-resize_pblock [get_pblocks pblock_axi_vpu] -add {CLOCKREGION_X4Y0:CLOCKREGION_X7Y4}
-set_property IS_SOFT FALSE [get_pblocks pblock_axi_vpu]
+resize_pblock [get_pblocks pblock_axi_vpu] -add {SLR0}
+set_property IS_SOFT TRUE [get_pblocks pblock_axi_vpu]
 
 # ============================================================================
 # SLR 分配 (lite: DCIM 核逻辑在 SLR0，OBUF 各 bank 分散到各 SLR)
