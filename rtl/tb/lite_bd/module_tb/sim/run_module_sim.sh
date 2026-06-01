@@ -36,7 +36,23 @@ esac
 SKIP_LITE_COMPILE="${SKIP_LITE_COMPILE:-1}"
 TB_TOP="tb_lite_bd_module"
 
-_VARIANT_SLUG="${MODULE_CASE}_${MODULE_VARIANT}_q${MODULE_QUANT}"
+case_mode_slug() {
+  local module="$1"
+  local variant="$2"
+  local quant="$3"
+  if [[ "$module" == "dcim_matmul" ]]; then
+    if [[ "$variant" == *int16* ]]; then
+      printf 'dcim_int16'
+    else
+      printf 'dcim_int8'
+    fi
+  else
+    printf 'q%s' "$quant"
+  fi
+}
+
+_VARIANT_MODE_SLUG="$(case_mode_slug "$MODULE_CASE" "$MODULE_VARIANT" "$MODULE_QUANT")"
+_VARIANT_SLUG="${MODULE_CASE}_${MODULE_VARIANT}_${_VARIANT_MODE_SLUG}"
 RUN_DIR="${RUN_DIR:-$MODULE_SIM_DIR/run_${_VARIANT_SLUG}}"
 SUITE_DIR="${SUITE_DIR:-$MODULE_SIM_DIR/suite_${MODULE_CASE}}"
 COMPILE_DIR="${COMPILE_DIR:-$MODULE_SIM_DIR/build_shared}"
@@ -156,12 +172,15 @@ compile_simv() {
 
 generate_run_dir() {
   mkdir -p "$RUN_DIR"
-  echo "=== Generate module golden module=$MODULE_CASE case=$MODULE_VARIANT quant=$MODULE_QUANT ==="
+  mode_slug="$(case_mode_slug "$MODULE_CASE" "$MODULE_VARIANT" "$MODULE_QUANT")"
+  echo "=== Generate module golden module=$MODULE_CASE case=$MODULE_VARIANT mode=$mode_slug ==="
   extra_args=()
-  [[ -n "$MODULE_QUANT" ]] && extra_args+=(--quant "$MODULE_QUANT")
+  if [[ "$MODULE_CASE" != "dcim_matmul" && -n "$MODULE_QUANT" ]]; then
+    extra_args+=(--quant "$MODULE_QUANT")
+  fi
   [[ -n "$MODULE_DIM"   ]] && extra_args+=(--dim "$MODULE_DIM")
   python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$MODULE_VARIANT" \
-    --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$RUN_DIR" "${extra_args[@]}"
+    --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$RUN_DIR" ${extra_args[@]+"${extra_args[@]}"}
 }
 
 ensure_simv() {
@@ -169,6 +188,30 @@ ensure_simv() {
     compile_simv
   else
     echo "=== Reuse shared simv: $SIMV ==="
+  fi
+}
+
+summarize_log() {
+  [[ $# -ge 1 ]] || return 0
+  grep -E "(MODULE_TB|MODULE RESULTS|MODULE CHECK|FATAL|MISMATCH|Decoder done)" "$1" | tail -120 || true
+}
+
+check_log_pass() {
+  local log_file="${1:-}"
+  local label="${2:-unknown}"
+  [[ -n "$log_file" ]] || {
+    echo "ERROR: check_log_pass missing log file" >&2
+    exit 1
+  }
+  if grep -q 'MODULE CHECK FAILED\|FATAL' "$log_file"; then
+    echo "ERROR: module BD simulation FAILED ($label, see $log_file)" >&2
+    exit 1
+  fi
+  if grep -q 'MODULE CHECK PASSED' "$log_file"; then
+    echo "MODULE BD VCS PASS ($label)"
+  else
+    echo "ERROR: module BD sim did not report MODULE CHECK PASSED ($label)" >&2
+    exit 1
   fi
 }
 
@@ -196,7 +239,7 @@ run_simv() {
   echo "=== sim.log written: $RUN_DIR/sim.log ==="
 
   summarize_log "$RUN_DIR/sim.log"
-  check_log_pass "$RUN_DIR/sim.log" "module=$MODULE_CASE case=$MODULE_VARIANT quant=$MODULE_QUANT"
+  check_log_pass "$RUN_DIR/sim.log" "module=$MODULE_CASE case=$MODULE_VARIANT mode=$(case_mode_slug "$MODULE_CASE" "$MODULE_VARIANT" "$MODULE_QUANT")"
 }
 
 generate_suite_dir() {
@@ -208,19 +251,34 @@ generate_suite_dir() {
   mkdir -p "$SUITE_DIR"
   : > "$SUITE_DIR/suite.txt"
   echo "=== Generate suite module=$MODULE_CASE variants=$MODULE_VARIANTS quant=$MODULE_QUANT ==="
-  quant_list="$MODULE_QUANT"
-  [[ "$quant_list" == "all" ]] && quant_list="int8 int16"
-  for q in $quant_list; do
+  if [[ "$MODULE_CASE" == "dcim_matmul" ]]; then
     for v in $MODULE_VARIANTS; do
-      case_dir="$SUITE_DIR/run_${MODULE_CASE}_${v}_q${q}"
+      mode_slug="$(case_mode_slug "$MODULE_CASE" "$v" "$MODULE_QUANT")"
+      case_name="run_${MODULE_CASE}_${v}_${mode_slug}"
+      case_dir="$SUITE_DIR/$case_name"
       extra_args=()
-      [[ -n "$q" ]] && extra_args+=(--quant "$q")
       [[ -n "$MODULE_DIM" ]] && extra_args+=(--dim "$MODULE_DIM")
       python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$v" \
-        --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir" "${extra_args[@]}"
-      printf 'run_%s_%s_q%s\n' "$MODULE_CASE" "$v" "$q" >> "$SUITE_DIR/suite.txt"
+        --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir" ${extra_args[@]+"${extra_args[@]}"}
+      printf '%s\n' "$case_name" >> "$SUITE_DIR/suite.txt"
     done
-  done
+  else
+    quant_list="$MODULE_QUANT"
+    [[ "$quant_list" == "all" ]] && quant_list="int8 int16"
+    for q in $quant_list; do
+      for v in $MODULE_VARIANTS; do
+        mode_slug="$(case_mode_slug "$MODULE_CASE" "$v" "$q")"
+        case_name="run_${MODULE_CASE}_${v}_${mode_slug}"
+        case_dir="$SUITE_DIR/$case_name"
+        extra_args=()
+        [[ -n "$q" ]] && extra_args+=(--quant "$q")
+        [[ -n "$MODULE_DIM" ]] && extra_args+=(--dim "$MODULE_DIM")
+        python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$v" \
+          --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$case_dir" ${extra_args[@]+"${extra_args[@]}"}
+        printf '%s\n' "$case_name" >> "$SUITE_DIR/suite.txt"
+      done
+    done
+  fi
   echo "Generated suite dir: $SUITE_DIR"
 }
 
@@ -249,25 +307,6 @@ run_suite_simv() {
 
   summarize_log "$SUITE_DIR/sim.log"
   check_log_pass "$SUITE_DIR/sim.log" "suite=$SUITE_DIR"
-}
-
-summarize_log() {
-  grep -E "(MODULE_TB|MODULE RESULTS|MODULE CHECK|FATAL|MISMATCH|Decoder done)" "$1" | tail -120 || true
-}
-
-check_log_pass() {
-  local log_file="$1"
-  local label="$2"
-  if grep -q 'MODULE CHECK FAILED\|FATAL' "$log_file"; then
-    echo "ERROR: module BD simulation FAILED ($label, see $log_file)" >&2
-    exit 1
-  fi
-  if grep -q 'MODULE CHECK PASSED' "$log_file"; then
-    echo "MODULE BD VCS PASS ($label)"
-  else
-    echo "ERROR: module BD sim did not report MODULE CHECK PASSED ($label)" >&2
-    exit 1
-  fi
 }
 
 case "$ACTION" in

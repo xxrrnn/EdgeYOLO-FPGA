@@ -2,19 +2,18 @@
 `include "chip_defines.vh"
 
 // ============================================================================
-// DCIM_Tile - 单个 DCIM 计算 Tile（支持任意 acc_depth 的 im2col matmul）
+// DCIM_Tile - 单个 DCIM 计算 Tile 封装
 // ============================================================================
-// 架构：每个 acc_word 流式加载 CYCLE=8 个 weight entries + 1 个 activation word
-//   → ppCache → maArray → mergeArray → accumulateArray → 输出
+// 目标优先级：250MHz 时序收敛 > 2TOPS 峰值 > 访存/写回性能。
+// 因此本封装采用保守多拍控制：
+//   - weight：每个 acc step 从 IBUF 读 CYCLE 个 128-bit word，写入 DCIM 内部 SRAM。
+//   - ppCache：每个 acc step 从 SRAM 慢速 load 到 ppCache，再 swap 后计算。
+//   - activation：按 CH_IN 参数多 beat 读取，INT8 为 CH_IN/16 个 word，INT16 为 CH_IN/8 个 word。
+//   - output：按 INT32 结果慢速分 word 写回 OBUF；不追求连续写吞吐。
 //
-// Weight SRAM 用作 ppCache 的暂存（不需要预加载全部 weight）。
-// 每个 acc_word 的 8 entries 从 IBUF[wei_base + row_cnt*CYCLE + 0..7] 实时加载。
-//
-// 支持的 CNN 算子范围（im2col 后的 matmul）：
-//   - 1×1 conv 任意 IC (acc_depth = ceil(IC/16))
-//   - 3×3 conv 任意 IC (acc_depth = ceil(9*IC/16))
-//   - 6×6 conv (acc_depth = ceil(36*IC/16))
-//   - 任意 kernel 只要 acc_depth ≤ DCIM_ACC_MAX=80
+// 对 64×64 配置：
+//   CYCLE = 64*64*4/128 = 128，SRAM_DP=128，因此每个 chunk 只包含 1 个 acc row。
+//   acc_depth>1 时由本封装的 partial_accum 在 chunk 之间累加。
 // ============================================================================
 
 module DCIM_Tile #(
@@ -26,50 +25,68 @@ module DCIM_Tile #(
     parameter ACC             = `DCIM_ACC_MAX,
     parameter BUF_ADDR_WIDTH  = `DCIM_BUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
-    parameter TILE_IDX        = 0,              // 由 DCIM_Array_Group 传入 genvar
-    
-    localparam SRAM_WD     = CH_IN * CH_OUT * WD1 / CYCLE,
-    localparam ADDR_WD     = $clog2(SRAM_DP),
-    localparam OUT_WIDTH   = CH_OUT * (2*WD1 + $clog2(CH_IN) + $clog2(ACC)),
-    localparam WD3         = 2*WD1 + $clog2(CH_IN) + $clog2(ACC),
-    localparam ACC_UBD_WD  = $clog2(ACC+1)
+    parameter TILE_IDX        = 0,
+
+    localparam SRAM_WD        = CH_IN * CH_OUT * WD1 / CYCLE,
+    localparam ADDR_WD        = $clog2(SRAM_DP),
+    localparam WD3            = 2*WD1 + $clog2(CH_IN) + $clog2(ACC),
+    localparam OUT_WIDTH      = CH_OUT * WD3,
+    localparam ACC_UBD_WD     = $clog2(ACC+1),
+    localparam STRB_WIDTH     = BUF_DATA_WIDTH / 8,
+    localparam RESULTS_PER_WORD = BUF_DATA_WIDTH / 32,
+    localparam INT8_OUT_CH    = CH_OUT / 2,
+    localparam INT16_OUT_CH   = CH_OUT / 4,
+    localparam MAX_OUT_CH     = INT8_OUT_CH,
+    localparam INT8_OUT_WORDS = (INT8_OUT_CH + RESULTS_PER_WORD - 1) / RESULTS_PER_WORD,
+    localparam INT16_OUT_WORDS = (INT16_OUT_CH + RESULTS_PER_WORD - 1) / RESULTS_PER_WORD,
+    localparam INT8_ACT_WORDS = (CH_IN * 8 + BUF_DATA_WIDTH - 1) / BUF_DATA_WIDTH,
+    localparam INT16_ACT_WORDS = (CH_IN * 16 + BUF_DATA_WIDTH - 1) / BUF_DATA_WIDTH,
+    localparam ACT_WORDS_MAX  = (INT16_ACT_WORDS > INT8_ACT_WORDS) ? INT16_ACT_WORDS : INT8_ACT_WORDS,
+    localparam ACT_CNT_W      = (ACT_WORDS_MAX <= 1) ? 1 : $clog2(ACT_WORDS_MAX + 1),
+    localparam SRAM_CNT_W     = (SRAM_DP <= 1) ? 1 : $clog2(SRAM_DP + 1),
+    localparam PPCACHE_CNT_W  = ((CYCLE << 2) <= 1) ? 1 : $clog2((CYCLE << 2) + 1),
+    localparam OUT_WORD_CNT_W = (INT8_OUT_WORDS <= 1) ? 1 : $clog2(INT8_OUT_WORDS + 1)
 )(
     input  wire                          clk,
     input  wire                          rst_n,
-    
+
     input  wire                          start,
-    input  wire                          tile_enable,  // 1=enabled, 0=stay IDLE (from DCIM_REG_TILE_MASK)
+    input  wire                          tile_enable,
     output wire                          done,
     output wire                          ready,
-    
+
     input  wire [2:0]                    mode,
     input  wire [ACC_UBD_WD-1:0]         acc_depth,
     input  wire [BUF_ADDR_WIDTH-1:0]     wei_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,
-    
-    // IBUF read interface (shared via arbiter)
+
     output reg                           ibuf_rd_valid,
     input  wire                          ibuf_rd_ready,
     output reg  [BUF_ADDR_WIDTH-1:0]     ibuf_rd_addr,
     input  wire                          ibuf_rd_data_valid,
     input  wire [BUF_DATA_WIDTH-1:0]     ibuf_rd_data,
-    
-    // OBUF write interface (to arbiter)
+
     output reg                           obuf_wr_valid,
     input  wire                          obuf_wr_ready,
     output reg  [BUF_ADDR_WIDTH-1:0]     obuf_wr_addr,
     output reg  [BUF_DATA_WIDTH-1:0]     obuf_wr_data,
-    output reg  [BUF_DATA_WIDTH/8-1:0]   obuf_wr_strb
+    output reg  [STRB_WIDTH-1:0]         obuf_wr_strb
 );
 
-    // ========================================================================
-    // 状态机定义
-    // ========================================================================
-    // OBUF_WR_DRAIN: 最后一次 obuf_wr_ready 握手后，URAM Port B 写流水线
-    // 还需要额外若干拍才真正写入（IN_REG1 + IN_REG2 + URAM 写 = 3 拍）。
-    // ST_DONE 状态停留 OBUF_WR_DRAIN 拍，确保 ready 信号延迟到 URAM 写完成后。
-    localparam OBUF_WR_DRAIN = 4;  // 保守值：覆盖仲裁后的 OBUF 写流水线延迟
+    initial begin
+        if (SRAM_WD != BUF_DATA_WIDTH) begin
+            $error("DCIM_Tile requires SRAM_WD == BUF_DATA_WIDTH: SRAM_WD=%0d BUF_DATA_WIDTH=%0d", SRAM_WD, BUF_DATA_WIDTH);
+        end
+        if (CH_OUT % 4 != 0) begin
+            $error("DCIM_Tile requires CH_OUT to be divisible by 4");
+        end
+        if (BUF_DATA_WIDTH % 32 != 0) begin
+            $error("DCIM_Tile requires BUF_DATA_WIDTH to contain whole INT32 results");
+        end
+    end
+
+    localparam OBUF_WR_DRAIN = 4;
 
     typedef enum logic [3:0] {
         ST_IDLE,
@@ -82,18 +99,13 @@ module DCIM_Tile #(
         ST_SWAP_PPCACHE,
         ST_LOAD_ACT_REQ,
         ST_LOAD_ACT_RESP,
-        ST_LOAD_ACT2_REQ,
-        ST_LOAD_ACT2_RESP,
         ST_COMPUTE,
         ST_WAIT_RESULT,
         ST_DONE
     } state_t;
-    
+
     state_t state, next_state;
-    
-    // ========================================================================
-    // DCIM 核心接口信号
-    // ========================================================================
+
     wire                     dcim_clr;
     wire                     dcim_ena = 1'b1;
     reg                      dcim_wr_wei;
@@ -102,86 +114,83 @@ module DCIM_Tile #(
     wire                     dcim_ready_wei;
     reg  [ADDR_WD-1:0]       dcim_addr_wei;
     reg  [SRAM_WD-1:0]       dcim_data_wei;
-    
+
     assign dcim_clr = (state == ST_IDLE) || (state == ST_CLEAR);
-    
+
     wire                     dcim_valid_out;
     wire                     dcim_ready_out = 1'b1;
     wire [OUT_WIDTH-1:0]     dcim_data_out;
-    
-    // ========================================================================
-    // 激活预处理接口信号
-    // ========================================================================
+
     reg                      conv_valid;
     wire                     conv_ready;
     reg  [CH_IN*16-1:0]      conv_data;
     wire                     dcim_valid_act;
     wire                     dcim_ready_act;
     wire [CH_IN*WD1-1:0]     dcim_data_act;
-    
-    // ========================================================================
-    // 计数器和配置寄存器
-    // ========================================================================
+
     reg [ACC_UBD_WD-1:0]     row_cnt;
-    reg [9:0]                wei_load_cnt;
-    reg [5:0]                ppcache_cnt;
+    reg [SRAM_CNT_W-1:0]     wei_load_cnt;
+    reg [PPCACHE_CNT_W-1:0]  ppcache_cnt;
     reg [ACC_UBD_WD-1:0]     chunk_base;
     reg                      chunk_continue_req;
-    reg signed [31:0]        int8_partial_accum [0:7];
-    reg signed [31:0]        int16_partial_accum [0:3];
-    reg [1:0]                result_cnt;
-    reg                      result_cnt_nonzero;
-    reg [BUF_DATA_WIDTH-1:0] act_buf_lo;
+    reg signed [31:0]        int8_partial_accum [0:INT8_OUT_CH-1];
+    reg signed [31:0]        int16_partial_accum [0:INT16_OUT_CH-1];
+    reg [OUT_WORD_CNT_W-1:0] result_cnt;
+    reg                      result_write_done;
+    reg [ACT_CNT_W-1:0]      act_load_cnt;
     reg [BUF_DATA_WIDTH-1:0] ibuf_data_latch;
-    
-    // ========================================================================
-    // start 上升沿检测 + tile_enable 门控
-    // tile_enable=0 的 Tile 不响应 start，永远停在 IDLE
-    // ========================================================================
+
     reg start_d;
     wire start_pulse_raw = start && !start_d;
     wire start_pulse     = start_pulse_raw && tile_enable;
-    
+
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) start_d <= 0;
+        if (!rst_n) start_d <= 1'b0;
         else start_d <= start;
     end
-    
+
     (* max_fanout = 32 *) reg [2:0] mode_reg;
     reg [ACC_UBD_WD-1:0]     acc_reg;
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] act_base_addr_reg;
     reg [BUF_ADDR_WIDTH-1:0] out_base_addr_reg;
-    
-    localparam [31:0] EXPECTED_OUTPUTS = 32'd1;
+
     localparam integer MAX_ROWS_PER_CHUNK_INT = SRAM_DP / CYCLE;
     localparam [ACC_UBD_WD-1:0] MAX_ROWS_PER_CHUNK = MAX_ROWS_PER_CHUNK_INT[ACC_UBD_WD-1:0];
     localparam integer CYCLE_SHIFT = $clog2(CYCLE);
-    
+
     (* max_fanout = 16 *) reg is_int16_reg;
     wire is_int16 = is_int16_reg;
-    
+
+    localparam [ACT_CNT_W-1:0] INT8_ACT_WORDS_L = INT8_ACT_WORDS;
+    localparam [ACT_CNT_W-1:0] INT16_ACT_WORDS_L = INT16_ACT_WORDS;
+    localparam [OUT_WORD_CNT_W-1:0] INT8_OUT_WORDS_L = INT8_OUT_WORDS;
+    localparam [OUT_WORD_CNT_W-1:0] INT16_OUT_WORDS_L = INT16_OUT_WORDS;
+    localparam [7:0] INT8_OUT_CH_L = INT8_OUT_CH;
+    localparam [7:0] INT16_OUT_CH_L = INT16_OUT_CH;
+
+    wire [ACT_CNT_W-1:0] active_act_words = is_int16 ? INT16_ACT_WORDS_L : INT8_ACT_WORDS_L;
+    wire [OUT_WORD_CNT_W-1:0] active_out_words = is_int16 ? INT16_OUT_WORDS_L : INT8_OUT_WORDS_L;
+    wire [7:0] active_out_ch = is_int16 ? INT16_OUT_CH_L : INT8_OUT_CH_L;
+    wire act_load_last = (act_load_cnt + 1'b1 >= active_act_words);
+
     assign ready = (state == ST_IDLE);
-    
+
     reg done_reg;
     assign done = done_reg;
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) done_reg <= 0;
+        if (!rst_n) done_reg <= 1'b0;
         else if (state == ST_DONE) done_reg <= 1'b1;
         else if (state == ST_IDLE && start_pulse) done_reg <= 1'b0;
     end
 
-    // OBUF 写流水线排空计数器（ST_DONE 延迟）
     reg [$clog2(OBUF_WR_DRAIN+1)-1:0] wr_drain_cnt;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) wr_drain_cnt <= '0;
         else if (state != ST_DONE) wr_drain_cnt <= '0;
         else if (wr_drain_cnt < OBUF_WR_DRAIN) wr_drain_cnt <= wr_drain_cnt + 1'b1;
     end
-    
-    // ========================================================================
-    // 状态机辅助信号
-    // ========================================================================
+
     (* max_fanout = 8 *) reg ibuf_handshake_done;
     (* max_fanout = 8 *) reg ibuf_data_received;
     (* max_fanout = 8 *) reg conv_sent_reg;
@@ -189,123 +198,83 @@ module DCIM_Tile #(
     wire [1:0] compute_phase_last = (mode_reg == `MODE_INT16) ? 2'd3 : 2'd1;
     wire compute_phase_fire = (dcim_valid_act && dcim_ready_act);
     wire compute_done = compute_phase_fire && (compute_phase_cnt == compute_phase_last);
-    wire [ACC_UBD_WD-1:0] rows_left_inclusive = acc_reg - chunk_base;
-    wire [ACC_UBD_WD-1:0] chunk_rows = (rows_left_inclusive > MAX_ROWS_PER_CHUNK) ?
-                                       MAX_ROWS_PER_CHUNK : rows_left_inclusive;
+    wire [ACC_UBD_WD-1:0] rows_left = acc_reg - chunk_base;
+    wire [ACC_UBD_WD-1:0] chunk_rows = (rows_left > MAX_ROWS_PER_CHUNK) ? MAX_ROWS_PER_CHUNK : rows_left;
     wire chunk_has_more = (chunk_base + chunk_rows < acc_reg);
     (* max_fanout = 8 *) reg wei_load_finished;
     (* max_fanout = 8 *) reg ppcache_finished;
     (* max_fanout = 8 *) reg all_rows_processed;
     (* max_fanout = 8 *) reg all_results_collected;
-    reg [9:0] chunk_words;
-    reg [BUF_ADDR_WIDTH-1:0] chunk_wei_base;
-    reg [BUF_ADDR_WIDTH-1:0] chunk_act_base;
+    reg [SRAM_CNT_W-1:0] chunk_words;
     reg [BUF_ADDR_WIDTH-1:0] row_wei_base;
     reg [BUF_ADDR_WIDTH-1:0] row_act_addr;
-    wire [BUF_ADDR_WIDTH-1:0] result_word0_addr = out_base_addr_reg + { {(BUF_ADDR_WIDTH-2){1'b0}}, result_cnt, 1'b0 };
-    wire [BUF_ADDR_WIDTH-1:0] result_word1_addr = result_word0_addr + 1'b1;
 
     function automatic [ACC_UBD_WD-1:0] calc_chunk_rows(input [ACC_UBD_WD-1:0] start_row);
-        reg [ACC_UBD_WD-1:0] rows_left;
+        reg [ACC_UBD_WD-1:0] left;
         begin
-            rows_left = acc_reg - start_row;
-            calc_chunk_rows = (rows_left > MAX_ROWS_PER_CHUNK) ? MAX_ROWS_PER_CHUNK : rows_left;
+            left = acc_reg - start_row;
+            calc_chunk_rows = (left > MAX_ROWS_PER_CHUNK) ? MAX_ROWS_PER_CHUNK : left;
         end
     endfunction
-    
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            ibuf_handshake_done <= 0;
-            ibuf_data_received <= 0;
-            wei_load_finished <= 0;
-            ppcache_finished <= 0;
-            all_rows_processed <= 0;
-            all_results_collected <= 0;
-            result_cnt_nonzero <= 0;
+            ibuf_handshake_done <= 1'b0;
+            ibuf_data_received <= 1'b0;
+            wei_load_finished <= 1'b0;
+            ppcache_finished <= 1'b0;
+            all_rows_processed <= 1'b0;
+            all_results_collected <= 1'b0;
         end else begin
             ibuf_handshake_done <= (ibuf_rd_valid && ibuf_rd_ready);
             ibuf_data_received <= ibuf_rd_data_valid;
             wei_load_finished <= (wei_load_cnt >= chunk_words - 1'b1);
-            ppcache_finished <= (state == ST_LOAD_PPCACHE) && ((row_cnt == 0) ? (ppcache_cnt >= (CYCLE << 2)) : (ppcache_cnt >= (CYCLE << 1)));
-            all_rows_processed <= (row_cnt >= chunk_rows - 1);
-            result_cnt_nonzero <= (result_cnt != 2'd0);
-            all_results_collected <= result_cnt_nonzero || chunk_continue_req;
+            ppcache_finished <= (state == ST_LOAD_PPCACHE) &&
+                                ((row_cnt == 0) ? (ppcache_cnt >= (CYCLE << 2)) : (ppcache_cnt >= (CYCLE << 1)));
+            all_rows_processed <= (row_cnt >= chunk_rows - 1'b1);
+            all_results_collected <= chunk_continue_req || result_write_done;
         end
     end
-    
-    // ========================================================================
-    // 状态机转移（核心改动：COMPUTE 后回到 LOAD_WEI 加载下一组 weight）
-    // ========================================================================
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) state <= ST_IDLE;
-        else begin
-            state <= next_state;
-`ifdef SIMULATION
-`ifdef PROBE_DCIM_TILE_STATE
-            if (next_state != state) begin
-                if (next_state == ST_CLEAR && state == ST_IDLE)
-                    $display("[%0t] DCIM_Tile(%m) CLEAR", $time);
-                else if (next_state == ST_LOAD_WEI_REQ && state == ST_CLEAR)
-                    $display("[%0t] DCIM_Tile(%m) START", $time);
-                else if (next_state == ST_COMPUTE)
-                    $display("[%0t] DCIM_Tile(%m) COMPUTE (acc pass)", $time);
-                else if (next_state == ST_WAIT_RESULT)
-                    $display("[%0t] DCIM_Tile(%m) WAIT_RESULT (all acc done)", $time);
-                else if (next_state == ST_DONE)
-                    $display("[%0t] DCIM_Tile(%m) DONE", $time);
-            end
-`endif
-`endif
-        end
+        else state <= next_state;
     end
-    
+
     always_comb begin
         next_state = state;
         case (state)
-            ST_IDLE:           if (start_pulse) next_state = ST_CLEAR;
-            ST_CLEAR:          next_state = ST_LOAD_WEI_REQ;
-            ST_LOAD_WEI_REQ:   if (ibuf_handshake_done) next_state = ST_LOAD_WEI_RESP;
-            ST_LOAD_WEI_RESP:  if (ibuf_data_received) next_state = ST_LOAD_WEI_DONE;
-            ST_LOAD_WEI_DONE: begin
-                if (wei_load_finished) next_state = ST_PREP_PPCACHE;
-                else next_state = ST_LOAD_WEI_REQ;
-            end
-            ST_PREP_PPCACHE:   next_state = ST_LOAD_PPCACHE;
-            ST_LOAD_PPCACHE:   if (ppcache_finished) next_state = ST_SWAP_PPCACHE;
-            ST_SWAP_PPCACHE:   next_state = ST_LOAD_ACT_REQ;
-            ST_LOAD_ACT_REQ:   if (ibuf_handshake_done) next_state = ST_LOAD_ACT_RESP;
-            ST_LOAD_ACT_RESP:  if (ibuf_data_received) begin
-                if (is_int16) next_state = ST_LOAD_ACT2_REQ;
-                else next_state = ST_COMPUTE;
-            end
-            ST_LOAD_ACT2_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_ACT2_RESP;
-            ST_LOAD_ACT2_RESP: if (ibuf_data_received) next_state = ST_COMPUTE;
+            ST_IDLE:          if (start_pulse) next_state = ST_CLEAR;
+            ST_CLEAR:         next_state = ST_LOAD_WEI_REQ;
+            ST_LOAD_WEI_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_WEI_RESP;
+            ST_LOAD_WEI_RESP: if (ibuf_data_received) next_state = ST_LOAD_WEI_DONE;
+            ST_LOAD_WEI_DONE: next_state = wei_load_finished ? ST_PREP_PPCACHE : ST_LOAD_WEI_REQ;
+            ST_PREP_PPCACHE:  next_state = ST_LOAD_PPCACHE;
+            ST_LOAD_PPCACHE:  if (ppcache_finished) next_state = ST_SWAP_PPCACHE;
+            ST_SWAP_PPCACHE:  next_state = ST_LOAD_ACT_REQ;
+            ST_LOAD_ACT_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_ACT_RESP;
+            ST_LOAD_ACT_RESP: if (ibuf_data_received) next_state = act_load_last ? ST_COMPUTE : ST_LOAD_ACT_REQ;
             ST_COMPUTE: begin
-                if (compute_done) begin
-                    if (all_rows_processed) next_state = ST_WAIT_RESULT;
-                    else next_state = ST_PREP_PPCACHE;  // Next acc_word after all nibble phases are consumed
-                end
+                if (compute_done)
+                    next_state = all_rows_processed ? ST_WAIT_RESULT : ST_PREP_PPCACHE;
             end
-            ST_WAIT_RESULT:    if (all_results_collected) begin
-                if (chunk_has_more) next_state = ST_CLEAR;
-                else next_state = ST_DONE;
+            ST_WAIT_RESULT: begin
+                if (all_results_collected)
+                    next_state = chunk_has_more ? ST_CLEAR : ST_DONE;
             end
-            ST_DONE:           if (wr_drain_cnt >= OBUF_WR_DRAIN) next_state = ST_IDLE;
-            default:           next_state = ST_IDLE;
+            ST_DONE:          if (wr_drain_cnt >= OBUF_WR_DRAIN) next_state = ST_IDLE;
+            default:          next_state = ST_IDLE;
         endcase
     end
-    
-    // ========================================================================
-    // 配置寄存器
-    // ========================================================================
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mode_reg <= `MODE_INT8;
-            acc_reg <= 0;
-            wei_base_addr_reg <= 0;
-            act_base_addr_reg <= 0;
-            out_base_addr_reg <= 0;
-            is_int16_reg <= 0;
+            acc_reg <= '0;
+            wei_base_addr_reg <= '0;
+            act_base_addr_reg <= '0;
+            out_base_addr_reg <= '0;
+            is_int16_reg <= 1'b0;
         end else if (state == ST_IDLE && start_pulse) begin
             mode_reg <= mode;
             acc_reg <= acc_depth;
@@ -315,429 +284,370 @@ module DCIM_Tile #(
             is_int16_reg <= (mode == `MODE_INT16);
         end
     end
-    
-    // ========================================================================
-    // 主控制逻辑
-    // ========================================================================
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
-            chunk_base <= 0;
-            dcim_wr_wei <= 0; dcim_load_wei <= 0; dcim_swap_wei <= 0;
-            dcim_addr_wei <= 0; dcim_data_wei <= 0;
-            conv_valid <= 0; conv_data <= 0;
-            ibuf_rd_valid <= 0; ibuf_rd_addr <= 0;
-            ibuf_data_latch <= 0;
-            act_buf_lo <= 0;
-            conv_sent_reg <= 0;
-            compute_phase_cnt <= 0;
-            chunk_words <= 0;
-            chunk_wei_base <= 0;
-            chunk_act_base <= 0;
-            row_wei_base <= 0;
-            row_act_addr <= 0;
+            wei_load_cnt <= '0;
+            ppcache_cnt <= '0;
+            row_cnt <= '0;
+            chunk_base <= '0;
+            dcim_wr_wei <= 1'b0;
+            dcim_load_wei <= 1'b0;
+            dcim_swap_wei <= 1'b0;
+            dcim_addr_wei <= '0;
+            dcim_data_wei <= '0;
+            conv_valid <= 1'b0;
+            conv_data <= '0;
+            ibuf_rd_valid <= 1'b0;
+            ibuf_rd_addr <= '0;
+            ibuf_data_latch <= '0;
+            conv_sent_reg <= 1'b0;
+            compute_phase_cnt <= '0;
+            chunk_words <= '0;
+            row_wei_base <= '0;
+            row_act_addr <= '0;
+            act_load_cnt <= '0;
         end else begin
-            dcim_wr_wei <= 0;
-            dcim_load_wei <= 0;
-            dcim_swap_wei <= 0;
-            conv_valid <= 0;
-            
+            dcim_wr_wei <= 1'b0;
+            dcim_load_wei <= 1'b0;
+            dcim_swap_wei <= 1'b0;
+            conv_valid <= 1'b0;
+
             case (state)
                 ST_IDLE: begin
-                    wei_load_cnt <= 0; ppcache_cnt <= 0; row_cnt <= 0;
-                    chunk_base <= 0;
-                    chunk_words <= 0;
-                    chunk_wei_base <= wei_base_addr_reg;
-                    chunk_act_base <= act_base_addr_reg;
+                    wei_load_cnt <= '0;
+                    ppcache_cnt <= '0;
+                    row_cnt <= '0;
+                    chunk_base <= '0;
+                    chunk_words <= '0;
                     row_wei_base <= wei_base_addr_reg;
                     row_act_addr <= act_base_addr_reg;
-                    ibuf_rd_valid <= 0;
-                    conv_sent_reg <= 0;
-                    compute_phase_cnt <= 0;
+                    ibuf_rd_valid <= 1'b0;
+                    conv_sent_reg <= 1'b0;
+                    compute_phase_cnt <= '0;
+                    act_load_cnt <= '0;
                 end
 
                 ST_CLEAR: begin
-                    wei_load_cnt <= 0;
-                    ppcache_cnt <= 0;
-                    row_cnt <= 0;
+                    wei_load_cnt <= '0;
+                    ppcache_cnt <= '0;
+                    row_cnt <= '0;
+                    ibuf_rd_valid <= 1'b0;
+                    conv_sent_reg <= 1'b0;
+                    compute_phase_cnt <= '0;
+                    act_load_cnt <= '0;
                     if (chunk_continue_req) begin
                         chunk_base <= chunk_base + chunk_rows;
                         chunk_words <= calc_chunk_rows(chunk_base + chunk_rows) << CYCLE_SHIFT;
-                        chunk_wei_base <= wei_base_addr_reg + ((chunk_base + chunk_rows) << CYCLE_SHIFT);
-                        chunk_act_base <= is_int16 ? (act_base_addr_reg + ((chunk_base + chunk_rows) << 1))
-                                                   : (act_base_addr_reg + chunk_base + chunk_rows);
                         row_wei_base <= wei_base_addr_reg + ((chunk_base + chunk_rows) << CYCLE_SHIFT);
-                        row_act_addr <= is_int16 ? (act_base_addr_reg + ((chunk_base + chunk_rows) << 1))
-                                                 : (act_base_addr_reg + chunk_base + chunk_rows);
+                        row_act_addr <= act_base_addr_reg + ((chunk_base + chunk_rows) * active_act_words);
                     end else begin
-                        chunk_wei_base <= wei_base_addr_reg;
-                        chunk_act_base <= act_base_addr_reg;
                         chunk_words <= calc_chunk_rows('0) << CYCLE_SHIFT;
                         row_wei_base <= wei_base_addr_reg;
                         row_act_addr <= act_base_addr_reg;
                     end
-                    ibuf_rd_valid <= 0;
-                    conv_sent_reg <= 0;
-                    compute_phase_cnt <= 0;
                 end
-                
-                // ==============================================================
-                // Weight 加载：每个 acc_word 从 IBUF 读 CYCLE=8 entries
-                // 地址 = wei_base + row_cnt * CYCLE + wei_load_cnt
-                // ==============================================================
+
                 ST_LOAD_WEI_REQ: begin
                     ibuf_rd_valid <= 1'b1;
                     ibuf_rd_addr <= row_wei_base + wei_load_cnt;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
-                
+
                 ST_LOAD_WEI_RESP: begin
-                    ibuf_rd_valid <= 0;
+                    ibuf_rd_valid <= 1'b0;
                     if (ibuf_data_received)
                         ibuf_data_latch <= ibuf_rd_data;
                 end
-                
+
                 ST_LOAD_WEI_DONE: begin
                     dcim_wr_wei <= 1'b1;
                     dcim_addr_wei <= wei_load_cnt[ADDR_WD-1:0];
                     dcim_data_wei <= ibuf_data_latch;
-                    wei_load_cnt <= wei_load_cnt + 1;
+                    wei_load_cnt <= wei_load_cnt + 1'b1;
                 end
-                
-                // ==============================================================
-                // ppCache 加载
-                // ==============================================================
+
                 ST_PREP_PPCACHE: begin
                     dcim_addr_wei <= row_cnt << CYCLE_SHIFT;
-                    ppcache_cnt <= 0;
+                    ppcache_cnt <= '0;
                 end
-                
+
                 ST_LOAD_PPCACHE: begin
-                    // row_cnt==0: 2 loads (IDLE→PREPARE→READY), trigger at cnt=0 and cnt=2*CYCLE
-                    // row_cnt>0: 1 load (PREPARE→READY), trigger at cnt=0 only
                     if (row_cnt == 0)
                         dcim_load_wei <= (ppcache_cnt == 0) || (ppcache_cnt == 2 * CYCLE);
                     else
                         dcim_load_wei <= (ppcache_cnt == 0);
-                    ppcache_cnt <= ppcache_cnt + 1;
+                    ppcache_cnt <= ppcache_cnt + 1'b1;
                 end
-                
+
                 ST_SWAP_PPCACHE: begin
                     dcim_swap_wei <= 1'b1;
+                    act_load_cnt <= '0;
                 end
-                
-                // ==============================================================
-                // Activation 加载
-                // ==============================================================
+
                 ST_LOAD_ACT_REQ: begin
-                    conv_sent_reg <= 0;
-                    compute_phase_cnt <= 0;
+                    conv_sent_reg <= 1'b0;
+                    compute_phase_cnt <= '0;
                     ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= row_act_addr;
+                    ibuf_rd_addr <= row_act_addr + act_load_cnt;
                     if (ibuf_handshake_done)
                         ibuf_rd_valid <= 1'b0;
                 end
-                
+
                 ST_LOAD_ACT_RESP: begin
-                    ibuf_rd_valid <= 0;
+                    ibuf_rd_valid <= 1'b0;
                     if (ibuf_data_received) begin
                         if (is_int16) begin
-                            act_buf_lo <= ibuf_rd_data;
+                            for (int ch = 0; ch < BUF_DATA_WIDTH/16; ch++) begin
+                                if ((act_load_cnt * (BUF_DATA_WIDTH/16) + ch) < CH_IN)
+                                    conv_data[(act_load_cnt * (BUF_DATA_WIDTH/16) + ch)*16 +: 16] <= ibuf_rd_data[ch*16 +: 16];
+                            end
                         end else begin
-                            for (int ch = 0; ch < CH_IN; ch++) begin
-                                conv_data[ch*16 +: 16] <= {{8{ibuf_rd_data[ch*8 + 7]}}, ibuf_rd_data[ch*8 +: 8]};
+                            for (int ch = 0; ch < BUF_DATA_WIDTH/8; ch++) begin
+                                if ((act_load_cnt * (BUF_DATA_WIDTH/8) + ch) < CH_IN)
+                                    conv_data[(act_load_cnt * (BUF_DATA_WIDTH/8) + ch)*16 +: 16] <=
+                                        {{8{ibuf_rd_data[ch*8 + 7]}}, ibuf_rd_data[ch*8 +: 8]};
                             end
                         end
+                        if (act_load_last)
+                            act_load_cnt <= '0;
+                        else
+                            act_load_cnt <= act_load_cnt + 1'b1;
                     end
                 end
-                
-                ST_LOAD_ACT2_REQ: begin
-                    ibuf_rd_valid <= 1'b1;
-                    ibuf_rd_addr <= row_act_addr + 1'b1;
-                    if (ibuf_handshake_done)
-                        ibuf_rd_valid <= 1'b0;
-                end
-                
-                ST_LOAD_ACT2_RESP: begin
-                    ibuf_rd_valid <= 0;
-                    if (ibuf_data_received) begin
-                        conv_data <= {ibuf_rd_data, act_buf_lo};
-                    end
-                end
-                
-                // ==============================================================
-                // 计算
-                // ==============================================================
+
                 ST_COMPUTE: begin
                     conv_valid <= !conv_sent_reg;
-                    if (conv_valid && conv_ready) begin
+                    if (conv_valid && conv_ready)
                         conv_sent_reg <= 1'b1;
-                    end
-                    if (compute_phase_fire) begin
+                    if (compute_phase_fire)
                         compute_phase_cnt <= compute_phase_cnt + 1'b1;
-                    end
                     if (compute_done) begin
                         conv_valid <= 1'b0;
                         conv_sent_reg <= 1'b0;
-                        compute_phase_cnt <= 0;
-                        row_cnt <= row_cnt + 1;
+                        compute_phase_cnt <= '0;
+                        row_cnt <= row_cnt + 1'b1;
                         row_wei_base <= row_wei_base + CYCLE;
-                        row_act_addr <= is_int16 ? (row_act_addr + 2'd2) : (row_act_addr + 1'b1);
+                        row_act_addr <= row_act_addr + active_act_words;
                     end
                 end
-                
-                ST_WAIT_RESULT: begin
-`ifdef SIMULATION
-                    // 若长时间停在此状态，检查 dcim_valid_out 是否 fire
-                    // 原因：结果还在 dcim 核内部流水线中，需等 dcim_valid_out 拉高
-`endif
-                end
-                
+
                 default: begin
                 end
             endcase
         end
     end
-    
-    // ========================================================================
-    // 结果保存：OBUF 写入
-    // ========================================================================
-    reg [2:0] save_phase;
+
+    typedef enum logic [2:0] {
+        SAVE_WAIT,
+        SAVE_LATCH,
+        SAVE_ACCUM,
+        SAVE_WRITE,
+        SAVE_GAP
+    } save_state_t;
+
+    save_state_t save_state;
     (* keep = "true" *) reg [OUT_WIDTH-1:0] dcim_data_latch;
     (* keep = "true" *) reg signed [WD3-1:0] phys_ch_reg [0:CH_OUT-1];
-    (* keep = "true" *) reg [255:0] int8_packed_reg;
-    (* keep = "true" *) reg [127:0] int16_packed_reg;
-    
-    wire signed [31:0] int8_result [0:7];
-    wire signed [31:0] int16_result [0:3];
-    
+    reg signed [31:0] result_buffer [0:MAX_OUT_CH-1];
+
+    wire signed [31:0] int8_result [0:INT8_OUT_CH-1];
+    wire signed [31:0] int16_result [0:INT16_OUT_CH-1];
+
     genvar gi;
     generate
-        for (gi = 0; gi < 8; gi = gi + 1) begin : int8_extract
+        for (gi = 0; gi < INT8_OUT_CH; gi = gi + 1) begin : gen_int8_extract
             localparam PHYS_IDX = gi * 2;
-            if (WD3 <= 32) begin : sign_extend
+            if (WD3 <= 32) begin : gen_sign_extend
                 assign int8_result[gi] = {{(32-WD3){phys_ch_reg[PHYS_IDX][WD3-1]}}, phys_ch_reg[PHYS_IDX]};
-            end else begin : truncate
+            end else begin : gen_truncate
                 assign int8_result[gi] = phys_ch_reg[PHYS_IDX][31:0];
             end
         end
-    endgenerate
-    
-    // INT16 模式：4 个有效输出通道对应 4 个 accumulate col（col 0..3）
-    // 每个 col 的结果存在 temp0(WD3) + temp1(WD3) + temp2(WD3) 中，
-    // 完整值 = {temp2, temp1, temp0}（3×WD3 bit），截取低 32 bit 即 INT32 结果。
-    // phys_ch_reg[col*4+0] = temp0, phys_ch_reg[col*4+1] = temp1, phys_ch_reg[col*4+2] = temp2
-    generate
-        for (gi = 0; gi < 4; gi = gi + 1) begin : int16_extract
+
+        for (gi = 0; gi < INT16_OUT_CH; gi = gi + 1) begin : gen_int16_extract
             localparam COL_BASE = gi * 4;
-            wire [3*WD3-1:0] raw_int16;
-            assign raw_int16 = {phys_ch_reg[COL_BASE+2], phys_ch_reg[COL_BASE+1], phys_ch_reg[COL_BASE]};
+            wire [4*WD3-1:0] raw_int16;
+            assign raw_int16 = {phys_ch_reg[COL_BASE+3], phys_ch_reg[COL_BASE+2],
+                                phys_ch_reg[COL_BASE+1], phys_ch_reg[COL_BASE]};
             assign int16_result[gi] = raw_int16[31:0];
         end
     endgenerate
-    
-    wire [255:0] int8_packed_comb = {int8_result[7], int8_result[6], int8_result[5], int8_result[4],
-                                      int8_result[3], int8_result[2], int8_result[1], int8_result[0]};
-    wire [127:0] int16_packed_comb = {int16_result[3], int16_result[2], int16_result[1], int16_result[0]};
-    wire [31:0] int8_accum_result [0:7];
-    generate
-        for (gi = 0; gi < 8; gi = gi + 1) begin : int8_chunk_accum
-            assign int8_accum_result[gi] = int8_result[gi] + int8_partial_accum[gi];
+
+    function automatic [BUF_DATA_WIDTH-1:0] pack_result_word(input [OUT_WORD_CNT_W-1:0] word_idx);
+        reg [BUF_DATA_WIDTH-1:0] result_word;
+        integer lane;
+        integer out_idx;
+        begin
+            result_word = '0;
+            for (lane = 0; lane < RESULTS_PER_WORD; lane = lane + 1) begin
+                out_idx = word_idx * RESULTS_PER_WORD + lane;
+                if (out_idx < active_out_ch)
+                    result_word[lane*32 +: 32] = result_buffer[out_idx];
+            end
+            pack_result_word = result_word;
         end
-    endgenerate
-    wire [255:0] int8_accum_packed_comb = {int8_accum_result[7], int8_accum_result[6],
-                                           int8_accum_result[5], int8_accum_result[4],
-                                           int8_accum_result[3], int8_accum_result[2],
-                                           int8_accum_result[1], int8_accum_result[0]};
-    wire [31:0] int16_accum_result [0:3];
-    generate
-        for (gi = 0; gi < 4; gi = gi + 1) begin : int16_chunk_accum
-            assign int16_accum_result[gi] = int16_result[gi] + int16_partial_accum[gi];
-        end
-    endgenerate
-    wire [127:0] int16_accum_packed_comb = {int16_accum_result[3], int16_accum_result[2],
-                                            int16_accum_result[1], int16_accum_result[0]};
-    
+    endfunction
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            result_cnt <= 0;
-            obuf_wr_valid <= 0; obuf_wr_addr <= 0; obuf_wr_data <= 0; obuf_wr_strb <= 0;
-            save_phase <= 0;
-            dcim_data_latch <= 0;
-            int8_packed_reg <= 0;
-            int16_packed_reg <= 0;
-            for (int i = 0; i < CH_OUT; i++) phys_ch_reg[i] <= 0;
+            result_cnt <= '0;
+            obuf_wr_valid <= 1'b0;
+            obuf_wr_addr <= '0;
+            obuf_wr_data <= '0;
+            obuf_wr_strb <= '0;
+            save_state <= SAVE_WAIT;
+            dcim_data_latch <= '0;
+            chunk_continue_req <= 1'b0;
+            result_write_done <= 1'b0;
+            for (int i = 0; i < CH_OUT; i++) phys_ch_reg[i] <= '0;
+            for (int i = 0; i < INT8_OUT_CH; i++) int8_partial_accum[i] <= '0;
+            for (int i = 0; i < INT16_OUT_CH; i++) int16_partial_accum[i] <= '0;
+            for (int i = 0; i < MAX_OUT_CH; i++) result_buffer[i] <= '0;
         end else begin
             if (state == ST_IDLE) begin
-                result_cnt <= 0;
-                obuf_wr_valid <= 0;
-                save_phase <= 0;
-                chunk_continue_req <= 0;
-                for (int i = 0; i < 8; i++) int8_partial_accum[i] <= 0;
-                for (int i = 0; i < 4; i++) int16_partial_accum[i] <= 0;
+                result_cnt <= '0;
+                obuf_wr_valid <= 1'b0;
+                obuf_wr_strb <= '0;
+                save_state <= SAVE_WAIT;
+                chunk_continue_req <= 1'b0;
+                result_write_done <= 1'b0;
+                for (int i = 0; i < INT8_OUT_CH; i++) int8_partial_accum[i] <= '0;
+                for (int i = 0; i < INT16_OUT_CH; i++) int16_partial_accum[i] <= '0;
             end else begin
                 if (state == ST_CLEAR) begin
-                    result_cnt <= 0;
-                    obuf_wr_valid <= 0;
-                    save_phase <= 0;
-                    chunk_continue_req <= 0;
+                    result_cnt <= '0;
+                    obuf_wr_valid <= 1'b0;
+                    obuf_wr_strb <= '0;
+                    save_state <= SAVE_WAIT;
+                    chunk_continue_req <= 1'b0;
+                    result_write_done <= 1'b0;
                 end
-                case (save_phase)
-                    3'd0: begin
-                        obuf_wr_valid <= 0;
+
+                case (save_state)
+                    SAVE_WAIT: begin
+                        obuf_wr_valid <= 1'b0;
                         if (dcim_valid_out && dcim_ready_out) begin
                             dcim_data_latch <= dcim_data_out;
-                            save_phase <= 3'd1;
-                            `ifdef SIM
-                            $display("[%0t] Tile save: dcim_valid_out fired, result_cnt=%0d, out_base=0x%05h", $time, result_cnt, out_base_addr_reg);
-                            `endif
+                            save_state <= SAVE_LATCH;
                         end
                     end
-                    
-                    3'd1: begin
-                        for (int i = 0; i < CH_OUT; i++) begin
+
+                    SAVE_LATCH: begin
+                        for (int i = 0; i < CH_OUT; i++)
                             phys_ch_reg[i] <= dcim_data_latch[i*WD3 +: WD3];
-                        end
-                        save_phase <= 3'd2;
+                        save_state <= SAVE_ACCUM;
                     end
-                    
-                    3'd2: begin
+
+                    SAVE_ACCUM: begin
                         if (chunk_has_more) begin
                             if (is_int16_reg) begin
-                                for (int i = 0; i < 4; i++) begin
+                                for (int i = 0; i < INT16_OUT_CH; i++)
                                     int16_partial_accum[i] <= int16_partial_accum[i] + int16_result[i];
-                                end
                             end else begin
-                                for (int i = 0; i < 8; i++) begin
+                                for (int i = 0; i < INT8_OUT_CH; i++)
                                     int8_partial_accum[i] <= int8_partial_accum[i] + int8_result[i];
-                                end
                             end
                             chunk_continue_req <= 1'b1;
-                            save_phase <= 3'd0;
+                            save_state <= SAVE_WAIT;
                         end else begin
-                            int8_packed_reg <= int8_accum_packed_comb;
-                            int16_packed_reg <= int16_packed_comb;
-                            // Pre-arm valid + addr/data so phase=3 already has
-                            // valid=1 from cycle 0, removing the "valid is 0
-                            // on entry" race with the arbiter.
-                            obuf_wr_valid <= 1'b1;
-                            obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
                             if (is_int16_reg) begin
-                                obuf_wr_addr <= out_base_addr_reg + result_cnt;
-                                obuf_wr_data <= int16_accum_packed_comb;
+                                for (int i = 0; i < INT16_OUT_CH; i++)
+                                    result_buffer[i] <= int16_result[i] + int16_partial_accum[i];
                             end else begin
-                                obuf_wr_addr <= result_word0_addr;
-                                obuf_wr_data <= int8_accum_packed_comb[127:0];
+                                for (int i = 0; i < INT8_OUT_CH; i++)
+                                    result_buffer[i] <= int8_result[i] + int8_partial_accum[i];
                             end
-                            save_phase <= 3'd3;
+                            result_cnt <= '0;
+                            save_state <= SAVE_WRITE;
                         end
                     end
-                    
-                    3'd3: begin
-                        // valid/addr/data already driven from phase=2; just
-                        // wait for arbiter ready.
-                        if (obuf_wr_ready) begin
-                            obuf_wr_valid <= 0;  // Always clear valid after handshake
-                            if (is_int16_reg) begin
-                                save_phase <= 3'd0;
-                                result_cnt <= result_cnt + 1;
-                            end else begin
-                                // INT8: go to phase=4 for second word.
-                                // Clear valid for one cycle to let arbiter's grant_taken reset.
-                                save_phase <= 3'd4;
-                            end
-                        end
-                    end
-                    
-                    3'd4: begin
-                        // Second INT8 word: arm valid/addr/data on entry.
-                        // Only check ready when our own valid is asserted.
+
+                    SAVE_WRITE: begin
                         obuf_wr_valid <= 1'b1;
-                        obuf_wr_strb  <= {(BUF_DATA_WIDTH/8){1'b1}};
-                        obuf_wr_addr  <= result_word1_addr;
-                        obuf_wr_data  <= int8_packed_reg[255:128];
-                        if (obuf_wr_valid && obuf_wr_ready) begin
-                            obuf_wr_valid <= 0;
-                            save_phase <= 3'd0;
-                            result_cnt <= result_cnt + 1;
+                        obuf_wr_strb <= {STRB_WIDTH{1'b1}};
+                        obuf_wr_addr <= out_base_addr_reg + result_cnt;
+                        obuf_wr_data <= pack_result_word(result_cnt);
+                        if (obuf_wr_ready) begin
+                            obuf_wr_valid <= 1'b0;
+                            if (result_cnt + 1'b1 >= active_out_words) begin
+                                result_write_done <= 1'b1;
+                                result_cnt <= '0;
+                                save_state <= SAVE_WAIT;
+                            end else begin
+                                result_cnt <= result_cnt + 1'b1;
+                                save_state <= SAVE_GAP;
+                            end
                         end
                     end
-                    
+
+                    SAVE_GAP: begin
+                        obuf_wr_valid <= 1'b0;
+                        obuf_wr_strb <= '0;
+                        save_state <= SAVE_WRITE;
+                    end
+
                     default: begin
-                        obuf_wr_valid <= 0;
-                        save_phase <= 3'd0;
+                        obuf_wr_valid <= 1'b0;
+                        save_state <= SAVE_WAIT;
                     end
                 endcase
             end
         end
     end
 
-`ifdef SIM
-`ifdef PROBE_OBUF_X
-    // ========================================================================
-    // SIM-only probe: log phase=3/4 valid/ready/addr to debug INT8 second-word issue
-    // Off by default; enable with `xvlog -d PROBE_OBUF_X`
-    // ========================================================================
-    always_ff @(posedge clk) begin
-        if (rst_n && (save_phase == 3'd3 || save_phase == 3'd4) &&
-            (out_base_addr_reg == 20'h20000)) begin
-            $display("[%0t] PROBE.Tile@%m: phase=%0d result_cnt=%0d valid=%b ready=%b addr=0x%05h data[31:0]=0x%08h",
-                     $time, save_phase, result_cnt, obuf_wr_valid, obuf_wr_ready,
-                     obuf_wr_addr, obuf_wr_data[31:0]);
-        end
-    end
-`endif
-`endif
-
 `ifdef SIMULATION
 `ifdef PROBE_DCIM_TILE_VALID
     always_ff @(posedge clk) begin
         if (rst_n && dcim_valid_out && dcim_ready_out) begin
-            $display("[%0t] DCIM_Tile[%0d] dcim_valid_out fired: result_cnt=%0d save_phase=%0d",
-                     $time, TILE_IDX, result_cnt, save_phase);
-            if (is_int16_reg && out_base_addr_reg >= 20'h20018 && out_base_addr_reg <= 20'h2001f) begin
-                $display("[%0t] DCIM_Tile[%0d] INT16 debug: out_base=0x%05h chunk_base=%0d row_cnt=%0d data_out=0x%0h",
-                         $time, TILE_IDX, out_base_addr_reg, chunk_base, row_cnt, dcim_data_out);
-            end
+            $display("[%0t] DCIM_Tile[%0d] dcim_valid_out fired save_state=%0d", $time, TILE_IDX, save_state);
         end
-        if (rst_n && state == ST_WAIT_RESULT && !all_results_collected && dcim_valid_out === 1'b0)
-            if ($time % 10000 == 0)
-                $display("[%0t] DCIM_Tile[%0d] WAIT_RESULT: still waiting dcim_valid_out (phase=%0d result_cnt=%0d)",
-                         $time, TILE_IDX, save_phase, result_cnt);
     end
 `endif
 `endif
 
-    // ========================================================================
-    // DCIM 计算核心实例化
-    // ========================================================================
     act_nibble_converter #(
         .CH_IN(CH_IN)
     ) u_act_nibble_converter (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .mode         (mode_reg),
-        .raw_act_valid(conv_valid),
-        .raw_act_ready(conv_ready),
-        .raw_act_data (conv_data),
-        .dcim_act_valid(dcim_valid_act),
-        .dcim_act_ready(dcim_ready_act),
-        .dcim_act_data (dcim_data_act)
+        .clk            (clk),
+        .rst_n          (rst_n),
+        .mode           (mode_reg),
+        .raw_act_valid  (conv_valid),
+        .raw_act_ready  (conv_ready),
+        .raw_act_data   (conv_data),
+        .dcim_act_valid (dcim_valid_act),
+        .dcim_act_ready (dcim_ready_act),
+        .dcim_act_data  (dcim_data_act)
     );
 
     dcim #(
-        .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT),
-        .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC)
+        .WD1(WD1),
+        .CH_IN(CH_IN),
+        .CH_OUT(CH_OUT),
+        .SRAM_DP(SRAM_DP),
+        .CYCLE(CYCLE),
+        .ACC(ACC)
     ) u_dcim (
-        .clk(clk), .rstn(rst_n), .clr(dcim_clr), .ena(dcim_ena),
-        .mode_cal(mode_reg), .acc(chunk_rows),
-        .wr_wei(dcim_wr_wei), .load_wei(dcim_load_wei), .swap_wei(dcim_swap_wei),
-        .up_ready_wei(dcim_ready_wei), .up_address_wei(dcim_addr_wei),
-        .up_data_wei(dcim_data_wei), .up_be_wei({SRAM_WD{1'b1}}),
-        .up_valid_cal(dcim_valid_act), .up_ready_cal(dcim_ready_act),
-        .up_data_cal(dcim_data_act),
-        .dn_valid(dcim_valid_out), .dn_ready(dcim_ready_out), .dn_data(dcim_data_out)
+        .clk            (clk),
+        .rstn           (rst_n),
+        .clr            (dcim_clr),
+        .ena            (dcim_ena),
+        .mode_cal       (mode_reg),
+        .acc            (chunk_rows),
+        .wr_wei         (dcim_wr_wei),
+        .load_wei       (dcim_load_wei),
+        .swap_wei       (dcim_swap_wei),
+        .up_ready_wei   (dcim_ready_wei),
+        .up_address_wei (dcim_addr_wei),
+        .up_data_wei    (dcim_data_wei),
+        .up_be_wei      ({SRAM_WD{1'b1}}),
+        .up_valid_cal   (dcim_valid_act),
+        .up_ready_cal   (dcim_ready_act),
+        .up_data_cal    (dcim_data_act),
+        .dn_valid       (dcim_valid_out),
+        .dn_ready       (dcim_ready_out),
+        .dn_data        (dcim_data_out)
     );
 
 endmodule

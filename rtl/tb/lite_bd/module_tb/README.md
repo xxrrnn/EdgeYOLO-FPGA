@@ -2,7 +2,7 @@
 
 工作目录：`rtl/tb/lite_bd/module_tb`
 
-目标：在完整 lite BD（Block Design）上验证单个模块或小链路的数值正确性。所有任务都由 `inst.hex` 指令流、`preload.txt` 输入预加载和 `checks.txt` 检查点在运行期配置；VCS 编译产物 `simv` 可复用，不需要为每个 case 重新编译。
+目标：作为后续主测试入口，在完整 lite BD（Block Design）上验证单个模块或小链路的数值级别等同。所有任务都由 `inst.hex` 指令流、`preload.txt` 输入预加载和 `checks.txt` 检查点在运行期配置；VCS 编译产物 `simv` 可复用，不需要为每个 case 重新编译。
 
 默认设置：
 
@@ -16,7 +16,7 @@
 
 ## 快速开始
 
-第一次或 BD/IP 改动后（包括 `chip_defines.vh` 中 DCIM Tile/Group 数变化）：
+第一次或 BD/IP/`chip_defines.vh` 参数改动后（包括 `NUM_TILES/CH_IN/CH_OUT/CYCLE` 变化）：
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
@@ -255,9 +255,9 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 ## 当前验证状态（2026-05-30）
 
-硬件拓扑策略更新：DCIM lite 目标为 **1 group × 64 Tile**，共享一套 2MB IBUF 和一套 16MB OBUF。不要把 `NUM_GROUPS` 扩成 8 个物理 group；当前 RTL 的 group 会实例化独立 IBUF/OBUF，直接复制大容量 URAM，不适合容量约束。等效 64 个 DCIM 通过单 group 内 64 Tile 实现，映射更简单。
+硬件拓扑策略更新：DCIM lite 当前主线为 **4 Tile × 64×64**，`DCIM_Array` 直接由 Tile 阵列 + 共享 2MB IBUF + 共享 16MB OBUF 构成。`Group` 层已退出主 flow，不再作为功能验证对象；`NUM_GROUPS` 仅保留为 BD/module_ref 参数兼容项，实际要求为 1。
 
-注意：Vivado module_ref wrapper 会把 `NUM_GROUPS/TILES_PER_GROUP/NUM_TILES` 固化到 `lite_dcim_array_0_0.v`。修改拓扑后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`；否则仿真仍可能使用旧的 8 Tile wrapper，表现为 64 Tile 用例只有前 8 Tile 有输出。
+注意：Vivado module_ref wrapper 会把 `NUM_GROUPS/TILES_PER_GROUP/NUM_TILES/CH_IN/CH_OUT/CYCLE` 固化到 `lite_dcim_array_0_0.v`。修改 `chip_defines.vh` 后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`；否则仿真仍可能使用旧 wrapper 参数，导致数值布局和 golden 不一致。
 
 ### 行为模型与综合 RTL 一致性约定
 
@@ -269,7 +269,7 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 该行为模型只影响 `qa_unit` 内的 FP32→INT16 转换分支。当前 W8A8 主路径与 conv pipeline 主要使用 INT8 QA，和上板 RTL 一致；INT16/行为模型相关测试应视为功能快速回归，最终上板一致性以真实 IP 仿真或综合后板上测试为准。
 
-验证策略更新：RTL 仿真不再把完整网络大尺寸层作为常规回归目标。常规 RTL 重点跑小规模但极端的 `dcim_extreme`，覆盖 64 Tile 配置、高 acc_depth、INT8/INT16 和 1×1/3×3/6×6 kernel；完整网络/60 层端到端主要留给综合实现后上板验证。
+验证策略更新：RTL 仿真不再把完整网络大尺寸层作为常规回归目标。常规 RTL 重点跑小规模但极端的 `dcim_extreme`，覆盖当前 4 Tile × 64×64 配置、高 acc_depth、INT8/INT16 和 1×1/3×3/6×6 kernel；完整网络/60 层端到端主要留给综合实现后上板验证。
 
 ### 新仿真方法：数值回归默认 backdoor preload
 
@@ -277,7 +277,7 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 - `PRELOAD_MODE=backdoor`（默认）：直接把 `preload.txt` 指定的 `*.hex` 写入 RTL 内部 IBUF/OBUF/WB 存储数组。这样跳过最慢的 host AXI 逐 beat preload，但 **不跳过计算路径**：`inst.hex` 仍由 `INST_Decoder` 执行，CDMA/VPU/DCIM 仍在完整 lite BD RTL 中运行，最后从 OBUF 读回并与 `golden_module_tb.py` 的 `expected.hex` 逐 word 比较。
 - `PRELOAD_MODE=axi`：通过 `host_axi_master_bfm` 走 XDMA M_AXI → SmartConnect → AXI BRAM ctrl，用于小规模地址映射/AXI 通路 smoke。大权重 case 不建议用该模式。
-- `QUANT=all`：`sim-batch` 和 `sim-suite/rebuild-suite` 都支持，会展开成 `int8`、`int16` 两套 run 目录；若某个 module 本身不受量化模式影响，建议保持默认 `QUANT=int8`。
+- `QUANT=all`：对 QA/DQA/conv_pipeline/mini_network 等模块会展开成 `int8`、`int16` 两套 run 目录；对 `dcim_matmul` 不使用 `QUANT` 覆盖精度，DCIM 模式由 case 名/spec 决定，运行目录后缀为 `dcim_int8` 或 `dcim_int16`。
 
 因此，上板前功能完备性验证的主路径是 `backdoor` 数值回归，补充少量 `axi` smoke 验证总线窗口仍可达。
 
@@ -359,7 +359,7 @@ DCIM 网络真实尺寸 smoke（可选，不作为常规 RTL 回归）：
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
-timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network QUANT=all STOP_ON_FAIL=0 LOG=1
+timeout 3h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network STOP_ON_FAIL=0 LOG=1
 ```
 
 综合检查（默认不定义行为模型，使用上板 RTL）：
@@ -372,7 +372,7 @@ vivado -mode batch -source scripts/chip-lite/2_synth.tcl
 
 当前 module_tb 是完整 lite BD 上的模块级/小链路数值验证，测试数据由 `golden_module_tb.py` 生成，运行时通过 `inst.hex` 指令流、`preload.txt` 输入预加载和 `checks.txt` 检查点驱动。已覆盖/建议覆盖的内容包括：
 
-- `dcim_matmul`：DCIM IBUF → Tile 阵列 → OBUF，覆盖 INT8/INT16、1×1/3×3/6×6 kernel、64 Tile 配置和高 `acc_depth`。
+- `dcim_matmul`：DCIM IBUF → Tile 阵列 → OBUF，覆盖 INT8/INT16、1×1/3×3/6×6 kernel、当前 4 Tile × 64×64 配置和高 `acc_depth`。
 - `im2col`：VPU 从 OBUF 读 feature 并写 OBUF im2col 结果。
 - `conv_pipeline`：`im2col → CDMA(OBUF→IBUF) → DCIM → DQA → QA`，是最接近单层卷积上板数据流的 RTL 链路。
 - `dqa` / `qa` / `mp` / `us` / `concat_by_cdma`：分别验证 VPU 后处理、量化、池化、上采样和 CDMA 拼接路径。
@@ -601,11 +601,11 @@ make sim MODULE_CASE=qa MODULE_VARIANT=qa_c16_signed PRELOAD_MODE=backdoor
 ### 2. DCIM 主路径和极限路径
 
 ```bash
-timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all QUANT=all STOP_ON_FAIL=0 LOG=1
-timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme QUANT=all STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all STOP_ON_FAIL=0 LOG=1
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=0 LOG=1
 ```
 
-覆盖：INT8/INT16、1×1/3×3/6×6、64 Tile 配置、高 `acc_depth`、大通道 tilepass。
+覆盖：INT8/INT16、1×1/3×3/6×6、当前 4 Tile × 64×64 配置、高 `acc_depth`、大通道 tilepass。
 
 ### 3. VPU 单元完整回归
 
@@ -659,7 +659,7 @@ FP32_2_INT16_BEHAVIORAL=0 timeout 1h make rebuild-suite MODULE_CASE=qa BATCH_SUI
 `simv` 输出默认写入 `sim.log`，终端停在 `=== VCS simulate ... ===` 不代表卡死。查看实时进度：
 
 ```bash
-less +F sim/run_<MODULE_CASE>_<MODULE_VARIANT>_q<QUANT>/sim.log
+less +F sim/run_<MODULE_CASE>_<MODULE_VARIANT>_<mode>/sim.log
 # 或单 case 监控
 make sim-watch MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 ```

@@ -384,9 +384,9 @@ module tb_lite_bd_e2e;
                      dut.lite_i.dcim_array_0_ready,
                      dut.lite_i.dcim_array_0.inst.u_dcim_array.group_ready,
                      dut.lite_i.dcim_array_0.inst.u_dcim_array.group_done,
-                     dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.tile_ready,
-                     dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.tile_done,
-                     dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.gen_tiles[0].u_tile.state);
+                     dut.lite_i.dcim_array_0.inst.u_dcim_array.tile_ready,
+                     dut.lite_i.dcim_array_0.inst.u_dcim_array.tile_done,
+                     dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.state);
             $display("[%0t] DIAG[%s]: AXI cdma_m aw/w/b/ar/r=%0b%0b%0b%0b%0b obufA aw/w/b/ar/r=%0b%0b%0b%0b%0b ibufA aw/w/b/ar/r=%0b%0b%0b%0b%0b instA aw/w/b/ar/r=%0b%0b%0b%0b%0b",
                      $time, tag,
                      dut.lite_i.axi_cdma_0_M_AXI_AWVALID, dut.lite_i.axi_cdma_0_M_AXI_WVALID, dut.lite_i.axi_cdma_0_M_AXI_BVALID, dut.lite_i.axi_cdma_0_M_AXI_ARVALID, dut.lite_i.axi_cdma_0_M_AXI_RVALID,

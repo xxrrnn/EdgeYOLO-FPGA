@@ -10,6 +10,12 @@ For now this is a thin pure-Python module; rule callables are imported by
 from __future__ import annotations
 
 from typing import Any, Dict
+import os
+import sys
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+from chip_config import DCIM_CH_IN  # noqa: E402
 
 
 def conv_check(layer: Dict[str, Any], hw: Dict[str, Any]) -> None:
@@ -35,7 +41,7 @@ def conv_check(layer: Dict[str, Any], hw: Dict[str, Any]) -> None:
         raise UnsupportedOp(name, "Conv",
             f"pad={pads} > {req['pad_max']}.  Options: (a) explicit pad in OBUF, (b) widen pad field")
     # acc_depth check
-    acc_depth = (kh * kw * int(layer["in_channels"]) + 15) // 16
+    acc_depth = (kh * kw * int(layer["in_channels"]) + DCIM_CH_IN - 1) // DCIM_CH_IN
     acc_max = int(hw["units"]["dcim"]["acc_depth_max"])
     if acc_depth > acc_max:
         raise UnsupportedOp(name, "Conv",

@@ -18,6 +18,13 @@ from .lower import (
     pack_addr_break, pack_dcim_mode, emit_conv,
 )
 from .memory_plan import MemoryPlanner
+from chip_config import (  # noqa: E402
+    BYTES_PER_WORD,
+    DCIM_CH_IN,
+    DCIM_CYCLE,
+    DCIM_INT8_OUT_CH_PER_TILE,
+    DCIM_NUM_TILES,
+)
 
 # OBUF region constants (matching plan)
 PING = 0x000000
@@ -165,7 +172,7 @@ def _lower_resnet18(
     plan["network"] = "resnet18"
 
     elem_bytes = 2 if mode == "int16" else 1
-    elems_per_word = 8 if mode == "int16" else 16
+    elems_per_word = (DCIM_CH_IN // 2) if mode == "int16" else DCIM_CH_IN
 
     n_conv = min(len(layers), max_layers) if max_layers else len(layers)
 
@@ -200,7 +207,7 @@ def _lower_resnet18(
         oh = (h + ph[0] + ph[2] - kh) // sh + 1
         ow = (w + ph[1] + ph[3] - kw) // sw + 1
         acc_depth = (kh * kw * cin + elems_per_word - 1) // elems_per_word
-        tiles_needed = (cout + 15) // 16
+        tiles_needed = (cout + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE
 
         # WB
         wb_off = 0
@@ -212,27 +219,27 @@ def _lower_resnet18(
         wb_scratch_cursor += _round_up(wb_section, 16)
 
         # IBUF
-        wt_per_tile_words = acc_depth * 16
-        wt_per_tile_bytes = wt_per_tile_words * 16
+        wt_per_tile_words = acc_depth * DCIM_CYCLE
+        wt_per_tile_bytes = wt_per_tile_words * BYTES_PER_WORD
         wei_ibuf_word_addr = 0
-        act_ibuf_word_addr = (wt_per_tile_bytes * min(tiles_needed, 8)) // 16
+        act_ibuf_word_addr = (wt_per_tile_bytes * min(tiles_needed, DCIM_NUM_TILES)) // BYTES_PER_WORD
 
         # Cout tiling: split into multiple DCIM passes of 8 tiles each
-        num_passes = (tiles_needed + 7) // 8
+        num_passes = (tiles_needed + DCIM_NUM_TILES - 1) // DCIM_NUM_TILES
         if num_passes > 1:
             for pass_idx in range(num_passes):
-                tile_start = pass_idx * 8
-                tile_end = min(tile_start + 8, tiles_needed)
-                pass_cout = (tile_end - tile_start) * 16
+                tile_start = pass_idx * DCIM_NUM_TILES
+                tile_end = min(tile_start + DCIM_NUM_TILES, tiles_needed)
+                pass_cout = (tile_end - tile_start) * DCIM_INT8_OUT_CH_PER_TILE
                 if tile_end == tiles_needed:
-                    pass_cout = cout - tile_start * 16
+                    pass_cout = cout - tile_start * DCIM_INT8_OUT_CH_PER_TILE
 
                 pass_layer = dict(layer)
                 pass_layer["out_channels"] = pass_cout
                 # Keep original name so WB scratch lookup works
                 pass_layer["name"] = layer["name"]
 
-                pass_out_off = out_off + tile_start * 16 * oh * ow * 4
+                pass_out_off = out_off + tile_start * DCIM_INT8_OUT_CH_PER_TILE * oh * ow * 4
 
                 emitted, _, _, _, _ = emit_conv(
                     pass_layer,
@@ -435,7 +442,7 @@ def _lower_yolov5n(
     plan["network"] = "yolov5n"
 
     elem_bytes = 2 if mode == "int16" else 1
-    elems_per_word = 8 if mode == "int16" else 16
+    elems_per_word = (DCIM_CH_IN // 2) if mode == "int16" else DCIM_CH_IN
 
     ops: List[Dict[str, Any]] = []
     layer_records, wb_records, weight_records = [], [], []
@@ -481,7 +488,7 @@ def _lower_yolov5n(
         oh = (cur_h + ph[0] + ph[2] - kh) // sh + 1
         ow = (cur_w + ph[1] + ph[3] - kw) // sw + 1
         acc_depth = (kh * kw * cin + elems_per_word - 1) // elems_per_word
-        tiles_needed = (cout + 15) // 16
+        tiles_needed = (cout + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE
 
         wb_off = 0
         dqa_scale_off = 16
@@ -489,24 +496,24 @@ def _lower_yolov5n(
         wb_section = dqa_bias_off + _round_up(cout * 4, 16)
         wb_scratch_cursor += _round_up(wb_section, 16)
 
-        wt_per_tile_words = acc_depth * 16
-        wt_per_tile_bytes = wt_per_tile_words * 16
+        wt_per_tile_words = acc_depth * DCIM_CYCLE
+        wt_per_tile_bytes = wt_per_tile_words * BYTES_PER_WORD
         wei_ibuf_word_addr = 0
-        act_ibuf_word_addr = (wt_per_tile_bytes * min(tiles_needed, 8)) // 16
+        act_ibuf_word_addr = (wt_per_tile_bytes * min(tiles_needed, DCIM_NUM_TILES)) // BYTES_PER_WORD
 
         in_off = cur_obuf
         out_off = _other(cur_obuf)
 
-        num_passes = (tiles_needed + 7) // 8
+        num_passes = (tiles_needed + DCIM_NUM_TILES - 1) // DCIM_NUM_TILES
         if num_passes > 1:
             for pass_idx in range(num_passes):
-                tile_start = pass_idx * 8
-                tile_end = min(tile_start + 8, tiles_needed)
-                pass_cout = cout - tile_start * 16 if tile_end == tiles_needed else (tile_end - tile_start) * 16
+                tile_start = pass_idx * DCIM_NUM_TILES
+                tile_end = min(tile_start + DCIM_NUM_TILES, tiles_needed)
+                pass_cout = cout - tile_start * DCIM_INT8_OUT_CH_PER_TILE if tile_end == tiles_needed else (tile_end - tile_start) * DCIM_INT8_OUT_CH_PER_TILE
                 pass_layer = dict(layer)
                 pass_layer["out_channels"] = pass_cout
                 pass_layer["name"] = layer["name"]
-                pass_out_off = out_off + tile_start * 16 * oh * ow * 4
+                pass_out_off = out_off + tile_start * DCIM_INT8_OUT_CH_PER_TILE * oh * ow * 4
                 emitted, _, _, _, _ = emit_conv(
                     pass_layer, in_obuf_off=in_off, out_obuf_off=pass_out_off,
                     im2col_obuf_off=IM2COL, wb_off=0,

@@ -18,20 +18,30 @@ module dff#(
 
 	genvar k;
 	generate
-		for(k=0; k<DP; k=k+1) begin
-			always@(posedge clk or negedge rstn) begin
-				if(~rstn) begin
-					r_dff[k] <= 0;
-				end else if(clr) begin
-					r_dff[k] <= 0;
-				end else if(ena) begin
-					if(k==0) begin
+		for(k=0; k<DP; k=k+1) begin: gen_dff
+			if (k == 0) begin: gen_first
+				always@(posedge clk or negedge rstn) begin
+					if(~rstn) begin
+						r_dff[k] <= 0;
+					end else if(clr) begin
+						r_dff[k] <= 0;
+					end else if(ena) begin
 						r_dff[k] <= up_data;
 					end else begin
-						r_dff[k] <= r_dff[k-1];
+						r_dff[k] <= r_dff[k];
 					end
-				end else begin
-					r_dff[k] <= r_dff[k];
+				end
+			end else begin: gen_rest
+				always@(posedge clk or negedge rstn) begin
+					if(~rstn) begin
+						r_dff[k] <= 0;
+					end else if(clr) begin
+						r_dff[k] <= 0;
+					end else if(ena) begin
+						r_dff[k] <= r_dff[k-1];
+					end else begin
+						r_dff[k] <= r_dff[k];
+					end
 				end
 			end
 		end

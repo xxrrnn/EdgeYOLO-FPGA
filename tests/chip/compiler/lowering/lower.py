@@ -22,10 +22,24 @@ from ..ir_schema import (
 from .memory_plan import MemoryPlanner
 from .op_rules import conv_check, maxpool_check, resize_check
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+from chip_config import (  # noqa: E402
+    BYTES_PER_WORD,
+    DCIM_CH_IN,
+    DCIM_CYCLE,
+    DCIM_INT8_OUT_CH_PER_TILE,
+    DCIM_INT16_OUT_CH_PER_TILE,
+    DCIM_INT8_OUT_WORDS_PER_TILE,
+    DCIM_INT16_OUT_WORDS_PER_TILE,
+    DCIM_NUM_TILES,
+    require_consistent,
+)
+require_consistent()
 
-# How many 128-bit words an OBUF row needs at the given C and dtype.
+
 def _bytes_per_word():
-    return 16  # 128-bit
+    return BYTES_PER_WORD
 
 
 def _round_up(x: int, m: int) -> int:
@@ -38,9 +52,9 @@ def _tensor_bytes_nhwc(h: int, w: int, c: int, elem_bytes: int = 1) -> int:
 
 
 def _im2col_bytes(oh: int, ow: int, kh: int, kw: int, cin: int) -> int:
-    # acc_depth = ceil(kH*kW*Cin / 16); each row is acc_depth*16 bytes.
-    acc_depth = (kh * kw * cin + 15) // 16
-    return oh * ow * acc_depth * 16
+    # acc_depth = ceil(kH*kW*Cin / DCIM_CH_IN); each row is acc_depth*DCIM_CH_IN bytes.
+    acc_depth = (kh * kw * cin + DCIM_CH_IN - 1) // DCIM_CH_IN
+    return oh * ow * acc_depth * DCIM_CH_IN
 
 
 # Pack helper for OP_VPU_EXEC im2col addr_break field:
@@ -100,7 +114,7 @@ def emit_conv(
     oh = (in_h + layer["padding"][0] + layer["padding"][2] - kh) // stride_h + 1
     ow = (in_w + layer["padding"][1] + layer["padding"][3] - kw) // stride_w + 1
     # acc_depth depends on data width: INT8 packs 16 per IBUF word; INT16 packs 8.
-    elems_per_word = 8 if mode == "int16" else 16
+    elems_per_word = (DCIM_CH_IN // 2) if mode == "int16" else DCIM_CH_IN
     acc_depth = (kh * kw * cin + elems_per_word - 1) // elems_per_word
 
     # ---- WB sub-allocations (within wb_off) ----
@@ -161,7 +175,8 @@ def emit_conv(
 
     # 3) CDMA OBUF[im2col] → IBUF[activation region]
     ibuf_act_word_addr = act_ibuf_word_addr   # post-weights region
-    im2col_bytes = oh * ow * acc_depth * 16
+    im2col_row_bytes = DCIM_CH_IN * (2 if mode == "int16" else 1)
+    im2col_bytes = oh * ow * acc_depth * im2col_row_bytes
     ops.append({
         "kind": "cdma_copy",
         "src": ("obuf", im2col_obuf_off),
@@ -170,13 +185,12 @@ def emit_conv(
     })
     ops.append({"kind": "wait_cdma"})
 
-    # 4) DCIM_CFG + DCIM_EXEC.  Each tile produces CH_OUT_PER_TILE=16 ch_out.
-    #    For cout > 16 we'd need multiple DCIM passes; current 8 tiles cover
-    #    cout up to 128.  Reject larger here.
-    tiles_needed = (cout + 16 - 1) // 16
-    if tiles_needed > 8:
+    out_ch_per_tile = DCIM_INT16_OUT_CH_PER_TILE if mode == "int16" else DCIM_INT8_OUT_CH_PER_TILE
+    out_words_per_tile = DCIM_INT16_OUT_WORDS_PER_TILE if mode == "int16" else DCIM_INT8_OUT_WORDS_PER_TILE
+    tiles_needed = (cout + out_ch_per_tile - 1) // out_ch_per_tile
+    if tiles_needed > DCIM_NUM_TILES:
         raise UnsupportedOp(layer["name"], "Conv",
-            f"out_channels={cout} → {tiles_needed} tiles but hw has 8 tiles only.  "
+            f"out_channels={cout} → {tiles_needed} tiles but hw has {DCIM_NUM_TILES} tiles only.  "
             f"Options: (a) split into multiple DCIM passes, (b) widen DCIM_NUM_TILES")
 
     if mode == "int16":
@@ -191,15 +205,14 @@ def emit_conv(
     # entries × 1 word per entry  =>  acc_depth*16 words per tile.
     # For tiles beyond `tiles_needed`, we still set a base (decoder won't fire
     # them if num_tiles loop respects cout, but we keep simple here).
-    for t in range(8):
-        pairs.append([0x040 + t * 4, wei_ibuf_word_addr + t * acc_depth * 16])
+    for t in range(DCIM_NUM_TILES):
+        pairs.append([0x040 + t * 4, wei_ibuf_word_addr + t * acc_depth * DCIM_CYCLE])
     # Per-tile output base in OBUF (word address).  Outputs are INT32 per channel,
     # so each output element is 4 bytes; one output row of cout/16 tiles ⊂ a tile
     # has 16 ch_out per row.  Tile-major layout in OBUF starting at out_obuf_off.
     out_obuf_word_addr = out_obuf_off // 16
-    # Each tile writes oh*ow*16 INT32 = oh*ow*64 bytes = oh*ow*4 128-bit words
-    per_tile_words = oh * ow * 4
-    for t in range(8):
+    per_tile_words = oh * ow * out_words_per_tile
+    for t in range(DCIM_NUM_TILES):
         pairs.append([0x140 + t * 4, out_obuf_word_addr + t * per_tile_words])
 
     ops.append({"kind": "dcim_cfg", "layer": layer["name"], "pairs": pairs})
@@ -371,15 +384,15 @@ def lower(
 
         planner.reset_ibuf()
         # IBUF layout: weights first (per-tile), then activation region.
-        tiles_needed = (cout + 15) // 16
-        elems_per_word = 8 if mode == "int16" else 16
+        tiles_needed = (cout + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE
+        elems_per_word = (DCIM_CH_IN // 2) if mode == "int16" else DCIM_CH_IN
         acc_depth_words = (kh * kw * cin + elems_per_word - 1) // elems_per_word
-        weight_per_tile_words = acc_depth_words * 16
-        weight_per_tile_bytes = weight_per_tile_words * 16
-        wei_byte_off = planner.alloc_ibuf(weight_per_tile_bytes * 8)
+        weight_per_tile_words = acc_depth_words * DCIM_CYCLE
+        weight_per_tile_bytes = weight_per_tile_words * BYTES_PER_WORD
+        wei_byte_off = planner.alloc_ibuf(weight_per_tile_bytes * DCIM_NUM_TILES)
         wei_ibuf_word_addr = wei_byte_off // 16
         # Activation region: each IBUF word holds elems_per_word INT8/INT16 act values.
-        act_bytes = oh * ow * acc_depth_words * 16
+        act_bytes = oh * ow * acc_depth_words * DCIM_CH_IN * (2 if mode == "int16" else 1)
         try:
             act_byte_off = planner.alloc_ibuf(act_bytes)
         except OutOfBuffer:
@@ -390,7 +403,7 @@ def lower(
             # handle the potential failure.  Record a warning.
             act_byte_off = planner.ibuf.hi - act_bytes  # fictitious offset
             if act_byte_off < 0:
-                act_byte_off = wei_byte_off + weight_per_tile_bytes * 8
+                act_byte_off = wei_byte_off + weight_per_tile_bytes * DCIM_NUM_TILES
             unsupported.append(
                 f"{layer['name']}: Conv: IBUF activation overflow "
                 f"({act_bytes} bytes needed, {planner.ibuf.hi - planner.ibuf.cursor} free).  "
@@ -421,7 +434,7 @@ def lower(
             "input_c": cur_c, "output_c": cout,
             "kernel": [kh, kw], "stride": [sh, sw],
             "padding": [ph0, pw0, ph1, pw1],
-            "acc_depth": (kh * kw * cin + 15) // 16,
+            "acc_depth": (kh * kw * cin + elems_per_word - 1) // elems_per_word,
             "tiles_needed": tiles_needed,
         })
         wb_records.append({

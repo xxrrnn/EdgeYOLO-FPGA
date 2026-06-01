@@ -45,10 +45,13 @@ module maArray#(
 		.cnt_done()
 	);
 
-	// Declare pipeline control signals before use
-	wire valid_stage1, ready_stage1;
-	wire valid_stage2, ready_stage2;
-	wire valid_stage3, ready_stage3;
+	localparam ADDER_PIPE_DEPTH = $clog2(CH_IN);
+	localparam MA_PIPE_DEPTH = 4 + ADDER_PIPE_DEPTH;
+
+	wire [MA_PIPE_DEPTH:0] valid_pipe;
+	wire [MA_PIPE_DEPTH:0] ready_pipe;
+	assign valid_pipe[0] = up_valid;
+	assign up_ready = ready_pipe[0];
 
 	genvar col;
 	generate
@@ -68,35 +71,20 @@ module maArray#(
 		end
 	endgenerate
 
-	pipe_stage u_pipe_stage_ctrl_1(
-		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
-		.up_valid(up_valid), .up_ready(up_ready),
-		.dn_valid(valid_stage1), .dn_ready(ready_stage1)
-	);
+	genvar ps;
+	generate
+		for (ps = 0; ps < MA_PIPE_DEPTH; ps = ps + 1) begin: gen_ma_valid_pipe
+			pipe_stage u_pipe_stage_ctrl(
+				.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
+				.up_valid(valid_pipe[ps]), .up_ready(ready_pipe[ps]),
+				.dn_valid(valid_pipe[ps+1]), .dn_ready(ready_pipe[ps+1])
+			);
+		end
+	endgenerate
+	assign dn_valid = valid_pipe[MA_PIPE_DEPTH];
+	assign ready_pipe[MA_PIPE_DEPTH] = dn_ready;
 
-	pipe_stage u_pipe_stage_ctrl_2(
-		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
-		.up_valid(valid_stage1), .up_ready(ready_stage1),
-		.dn_valid(valid_stage2), .dn_ready(ready_stage2)
-	);
-
-	pipe_stage u_pipe_stage_ctrl_3(
-		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
-		.up_valid(valid_stage2), .up_ready(ready_stage2),
-		.dn_valid(valid_stage3), .dn_ready(ready_stage3)
-	);
-
-	pipe_stage u_pipe_stage_ctrl_4(
-		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
-		.up_valid(valid_stage3), .up_ready(ready_stage3),
-		.dn_valid(dn_valid), .dn_ready(dn_ready)
-	);
-
-	// Latency: input_reg(1) + product_pipe(1) + result(1) + u_dff_result(1) = 4
-	dff#(.WD(WD2*CH_OUT), .DP(1)) u_dff_result(
-		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena & valid_stage3 & ready_stage3),
-		.up_data(w_data_ma), .dn_data(dn_data)
-	);
+	assign dn_data = w_data_ma;
 endmodule
 
 
@@ -230,14 +218,16 @@ module maSubcolumn#(
 		end
 	end
 
-	// Sum (Adder Tree with CARRY8 chains)
-	adderTree#(.WD_IN(2*WD1), .CH_IN(CH_IN)) u_adderTree(
-		.d(product_pipe),  // Use pipelined product instead of raw product
-		.sum(sum_out),
-		.s(s_pipe)         // Use pipelined sign
+	adderTreePipe#(.WD_IN(2*WD1), .CH_IN(CH_IN)) u_adderTree(
+		.clk(clk),
+		.rstn(rstn),
+		.clr(clr),
+		.ena(ena),
+		.d(product_pipe),
+		.s(s_pipe),
+		.sum(sum_out)
 	);
 
-	// Output register (to match the added pipeline stage)
 	always @(posedge clk or negedge rstn) begin
 		if (!rstn)
 			result <= {WD2{1'b0}};

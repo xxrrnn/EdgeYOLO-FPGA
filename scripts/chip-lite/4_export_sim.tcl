@@ -37,8 +37,8 @@ if {[llength $dcimCell] == 0} {
 }
 set_property -dict [list \
     CONFIG.NUM_GROUPS {1} \
-    CONFIG.TILES_PER_GROUP {64} \
-    CONFIG.NUM_TILES {64} \
+    CONFIG.TILES_PER_GROUP {4} \
+    CONFIG.NUM_TILES {4} \
 ] $dcimCell
 save_bd_design
 

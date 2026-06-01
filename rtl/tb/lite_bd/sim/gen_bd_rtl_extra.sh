@@ -33,7 +33,6 @@ $REPO_ROOT/rtl/DCIM_Macro/obuf.v
 $REPO_ROOT/rtl/chip/DCIM_Tile.sv
 $REPO_ROOT/rtl/chip/ibuf_rd_arbiter.sv
 $REPO_ROOT/rtl/chip/obuf_wr_arbiter.sv
-$REPO_ROOT/rtl/chip/DCIM_Array_Group.sv
 $REPO_ROOT/rtl/chip/DCIM_Array.sv
 $REPO_ROOT/rtl/chip/DCIM_Array_bd.v
 $REPO_ROOT/rtl/vpu/Global_VPU.v

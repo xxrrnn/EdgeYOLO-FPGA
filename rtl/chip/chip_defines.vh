@@ -111,15 +111,15 @@
 
 // ── 阵列拓扑 ──────────────────────────────────────────────────────────────
 `define DCIM_NUM_GROUPS         1       // 单组共享 IBUF/OBUF，避免复制大容量 URAM
-`define DCIM_TILES_PER_GROUP    4      // 单组内 64 Tile，等效 64 个 DCIM
-`define DCIM_NUM_TILES          4      // 总 Tile 数 = NUM_GROUPS × TILES_PER_GROUP
+`define DCIM_TILES_PER_GROUP    4       // 单组内 4 Tile，64×64 配置下等效 2.048 TOPS@250MHz INT8
+`define DCIM_NUM_TILES          4       // 总 Tile 数 = NUM_GROUPS × TILES_PER_GROUP
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
-`define DCIM_CH_IN              64      // 16      // 每 Tile 输入通道数
-`define DCIM_CH_OUT             64      // 16      // 每 Tile 输出通道数
-`define DCIM_SRAM_DP            128     // DCIM SRAM 深度（固定 128 entries；acc_depth>16 时由 DCIM_Tile 分块加载权重）
-`define DCIM_CYCLE              8       // 权重 SRAM 加载周期数
+`define DCIM_CH_IN              64      // 每 Tile 每 acc step 输入通道数
+`define DCIM_CH_OUT             64      // 每 Tile physical output lane 数；INT8 有效输出 CH_OUT/2
+`define DCIM_SRAM_DP            128     // DCIM SRAM 深度（固定 128 entries；acc_depth>1 时由 DCIM_Tile 分块加载权重）
+`define DCIM_CYCLE              128     // 64×64×4bit / 128bit = 128 个 128-bit weight word/acc step
 `define DCIM_ACC_MAX            80      // 最大累加深度（num_rows / acc_depth 上界）
 
 // ── Buffer 参数（lite: 拆分 IBUF/OBUF 地址宽度）──────────────────────────
@@ -177,9 +177,9 @@
 `define CHIP_AXI_LITE_DATA_WIDTH  32
 
 // 计算派生宏（需要非 `define 场景时用 localparam 代替）
-`define CHIP_WD2     (2 * `CHIP_WD1 + 4)           // 2*4 + $clog2(16)=4 = 12
-`define CHIP_WD3     (`CHIP_WD2 + 7)               // 12 + $clog2(80)≈7 = 19
-`define CHIP_RES_WIDTH  (`CHIP_CH_OUT * `CHIP_WD3) // 16 * 19 = 304
+`define CHIP_WD2     (2 * `CHIP_WD1 + $clog2(`CHIP_CH_IN))
+`define CHIP_WD3     (`CHIP_WD2 + $clog2(`CHIP_ACC_MAX))
+`define CHIP_RES_WIDTH  (`CHIP_CH_OUT * `CHIP_WD3)
 
 // 旧寄存器地址别名（向后兼容 chip_defs.vh）
 `define CHIP_REG_CTRL       `DCIM_REG_CTRL

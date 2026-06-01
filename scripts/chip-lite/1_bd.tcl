@@ -36,7 +36,6 @@ create_bd_design -dir $bdDir $bdName
 set chipRtlFiles [list \
     [file normalize "$srcDir/chip/DCIM_Array.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
-    [file normalize "$srcDir/chip/DCIM_Array_Group.sv"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
     [file normalize "$srcDir/chip/ibuf_rd_arbiter.sv"] \
     [file normalize "$srcDir/chip/obuf_wr_arbiter.sv"] \
@@ -123,8 +122,8 @@ set_property verilog_define [list \
 create_bd_cell -type module -reference DCIM_Array_bd dcim_array_0
 set_property -dict [list \
     CONFIG.NUM_GROUPS {1} \
-    CONFIG.TILES_PER_GROUP {64} \
-    CONFIG.NUM_TILES {64} \
+    CONFIG.TILES_PER_GROUP {4} \
+    CONFIG.NUM_TILES {4} \
 ] [get_bd_cells dcim_array_0]
 # 禁用 dcim_array_0 的 OOC 综合（同 vpu_0，避免 project 重建后 DCP 关联失效）
 catch {set_property generate_synth_checkpoint false [get_bd_cells dcim_array_0]}

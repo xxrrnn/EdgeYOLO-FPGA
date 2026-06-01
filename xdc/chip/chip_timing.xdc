@@ -152,9 +152,9 @@ if {[llength $_dcim_cfg_regs]} {
 set _mcp_cfg_from [get_cells -quiet -hierarchical \
   -filter {NAME =~ *dcim_array_0/inst/cfg_*_reg*}]
 set _mcp_fsm_ce_to [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/gen_groups*.u_group/gen_tiles*.u_tile/FSM_onehot_state_reg*/CE ||
-           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_groups*.u_group/gen_tiles*.u_tile/FSM_onehot_state_reg*/D  ||
-           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_groups*.u_group/gen_tiles*.u_tile/*state_reg*/CE}]
+  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/FSM_onehot_state_reg*/CE ||
+           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/FSM_onehot_state_reg*/D  ||
+           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/*state_reg*/CE}]
 if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
   set_multicycle_path 2 -setup -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
   set_multicycle_path 1 -hold  -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
@@ -211,14 +211,14 @@ if {[llength $_accum_cells] && [llength $_post_cells]} {
 }
 
 # Arbiter MCP
-set _mcp_ib_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_ibuf_arb/tile_rd_valid_q*}]
-set _mcp_ib_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_ibuf_arb/grant_idx*}]
+set _mcp_ib_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_ibuf_arb/tile_rd_valid_q*}]
+set _mcp_ib_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_ibuf_arb/grant_idx*}]
 if {[llength $_mcp_ib_from] && [llength $_mcp_ib_to]} {
   set_multicycle_path -setup 2 -from $_mcp_ib_from -to $_mcp_ib_to
   set_multicycle_path -hold 1 -from $_mcp_ib_from -to $_mcp_ib_to
 }
-set _mcp_ob_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/tile_wr_valid_q*}]
-set _mcp_ob_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/grant_idx*}]
+set _mcp_ob_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/tile_wr_valid_q*}]
+set _mcp_ob_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/grant_idx*}]
 if {[llength $_mcp_ob_from] && [llength $_mcp_ob_to]} {
   set_multicycle_path -setup 2 -from $_mcp_ob_from -to $_mcp_ob_to
   set_multicycle_path -hold 1 -from $_mcp_ob_from -to $_mcp_ob_to
@@ -226,8 +226,8 @@ if {[llength $_mcp_ob_from] && [llength $_mcp_ob_to]} {
 
 # OBUF 仲裁器 obuf_addr 写入路径 MCP（worst path: tile_wr_valid_q → obuf_addr）
 # 注意：Vivado 可能生成 _replica 后缀，用通配符匹配
-set _mcp_ob_addr_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/tile_wr_valid_q*C}]
-set _mcp_ob_addr_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/obuf_addr_reg*/D}]
+set _mcp_ob_addr_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/tile_wr_valid_q*C}]
+set _mcp_ob_addr_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/obuf_addr_reg*/D}]
 if {[llength $_mcp_ob_addr_from] && [llength $_mcp_ob_addr_to]} {
   set_multicycle_path -setup 2 -from $_mcp_ob_addr_from -to $_mcp_ob_addr_to
   set_multicycle_path -hold 1  -from $_mcp_ob_addr_from -to $_mcp_ob_addr_to
@@ -235,15 +235,15 @@ if {[llength $_mcp_ob_addr_from] && [llength $_mcp_ob_addr_to]} {
 }
 
 # OBUF arbiter grant_valid / rr_ptr 路径（同样需要覆盖 _replica）
-set _mcp_ob_grant_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/tile_wr_valid_q*C}]
-set _mcp_ob_grant_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/rr_ptr_reg*/D}]
+set _mcp_ob_grant_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/tile_wr_valid_q*C}]
+set _mcp_ob_grant_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/rr_ptr_reg*/D}]
 if {[llength $_mcp_ob_grant_from] && [llength $_mcp_ob_grant_to]} {
   set_multicycle_path -setup 2 -from $_mcp_ob_grant_from -to $_mcp_ob_grant_to
   set_multicycle_path -hold 1  -from $_mcp_ob_grant_from -to $_mcp_ob_grant_to
 }
 
 # OBUF arbiter obuf_din/obuf_we 路径
-set _mcp_ob_data_to [get_pins -quiet -hierarchical -filter {NAME =~ *u_group/u_obuf_arb/obuf_din_reg*/D}]
+set _mcp_ob_data_to [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/obuf_din_reg*/D}]
 if {[llength $_mcp_ob_addr_from] && [llength $_mcp_ob_data_to]} {
   set_multicycle_path -setup 2 -from $_mcp_ob_addr_from -to $_mcp_ob_data_to
   set_multicycle_path -hold 1  -from $_mcp_ob_addr_from -to $_mcp_ob_data_to
@@ -269,7 +269,7 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 # pblock_group_0: DCIM 计算核（Tile、IBUF、仲裁器等）锁在 SLR0
 # 注意：u_obuf 不包含在此 pblock 内，它有自己的 per-bank pblock（见下方）
 create_pblock pblock_group_0
-add_cells_to_pblock [get_pblocks pblock_group_0] [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_top/u_dcim_array/gen_groups\[0\].u_group}]
+add_cells_to_pblock [get_pblocks pblock_group_0] [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array}]
 resize_pblock [get_pblocks pblock_group_0] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y4}
 
 # AXI 互连 + VPU + INST_Decoder + CDMA 放在 SLR0（与 Group 0 同层）
@@ -286,7 +286,7 @@ set_property IS_SOFT FALSE [get_pblocks pblock_axi_vpu]
 # ============================================================================
 # SLR 分配 (lite: DCIM 核逻辑在 SLR0，OBUF 各 bank 分散到各 SLR)
 # ============================================================================
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ *gen_groups\[0\].u_group*}]
+set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ *u_dcim_array*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_decoder/*}]
 set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/cdma_ctrl/*}]

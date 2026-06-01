@@ -29,10 +29,9 @@
 ../../DCIM_Macro/ibuf.v
 ../../DCIM_Macro/obuf.v
 
-# DCIM_Tile 及 Array
+# DCIM Tile-Array
 ../DCIM_Tile.sv
 ../ibuf_rd_arbiter.sv
 ../obuf_wr_arbiter.sv
-../DCIM_Array_Group.sv
 ../DCIM_Array.sv
 ../DCIM_Array_bd.v

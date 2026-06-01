@@ -125,9 +125,9 @@ module im2col_unit #(
     reg signed [15:0] oh, ow;
     reg signed [7:0]  kh, kw;
     reg signed [15:0] ih, iw;       // 输入坐标（可能为负，因 pad）
-    reg [15:0]        c_chunk;       // c-块索引（每块 16 channel = 128-bit）
-    reg [15:0]        c_chunk_max;   // = ceil(CH_IN / 16)
-    reg [31:0]        c_chunk_byte_offset_r;  // c_chunk * 16，提前寄存以切断写数据路径
+    reg [15:0]        c_chunk;       // c-块索引（每块 16 byte = 128-bit）
+    reg [15:0]        c_chunk_max;   // = ceil(CH_IN * ELEM_BYTES / 16)
+    reg [31:0]        c_chunk_byte_offset_r;  // c_chunk * 16 byte，提前寄存以切断写数据路径
     reg [4:0]         write_chunk_nbyte_r;
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
@@ -151,8 +151,9 @@ module im2col_unit #(
     wire [31:0] c_chunk_byte_offset = c_chunk_byte_offset_r;
 
     // 预算常量（S_INIT 算一级，S_PRECOMPUTE 算二级）
-    reg [31:0] row_stride_r;         // = ceil(kH*kW*CH_IN/16)*16，与 DCIM acc_depth 行对齐
-    reg [31:0] in_col_stride_r;      // feature map 像素间距：ceil(CH_IN/16)*16（16B channel-group 对齐）
+    reg [31:0] elem_total_bytes_r;   // = CH_IN * ELEM_BYTES
+    reg [31:0] row_stride_r;         // = ceil(kH*kW*CH_IN/DCIM_CH_IN)*DCIM_CH_IN*ELEM_BYTES
+    reg [31:0] in_col_stride_r;      // feature map 像素间距：ceil(CH_IN*ELEM_BYTES/16)*16
     reg [31:0] w_times_c_r;          // = W * CH_IN（一级，S_INIT）
     reg [31:0] stride_h_wc_r;        // = strideH * W * CH_IN（二级，S_PRECOMPUTE）
     reg [31:0] stride_w_c_r;         // = strideW * CH_IN（一级，S_INIT）
@@ -269,6 +270,7 @@ module im2col_unit #(
             kH_r <= 0; kW_r <= 0;
             strideH_r <= 0; strideW_r <= 0;
             padH_r <= 0; padW_r <= 0;
+            elem_total_bytes_r <= 0;
             row_stride_r <= 0; in_col_stride_r <= 0; w_times_c_r <= 0;
             stride_h_wc_r <= 0; stride_w_c_r <= 0; kw_times_c_r <= 0;
             in_base_r <= 0;
@@ -301,8 +303,8 @@ module im2col_unit #(
                         padH_r     <= {1'b0, padH_w};
                         padW_r     <= {1'b0, padW_w};
                         elem_bytes_r <= (im2col_elem_bytes == 2'd2) ? 2'd2 : 2'd1;
-                        // c_chunk_max = ceil(CH_IN / 16)（INT8 或 INT16 均以 16 字节为一 chunk）
-                        c_chunk_max <= (im2col_src_c + 15) >> 4;
+                        elem_total_bytes_r <= im2col_src_c * ((im2col_elem_bytes == 2'd2) ? 2 : 1);
+                        c_chunk_max <= ((im2col_src_c * ((im2col_elem_bytes == 2'd2) ? 2 : 1)) + 15) >> 4;
                         im2col_unit_ready <= 1'b0;
                         state      <= S_INIT;
                     end
@@ -311,14 +313,14 @@ module im2col_unit #(
                 S_INIT: begin
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
                     c_chunk_byte_offset_r <= '0;
-                    write_chunk_nbyte_r <= (src_c_r > C_CHUNK_BYTES) ? 5'd16 : src_c_r[4:0];
+                    write_chunk_nbyte_r <= (elem_total_bytes_r > C_CHUNK_BYTES) ? 5'd16 : elem_total_bytes_r[4:0];
                     // 一级乘法：像素间距按 ELEM_BYTES 缩放，输出行步长按实际字节计
                     // in_col_stride  = ceil(CH_IN * ELEM_BYTES / 16) * 16
                     // kw_times_c     = kW * CH_IN * ELEM_BYTES  (输出自然字节间隔)
-                    in_col_stride_r  <= ((src_c_r * elem_bytes_w + 15) >> 4) << 4;
-                    w_times_c_r      <= src_w_r * (((src_c_r * elem_bytes_w + 15) >> 4) << 4);
-                    stride_w_c_r     <= strideW_r * (((src_c_r * elem_bytes_w + 15) >> 4) << 4);
-                    kw_times_c_r     <= kW_r * src_c_r * elem_bytes_w;
+                    in_col_stride_r  <= ((elem_total_bytes_r + 15) >> 4) << 4;
+                    w_times_c_r      <= src_w_r * (((elem_total_bytes_r + 15) >> 4) << 4);
+                    stride_w_c_r     <= strideW_r * (((elem_total_bytes_r + 15) >> 4) << 4);
+                    kw_times_c_r     <= kW_r * elem_total_bytes_r;
                     // 增量累加器初始为 0
                     in_oh_acc_r <= 0; in_kh_acc_r <= 0;
                     in_ow_acc_r <= 0; in_kw_acc_r <= 0;
@@ -329,8 +331,13 @@ module im2col_unit #(
                 S_PRECOMPUTE: begin
                     // 二级乘法：使用 S_INIT 已寄存的中间结果（< 2ns 每路）
                     stride_h_wc_r <= strideH_r * w_times_c_r;   // strideH * W * ceil(CH_IN/16)*16
-                    // 每行按 acc_depth*16 字节对齐（与 golden_module_tb / DCIM 一致）
-                    row_stride_r  <= ((kH_r * kw_times_c_r) + 15) & ~32'd15;
+                    // 每行按 DCIM acc step 对齐：ceil(K_bytes / DCIM_STEP_BYTES) * DCIM_STEP_BYTES
+                    //   DCIM_STEP_BYTES = DCIM_CH_IN * ELEM_BYTES = 64(INT8) or 128(INT16)
+                    //   使用条件移位消除运行时除法，避免综合时序违例。
+                    //   shift = $clog2(DCIM_CH_IN) + (ELEM_BYTES-1) = 6 (INT8) or 7 (INT16)
+                    row_stride_r  <= (elem_bytes_r == 2'd2) ?
+                        (((kH_r * kw_times_c_r) + 7'd127) >> 7) << 7 :
+                        (((kH_r * kw_times_c_r) +  7'd63) >> 6) << 6;
                     // in_base = src_addr - padH*(W*CH_IN) - padW*CH_IN
                     in_base_r     <= $signed(src_addr_r)
                                    - $signed(padH_r) * $signed(w_times_c_r)
@@ -449,15 +456,15 @@ module im2col_unit #(
                     if (c_chunk + 1 < c_chunk_max) begin
                         c_chunk <= c_chunk + 1;
                         c_chunk_byte_offset_r <= c_chunk_byte_offset_r + C_CHUNK_BYTES;
-                        if ((src_c_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES)) > C_CHUNK_BYTES)
+                        if ((elem_total_bytes_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES)) > C_CHUNK_BYTES)
                             write_chunk_nbyte_r <= 5'd16;
                         else
-                            write_chunk_nbyte_r <= src_c_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES);
+                            write_chunk_nbyte_r <= elem_total_bytes_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES);
                         state <= S_READ_REQ;
                     end else begin
                         c_chunk <= 0;
                         c_chunk_byte_offset_r <= '0;
-                        write_chunk_nbyte_r <= (src_c_r > C_CHUNK_BYTES) ? 5'd16 : src_c_r[4:0];
+                        write_chunk_nbyte_r <= (elem_total_bytes_r > C_CHUNK_BYTES) ? 5'd16 : elem_total_bytes_r[4:0];
                         state <= S_NEXT;
                     end
                 end
@@ -467,7 +474,7 @@ module im2col_unit #(
                     if (kw + 1 < $signed({1'b0, kW_r})) begin
                         kw <= kw + 1;
                         in_kw_acc_r      <= in_kw_acc_r + in_col_stride_r;
-                        out_col_offset_r <= out_col_offset_r + src_c_r * elem_bytes_w;
+                        out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
                         state <= S_READ_REQ;
                         end else begin
                             kw <= 0;
@@ -475,8 +482,8 @@ module im2col_unit #(
                             if (kh + 1 < $signed({1'b0, kH_r})) begin
                                 kh <= kh + 1;
                                 in_kh_acc_r      <= in_kh_acc_r + w_times_c_r;
-                                // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 src_c_r * elem
-                                out_col_offset_r <= out_col_offset_r + src_c_r * elem_bytes_w;
+                                // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 elem_total_bytes
+                                out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
                                 state <= S_READ_REQ;
                             end else begin
                                 kh <= 0;

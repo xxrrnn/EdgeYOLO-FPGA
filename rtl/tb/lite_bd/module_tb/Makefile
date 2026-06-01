@@ -68,9 +68,8 @@ WATCH_INTERVAL ?= 5
 #   axi       → 通过 host AXI BFM 预加载，用于抽查 SmartConnect/地址映射，但大 case 很慢
 PRELOAD_MODE ?= backdoor
 # QUANT: int8 | int16 | all
-#   int8  → 只跑 INT8 版本（默认）
-#   int16 → 只跑 INT16 版本
-#   all   → sim-batch 自动对每个变体跑 int8 + int16 两遍（_all suite 推荐用此）
+#   对 QA/DQA/conv_pipeline/mini_network：控制 int8/int16 或 all 展开。
+#   对 dcim_matmul：不使用 QUANT 覆盖精度，DCIM 模式由 case 名/spec 决定，避免命名混淆。
 QUANT ?= int8
 # DIM: 覆盖测试用例的默认维度，格式：C=N  或  H=N,W=N,C=N  或  HW=HxW,C=N
 #   例：make sim MODULE_CASE=qa MODULE_VARIANT=qa_c16_signed DIM="C=64,HW=6x6"
@@ -83,7 +82,7 @@ EXPORT_VCS_DIR := $(REPO_ROOT)/sim/lite_bd_export/vcs/lite/vcs
 SIM_DIR       := $(MODULE_TB_DIR)/sim
 
 # 共享编译目录 + 每个运行用例独立 RUN_DIR。VCS simv 只需编译/elaborate 一次。
-_QUANT_SLUG := $(if $(filter all,$(QUANT)),allq,q$(QUANT))
+_QUANT_SLUG := $(if $(filter dcim_matmul,$(MODULE_CASE)),$(if $(findstring int16,$(MODULE_VARIANT)),dcim_int16,dcim_int8),$(if $(filter all,$(QUANT)),allq,q$(QUANT)))
 _DIM_SLUG   := $(if $(DIM),_$(subst $(comma),_,$(subst =,,$(DIM))),)
 comma       := ,
 _VARIANT_SLUG := $(subst /,_,$(MODULE_CASE))_$(subst /,_,$(MODULE_VARIANT))_$(_QUANT_SLUG)$(_DIM_SLUG)
@@ -98,9 +97,11 @@ SIMV          := $(COMPILE_DIR)/simv
 SUITE_DIR     := $(SIM_DIR)/suite_$(MODULE_CASE)
 
 # 预置批量列表（make list-suites 查看全部）
-# ── DCIM 矩阵乘（QUANT=int8|int16|all 控制精度）────────────────────────────
+# ── DCIM 矩阵乘：精度由 case 名/spec 决定，不使用 QUANT 展开 ───────────────
 BATCH_SUITE_dcim_smoke      := dcim_tiny_1x1 conv3_s2_c32_to64
-BATCH_SUITE_dcim_all        := dcim_tiny_1x1 conv6_s2_c3_to16 conv3_s2_c32_to64 conv1_c64_to32 conv3_c128_to128
+BATCH_SUITE_dcim_int8       := dcim_tiny_1x1 conv6_s2_c3_to16 conv3_s2_c32_to64 conv1_c64_to32 conv3_c128_to128
+BATCH_SUITE_dcim_int16      := int16_tiny_1x1 int16_conv3_c32_c64 int16_conv1_c128
+BATCH_SUITE_dcim_all        := $(BATCH_SUITE_dcim_int8) $(BATCH_SUITE_dcim_int16)
 BATCH_SUITE_dcim_extreme    := extreme_int8_1x1_c512_to512 extreme_int8_3x3_c128_to512 extreme_int8_6x6_c3_to64 extreme_int16_3x3_c128
 BATCH_SUITE_dcim_network    := dcim_model_3_conv dcim_model_5_conv dcim_model_7_conv
 # ── VPU 量化（QUANT=int8|int16|all 控制 fp32→int8 或 fp32→int16）────────────
@@ -135,8 +136,8 @@ compile: check-export
 # sim-all：全量功能验证（顺序跑所有 suite）
 # 覆盖：DCIM INT8/INT16 + VPU QA/DQA + im2col/MP/US/ADD/concat + 端到端/多层链路
 sim-all: check-export
-	@echo "=== [1/10] DCIM matmul INT8+INT16 (QUANT=all) ==="
-	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== [1/10] DCIM matmul INT8+INT16（case-defined mode） ==="
+	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "=== [2/10] QA  fp32→int8 + fp32→int16 (QUANT=all) ==="
 	$(MAKE) sim-batch MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "=== [3/10] DQA int32_accum + accum16→fp32 (QUANT=all) ==="
@@ -155,8 +156,8 @@ sim-all: check-export
 	$(MAKE) sim-batch MODULE_CASE=mini_network BATCH_SUITE=mini_network_all QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "=== [9/10] large_channel_pressure（大通道压力）==="
 	$(MAKE) sim-batch MODULE_CASE=large_channel_pressure BATCH_SUITE=large_channel_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== [10/10] DCIM extreme（64 Tile / 高 acc_depth）==="
-	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== [10/10] DCIM extreme（4 Tile × 64×64 / 高 acc_depth）==="
+	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo ""
 	@echo "=== sim-all DONE — 运行 make sim-results 查看汇总 ==="
 
@@ -219,10 +220,20 @@ rebuild-suite: check-export
 	@variants="$(MODULE_VARIANTS)"; \
 	[ -n "$$variants" ] || variants="$(BATCH_SUITE_$(BATCH_SUITE))"; \
 	[ -n "$$variants" ] || { echo "用法: make rebuild-suite BATCH_SUITE=dcim_int8"; echo "      make list-suites"; exit 1; }; \
-	ACTION=rebuild-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
-		MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-		MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
-		FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
+	if [ "$(LOG)" = "1" ]; then \
+		log="$(SUITE_DIR)/rebuild_suite.log"; \
+		echo "    log → $$log"; \
+		ACTION=rebuild-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
+			MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
+			MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
+			FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) \
+			bash $(RUN_SCRIPT) 2>&1 | tee "$$log"; \
+	else \
+		ACTION=rebuild-suite COMPILE_DIR=$(COMPILE_DIR) SUITE_DIR=$(SUITE_DIR) MODULE_CASE=$(MODULE_CASE) \
+			MODULE_VARIANTS="$$variants" MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
+			MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
+			FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT); \
+	fi
 
 list-cases:
 	python3 $(GOLDEN_PY) --module $(MODULE_CASE) --case list
@@ -230,10 +241,12 @@ list-cases:
 list-suites:
 	@echo "make sim-batch MODULE_CASE=<模块> BATCH_SUITE=<名称> [QUANT=int8|int16|all]"
 	@echo ""
-	@echo "  [DCIM 矩阵乘]  MODULE_CASE=dcim_matmul"
+	@echo "  [DCIM 矩阵乘]  MODULE_CASE=dcim_matmul（精度由 case 名决定，不使用 QUANT 展开）"
 	@echo "    dcim_smoke    2 个快速冒烟"
-	@echo "    dcim_all      5 个网络层（×QUANT=all 自动跑 int8+int16，共 10 次）"
-	@echo "    dcim_extreme  4 个极限规模（含 INT16 大 acc_depth）"
+	@echo "    dcim_int8     5 个 INT8 网络层"
+	@echo "    dcim_int16    3 个 INT16 smoke"
+	@echo "    dcim_all      dcim_int8 + dcim_int16"
+	@echo "    dcim_extreme  4 个极限规模（3 INT8 + 1 INT16）"
 	@echo "    dcim_network  3 个网络真实尺寸（慢）"
 	@echo ""
 	@echo "  [VPU 量化]     MODULE_CASE=qa"
@@ -289,32 +302,38 @@ _sim_batch_run:
 	if [ -z "$$variants" ]; then \
 		echo "用法: make sim-batch BATCH_SUITE=dcim_all [QUANT=int8|int16|all]"; \
 		echo "      make list-suites"; exit 1; fi; \
-	quant_list="$(QUANT)"; \
-	[ "$$quant_list" = "all" ] && quant_list="int8 int16"; \
+	if [ "$(MODULE_CASE)" = "dcim_matmul" ]; then quant_list="case"; else quant_list="$(QUANT)"; [ "$$quant_list" = "all" ] && quant_list="int8 int16"; fi; \
 	log="$(BUILD_DIR)/sim_batch.log"; mkdir -p "$(BUILD_DIR)"; \
 	passed=0; failed=0; total=0; \
 	for q in $$quant_list; do \
 	for v in $$variants; do \
 		total=$$((total+1)); \
-		echo ""; echo ">>> [$$total] $(MODULE_CASE)/$$v  quant=$$q  $(shell date '+%H:%M:%S')"; \
-		bd="$(SIM_DIR)/run_$(MODULE_CASE)_$${v}_q$${q}"; \
+		if [ "$(MODULE_CASE)" = "dcim_matmul" ]; then \
+			case "$$v" in *int16*) mode_slug=dcim_int16 ;; *) mode_slug=dcim_int8 ;; esac; \
+			echo ""; echo ">>> [$$total] $(MODULE_CASE)/$$v  mode=$$mode_slug  $(shell date '+%H:%M:%S')"; \
+			bd="$(SIM_DIR)/run_$(MODULE_CASE)_$${v}_$${mode_slug}"; module_quant=int8; \
+		else \
+			mode_slug=q$$q; \
+			echo ""; echo ">>> [$$total] $(MODULE_CASE)/$$v  quant=$$q  $(shell date '+%H:%M:%S')"; \
+			bd="$(SIM_DIR)/run_$(MODULE_CASE)_$${v}_$${mode_slug}"; module_quant=$$q; \
+		fi; \
 		if [ "$(LOG)" = "1" ]; then \
 			: > "$$log"; \
 			echo "    log → $$log"; \
 			( ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR="$$bd" \
 				MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$$v MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-				MODULE_QUANT=$$q MODULE_DIM="$(DIM)" \
+				MODULE_QUANT=$$module_quant MODULE_DIM="$(DIM)" \
 				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT) 2>&1 | tee -a "$$log" ); rc=$${PIPESTATUS[0]}; \
 		else \
 			( ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR="$$bd" \
 				MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$$v MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) \
-				MODULE_QUANT=$$q MODULE_DIM="$(DIM)" \
+				MODULE_QUANT=$$module_quant MODULE_DIM="$(DIM)" \
 				FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT) 2>&1 ); rc=$$?; \
 		fi; \
 		if [ $$rc -eq 0 ]; then \
-			passed=$$((passed+1)); echo "    PASS ✓  ($(MODULE_CASE)/$$v quant=$$q)"; \
+			passed=$$((passed+1)); echo "    PASS ✓  ($(MODULE_CASE)/$$v $$mode_slug)"; \
 		else \
-			failed=$$((failed+1)); echo "    FAIL ✗  ($(MODULE_CASE)/$$v quant=$$q)"; \
+			failed=$$((failed+1)); echo "    FAIL ✗  ($(MODULE_CASE)/$$v $$mode_slug)"; \
 			[ "$(STOP_ON_FAIL)" = "1" ] && break 2; fi; \
 	done; done; \
 	echo ""; echo "sim-batch 完成: PASS=$$passed FAIL=$$failed TOTAL=$$total"; \

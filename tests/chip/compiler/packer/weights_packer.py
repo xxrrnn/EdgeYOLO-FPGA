@@ -22,26 +22,35 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
+import os
+import sys
 import numpy as np
 
-CH_IN_PER_TILE = 16
-CH_OUT_PER_TILE = 16
-TILES = 8
-BYTES_PER_WORD = 16
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+from chip_config import (  # noqa: E402
+    BYTES_PER_WORD,
+    DCIM_CH_IN,
+    DCIM_CH_OUT,
+    DCIM_INT8_OUT_CH_PER_TILE,
+    DCIM_NUM_TILES,
+    require_consistent,
+)
+require_consistent()
+
+CH_IN_PER_TILE = DCIM_CH_IN
+CH_OUT_PER_TILE = DCIM_CH_OUT
+INT8_OUT_CH_PER_TILE = DCIM_INT8_OUT_CH_PER_TILE
+TILES = DCIM_NUM_TILES
 
 
-def _pack_nibble_entry(weights_16: np.ndarray) -> bytes:
-    """Pack 16 INT8 weights into one 128-bit entry (little-endian byte order)."""
-    assert weights_16.shape == (CH_IN_PER_TILE,), weights_16.shape
-    low = 0
-    high = 0
-    for ch in range(CH_IN_PER_TILE):
-        w = int(weights_16[ch]) & 0xFF
-        low |= (w & 0xF) << (ch * 4)
-        high |= ((w >> 4) & 0xF) << (ch * 4)
-    entry = (high << 64) | low
-    # Convert to 16 little-endian bytes.
-    return entry.to_bytes(16, "little")
+def _pack_128b_nibbles(nibbles: np.ndarray) -> bytes:
+    """Pack exactly 32 4-bit values into one 128-bit entry."""
+    assert nibbles.shape == (BYTES_PER_WORD * 2,), nibbles.shape
+    entry = 0
+    for idx, n in enumerate(nibbles):
+        entry |= (int(n) & 0xF) << (idx * 4)
+    return entry.to_bytes(BYTES_PER_WORD, "little")
 
 
 def _pack_nibble_entry_int16(weights_8: np.ndarray, nibble_idx: int) -> bytes:
@@ -99,11 +108,11 @@ def pack_layer_weights_int16(
     out = bytearray()
     # 8 tiles × acc_depth_int16 × 16 ch_out per acc_word, 4 nibbles per entry.
     for tile in range(TILES):
-        ch_out_start = tile * CH_OUT_PER_TILE
+        ch_out_start = tile * (CH_OUT_PER_TILE // 4)
         for acc_w in range(acc_depth_int16):
             col_lo = acc_w * 8
             for ch_out_local in range(CH_OUT_PER_TILE):
-                ch_out_global = ch_out_start + ch_out_local
+                ch_out_global = ch_out_start + (ch_out_local // 4)
                 if ch_out_global < cout:
                     row = w[ch_out_global, col_lo:col_lo + 8]
                 else:
@@ -143,19 +152,29 @@ def pack_layer_weights_int8(
         w = np.pad(w, ((0, 0), (0, pad_cols)))
 
     out = bytearray()
+    nibbles_per_word = BYTES_PER_WORD * 2
     for tile in range(TILES):
-        ch_out_start = tile * CH_OUT_PER_TILE
+        ch_out_start = tile * INT8_OUT_CH_PER_TILE
         for acc_w in range(acc_depth):
             col_lo = acc_w * CH_IN_PER_TILE
-            for ch_out_local in range(CH_OUT_PER_TILE):
-                ch_out_global = ch_out_start + ch_out_local
+            nibble_stream = np.zeros(CH_IN_PER_TILE * CH_OUT_PER_TILE, dtype=np.uint8)
+            for phys_out in range(CH_OUT_PER_TILE):
+                ch_out_global = ch_out_start + (phys_out // 2)
+                use_high = phys_out & 1
                 if ch_out_global < cout:
                     row = w[ch_out_global, col_lo:col_lo + CH_IN_PER_TILE]
                 else:
                     row = np.zeros(CH_IN_PER_TILE, dtype=np.int8)
-                out += _pack_nibble_entry(row)
+                if use_high:
+                    vals = (row.astype(np.int16) >> 4) & 0xF
+                else:
+                    vals = row.astype(np.int16) & 0xF
+                base = phys_out * CH_IN_PER_TILE
+                nibble_stream[base:base + CH_IN_PER_TILE] = vals.astype(np.uint8)
+            for word_idx in range(0, len(nibble_stream), nibbles_per_word):
+                out += _pack_128b_nibbles(nibble_stream[word_idx:word_idx + nibbles_per_word])
 
-    expected_bytes = TILES * acc_depth * CH_OUT_PER_TILE * BYTES_PER_WORD
+    expected_bytes = TILES * acc_depth * CH_OUT_PER_TILE * CH_IN_PER_TILE // 2
     assert len(out) == expected_bytes, (len(out), expected_bytes)
     return bytes(out)
 

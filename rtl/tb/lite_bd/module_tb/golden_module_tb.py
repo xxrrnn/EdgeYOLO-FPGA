@@ -27,18 +27,34 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 import numpy as np
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+import sys
+sys.path.insert(0, os.path.join(REPO_ROOT, 'tools'))
+from chip_config import (  # noqa: E402
+    BYTES_PER_WORD,
+    DCIM_CH_IN,
+    DCIM_CH_OUT,
+    DCIM_CYCLE,
+    DCIM_INT8_OUT_CH_PER_TILE,
+    DCIM_INT16_OUT_CH_PER_TILE,
+    DCIM_INT8_OUT_WORDS_PER_TILE,
+    DCIM_INT16_OUT_WORDS_PER_TILE,
+    DCIM_INT8_ACT_WORDS,
+    DCIM_INT16_ACT_WORDS,
+    DCIM_NUM_TILES,
+    MODE_INT8,
+    MODE_INT16,
+    require_consistent,
+)
+require_consistent()
+
 NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'network.json')
 WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'weights')
 
-OBUF_WORD_BYTES = 16
-IBUF_WORD_BYTES = 16
+OBUF_WORD_BYTES = BYTES_PER_WORD
+IBUF_WORD_BYTES = BYTES_PER_WORD
 WB_SIZE_BYTES = 0x8000
-NUM_TILES = 64
-DCIM_CH_IN = 16
-DCIM_CYCLE = 8
-MODE_INT8  = 0b110    # chip_defines.vh: MODE_INT8  = 3'b110
-MODE_INT16 = 0b111    # chip_defines.vh: MODE_INT16 = 3'b111
-DCIM_CH_IN_INT16 = 8  # INT16 模式：每 IBUF word 装 8 个 INT16 元素
+NUM_TILES = DCIM_NUM_TILES
+DCIM_CH_IN_INT16 = DCIM_CH_IN // 2
 
 HBM_PHY_BASE = 0x0
 IBUF_PHY_BASE = 0x1000_0000_0
@@ -101,7 +117,7 @@ DCIM_MATMUL_CURATED = [
     {'name': 'int16_tiny_1x1',      'layer': 'model.2.cv1.conv',      'in_hw': (2, 2),  'int16': True},
     {'name': 'int16_conv3_c32_c64', 'layer': 'model.3.conv',           'in_hw': (4, 4),  'int16': True},
     {'name': 'int16_conv1_c128',    'layer': 'model.6.cv1.conv',       'in_hw': (4, 4),  'int16': True},
-    # 64 Tile/极限维度小规模 RTL 用例：覆盖配置路径与 acc_depth 边界，避免跑完整网络尺寸
+    # 当前 4 Tile/64×64 极限维度小规模 RTL 用例：覆盖配置路径与 acc_depth 边界，避免跑完整网络尺寸
     {'name': 'extreme_int8_1x1_c512_to512', 'layer': 'model.9.cv2.conv',       'in_hw': (1, 1),  'synthetic_out_ch': 512},
     {'name': 'extreme_int8_3x3_c128_to512', 'layer': 'model.10.conv',          'in_hw': (3, 3),  'synthetic_out_ch': 512},
     {'name': 'extreme_int8_6x6_c3_to64',    'layer': 'model.0.conv',           'in_hw': (8, 8),  'out_ch_limit': 64},
@@ -225,7 +241,7 @@ class ConvMeta:
 
     @property
     def num_tiles(self) -> int:
-        return min(NUM_TILES, (self.out_ch + DCIM_CYCLE - 1) // DCIM_CYCLE)
+        return min(NUM_TILES, (self.out_ch + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE)
 
 
 @dataclass
@@ -300,7 +316,7 @@ def propagate_conv_im2col_shapes(network: dict) -> Dict[str, ConvIm2colShape]:
 
 
 def dcim_ibuf_weight_bytes(meta: ConvMeta) -> int:
-    return meta.num_tiles * meta.acc_depth * 16 * OBUF_WORD_BYTES
+    return meta.num_tiles * meta.acc_depth * DCIM_CYCLE * OBUF_WORD_BYTES
 
 
 def dcim_ibuf_act_bytes(meta: ConvMeta, matmul_m: int) -> int:
@@ -436,6 +452,14 @@ def int32_to_words(arr: np.ndarray) -> List[str]:
     return bytes_to_128_words(blob)
 
 
+def pack_128b_nibbles_to_int(nibbles: np.ndarray) -> int:
+    assert nibbles.shape == (BYTES_PER_WORD * 2,), nibbles.shape
+    entry = 0
+    for idx, n in enumerate(nibbles):
+        entry |= (int(n) & 0xF) << (idx * 4)
+    return entry
+
+
 def fp32_to_words(arr: np.ndarray) -> List[str]:
     blob = b''.join(struct.pack('<f', float(v)) for v in arr.astype(np.float32).flatten())
     return bytes_to_128_words(blob)
@@ -520,65 +544,41 @@ def im2col_int16(feat: np.ndarray, meta: ConvMeta) -> np.ndarray:
 # ============================================================================
 # INT16 权重打包辅助
 # ============================================================================
-DCIM_LOGICAL_OUT_PER_TILE = 4  # INT16 每 tile 只有 4 个逻辑输出通道
+DCIM_LOGICAL_OUT_PER_TILE = DCIM_INT16_OUT_CH_PER_TILE  # INT16 每 tile 的逻辑输出通道数 = CH_OUT/4
 
 
 def pack_weight_tile_int16(w16: np.ndarray, tile: int, acc_depth: int) -> List[int]:
     """将 INT16 权重打包为 SRAM nibble 格式（INT16 模式专用）。
 
-    硬件 INT16 golden 公式（参考 tb_DCIM_Tile.sv compute_golden）：
-      每 tile 有 DCIM_LOGICAL_OUT_PER_TILE=4 个逻辑输出通道，
-      逻辑通道 i 对应物理通道 4i..4i+3 的 nibble 拼成 INT16 权重：
-        w16[i, k] = {nibble[k][4i+3], nibble[k][4i+2], nibble[k][4i+1], nibble[k][4i+0]}
-      因此：
-        nibble[k][4i + 0] = w16[i, k] bits[3:0]
-        nibble[k][4i + 1] = w16[i, k] bits[7:4]
-        nibble[k][4i + 2] = w16[i, k] bits[11:8]
-        nibble[k][4i + 3] = w16[i, k] bits[15:12]  (符号 nibble)
-
-    SRAM 格式（与 INT8 完全相同，共 acc_depth × DCIM_CYCLE 个 word）：
-      每 step 读 DCIM_CH_IN=16 个 in_ch 的所有 CH_OUT=16 个 out_ch_phys 的 nibble。
-      INT16 每步有效 DCIM_CH_IN=16 个 in_ch（与 INT8 相同，每步 2 IBUF words）。
-
-    Args:
-        w16:       shape (DCIM_LOGICAL_OUT_PER_TILE, K_total), dtype int16
-                   K_total = acc_depth * DCIM_CH_IN（= acc_depth * 16）
-        tile:      tile index（仅用于注释，nibble 打包不依赖 tile 偏移）
-        acc_depth: acc_depth_int16 = ceil(K / DCIM_CH_IN) = ceil(K / 16)
-    Returns:
-        acc_depth * DCIM_CYCLE 个 128-bit int 的列表
+    每个逻辑 INT16 输出通道由 4 个 physical output lane 的 nibble 拼成：
+    lane 4i+0/1/2/3 分别保存 bits[3:0]/[7:4]/[11:8]/[15:12]。
+    每个 acc step 覆盖 DCIM_CH_IN 个 K 维，输出 acc_depth * DCIM_CYCLE 个 128-bit word。
     """
-    K = w16.shape[1]  # = acc_depth * DCIM_CH_IN（= acc_depth * 16）
-    assert K == acc_depth * DCIM_CH_IN, f"w16 K={K} != acc_depth*16={acc_depth*16}"
-    assert w16.shape[0] == DCIM_LOGICAL_OUT_PER_TILE, f"w16 rows={w16.shape[0]} != 4"
+    K = w16.shape[1]
+    assert K == acc_depth * DCIM_CH_IN, f"w16 K={K} != acc_depth*DCIM_CH_IN={acc_depth * DCIM_CH_IN}"
+    assert w16.shape[0] == DCIM_LOGICAL_OUT_PER_TILE, (
+        f"w16 rows={w16.shape[0]} != DCIM_LOGICAL_OUT_PER_TILE={DCIM_LOGICAL_OUT_PER_TILE}"
+    )
 
     entries = []
     for ad in range(acc_depth):
-        # 构建当前 step 的 nibble[CH_IN=16][CH_OUT_PHYS=16]
-        # 每步 16 个有效 in_ch（k = ad*16 + 0..15）
-        nibble = np.zeros((DCIM_CH_IN, DCIM_CH_IN), dtype=np.int32)  # [in_ch][out_ch_phys]
-        for k_rel in range(DCIM_CH_IN):  # 0..15，每步 16 个 in_ch
-            in_ch_idx = k_rel
+        nibble = np.zeros((DCIM_CH_IN, DCIM_CH_OUT), dtype=np.int32)
+        for k_rel in range(DCIM_CH_IN):
             k_abs = ad * DCIM_CH_IN + k_rel
-            if k_abs < K:
-                for log_oc in range(DCIM_LOGICAL_OUT_PER_TILE):
-                    w_val = int(w16[log_oc, k_abs])
-                    # 拆成 4 nibble（符号先存在 bits 中，截成 4-bit）
-                    nibble[in_ch_idx][log_oc * 4 + 0] = (w_val >>  0) & 0xF
-                    nibble[in_ch_idx][log_oc * 4 + 1] = (w_val >>  4) & 0xF
-                    nibble[in_ch_idx][log_oc * 4 + 2] = (w_val >>  8) & 0xF
-                    nibble[in_ch_idx][log_oc * 4 + 3] = (w_val >> 12) & 0xF
-        # 用 pack_weight_entry 打包每个 SRAM word（DCIM_CYCLE=8 个 word/step）
-        for lc in range(DCIM_CYCLE):
-            oc_lo = lc * 2
-            oc_hi = lc * 2 + 1
-            low_val = 0
-            high_val = 0
-            for ic in range(DCIM_CH_IN):
-                low_val  |= (int(nibble[ic][oc_lo]) & 0xF) << (ic * 4)
-                high_val |= (int(nibble[ic][oc_hi]) & 0xF) << (ic * 4)
-            word_128 = int((high_val << 64) | low_val)
-            entries.append(word_128)
+            for log_oc in range(DCIM_LOGICAL_OUT_PER_TILE):
+                w_val = int(w16[log_oc, k_abs])
+                nibble[k_rel][log_oc * 4 + 0] = (w_val >> 0) & 0xF
+                nibble[k_rel][log_oc * 4 + 1] = (w_val >> 4) & 0xF
+                nibble[k_rel][log_oc * 4 + 2] = (w_val >> 8) & 0xF
+                nibble[k_rel][log_oc * 4 + 3] = (w_val >> 12) & 0xF
+        for word_idx in range(DCIM_CYCLE):
+            flat_start = word_idx * BYTES_PER_WORD * 2
+            word_nibbles = []
+            for flat_idx in range(flat_start, flat_start + BYTES_PER_WORD * 2):
+                phys_out = flat_idx // DCIM_CH_IN
+                in_ch = flat_idx % DCIM_CH_IN
+                word_nibbles.append(nibble[in_ch][phys_out])
+            entries.append(pack_128b_nibbles_to_int(np.array(word_nibbles, dtype=np.uint8)))
     return entries
 
 
@@ -594,64 +594,63 @@ def pack_weight_entry(weights_16: np.ndarray) -> int:
 
 def pack_weight_tile(meta: ConvMeta, weight_int8: np.ndarray, tile: int,
                      int16: bool = False) -> List[int]:
-    """打包单个 Tile 的权重到 IBUF 格式。
-    INT8 模式：acc_depth 步，每步 DCIM_CH_IN=16 个 K 维；每步 CYCLE 个 SRAM word。
-    INT16 模式：acc_depth_int16 步，每步 DCIM_CH_IN_INT16=8 个 K 维（高 8 位填 0）；
-               步数 = 2×acc_depth，hardware 按 acc_depth_int16 读权重。
-    """
-    ch_base = tile * DCIM_CYCLE
+    """打包单个 Tile 的 INT8 权重到 IBUF SRAM word 格式。"""
+    ch_base = tile * DCIM_INT8_OUT_CH_PER_TILE
     flat = weight_int8.reshape(meta.out_ch, -1)
-    if int16:
-        acc = meta.acc_depth_int16
-        ch_in_step = DCIM_CH_IN_INT16   # 每步 8 个 K 维
-    else:
-        acc = meta.acc_depth
-        ch_in_step = DCIM_CH_IN         # 每步 16 个 K 维
-    pad_to = acc * ch_in_step
+    acc = meta.acc_depth_int16 if int16 else meta.acc_depth
+    pad_to = acc * DCIM_CH_IN
     if flat.shape[1] < pad_to:
         flat = np.pad(flat, ((0, 0), (0, pad_to - flat.shape[1])), constant_values=0)
     entries = []
+    nibbles_per_word = BYTES_PER_WORD * 2
     for ad in range(acc):
-        for lc in range(DCIM_CYCLE):
-            oc = ch_base + lc
+        nibble_stream = np.zeros(DCIM_CH_IN * DCIM_CH_OUT, dtype=np.uint8)
+        for phys_out in range(DCIM_CH_OUT):
+            oc = ch_base + (phys_out // 2)
             if oc < meta.out_ch:
-                vals_partial = flat[oc, ad * ch_in_step:(ad + 1) * ch_in_step]
+                row = flat[oc, ad * DCIM_CH_IN:(ad + 1) * DCIM_CH_IN]
             else:
-                vals_partial = np.zeros(ch_in_step, dtype=np.int8)
-            # SRAM word 固定 CH_IN=16 nibble；INT16 只用低 ch_in_step 个，高位填 0
-            vals = np.zeros(DCIM_CH_IN, dtype=np.int8)
-            vals[:ch_in_step] = vals_partial
-            entries.append(pack_weight_entry(vals))
+                row = np.zeros(DCIM_CH_IN, dtype=np.int8)
+            if phys_out & 1:
+                vals = (row.astype(np.int16) >> 4) & 0xF
+            else:
+                vals = row.astype(np.int16) & 0xF
+            base = phys_out * DCIM_CH_IN
+            nibble_stream[base:base + DCIM_CH_IN] = vals.astype(np.uint8)
+        for word_idx in range(0, len(nibble_stream), nibbles_per_word):
+            entries.append(pack_128b_nibbles_to_int(nibble_stream[word_idx:word_idx + nibbles_per_word]))
     return entries
 
 
+
 def dcim_accum_words(accum: np.ndarray, num_tiles: int) -> List[str]:
-    """INT8 模式：每 tile 2 个 128-bit word（8 ch × INT32 × 2 half）"""
+    """INT8 模式：每 tile 输出 DCIM_INT8_OUT_WORDS_PER_TILE 个 128-bit word。"""
     lines = []
     for px in range(accum.shape[0]):
         for tile in range(num_tiles):
-            base = tile * DCIM_CYCLE
-            for half in (0, 4):
+            base = tile * DCIM_INT8_OUT_CH_PER_TILE
+            for word_idx in range(DCIM_INT8_OUT_WORDS_PER_TILE):
                 blob = b''
                 for c in range(4):
-                    oc = base + half + c
+                    oc = base + word_idx * 4 + c
                     blob += struct.pack('<i', int(accum[px, oc]) if oc < accum.shape[1] else 0)
                 lines.append(''.join(f'{b:02x}' for b in reversed(blob)))
     return lines
 
 
 def dcim_accum_words_int16(accum: np.ndarray, num_tiles: int) -> List[str]:
-    """INT16 模式：每 tile 1 个 128-bit word（4 个逻辑 ch × INT32）。
+    """INT16 模式：每 tile 输出 DCIM_INT16_OUT_WORDS_PER_TILE 个 128-bit word。
     accum shape: (M, num_tiles * DCIM_LOGICAL_OUT_PER_TILE)，每 tile 4 个逻辑输出通道。"""
     lines = []
     for px in range(accum.shape[0]):
         for tile in range(num_tiles):
             base = tile * DCIM_LOGICAL_OUT_PER_TILE   # 每 tile 4 个逻辑 oc
-            blob = b''
-            for c in range(DCIM_LOGICAL_OUT_PER_TILE):  # 4 ch
-                oc = base + c
-                blob += struct.pack('<i', int(accum[px, oc]) if oc < accum.shape[1] else 0)
-            lines.append(''.join(f'{b:02x}' for b in reversed(blob)))
+            for word_idx in range(DCIM_INT16_OUT_WORDS_PER_TILE):
+                blob = b''
+                for c in range(4):
+                    oc = base + word_idx * 4 + c
+                    blob += struct.pack('<i', int(accum[px, oc]) if oc < accum.shape[1] else 0)
+                lines.append(''.join(f'{b:02x}' for b in reversed(blob)))
     return lines
 
 
@@ -766,21 +765,19 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
     """生成 DCIM 指令序列。
     int16=True 时：
       - mode = MODE_INT16，acc_depth = acc_depth_int16
-      - 每像素 ACT_BASE 步进 acc_depth_int16 * 2（INT16 每 row 占 2 IBUF word）
-      - 每像素每 tile 输出 1 个 128-bit word（INT32 低 4 ch）
+      - 每像素 ACT_BASE 步进 acc_depth_int16 * INT16_ACT_WORDS
+      - 每像素每 tile 输出 DCIM_INT16_OUT_WORDS_PER_TILE 个 128-bit word
     """
     inst = []
     acc = meta.acc_depth_int16 if int16 else meta.acc_depth
-    ch_in_per_word = DCIM_CH_IN_INT16 if int16 else DCIM_CH_IN
-    act_words_per_row = 2 if int16 else 1  # INT16 每 im2col 行需要 2 IBUF 读
+    act_words_per_row = DCIM_INT16_ACT_WORDS if int16 else DCIM_INT8_ACT_WORDS
     im2col_bytes = num_pixels * acc * OBUF_WORD_BYTES * act_words_per_row
     if not skip_cdma:
         inst += cdma_copy(OBUF_PHY_BASE + im2col_obuf, IBUF_PHY_BASE + ibuf_act, im2col_bytes)
     mode_val = MODE_INT16 if int16 else MODE_INT8
     mode_reg = ((acc & 0xFF) << 8) | mode_val
-    # INT16 每 tile 只输出 4 ch，CH_OUT_per_tile = DCIM_CYCLE/2 = 4
-    tiles_out = meta.num_tiles  # tile 掩码不变，tile_mask 仍按 num_tiles 算
-    words_per_tile_per_px = 1 if int16 else 2  # INT16 每 tile 1 word，INT8 每 tile 2 word
+    tiles_out = meta.num_tiles
+    words_per_tile_per_px = DCIM_INT16_OUT_WORDS_PER_TILE if int16 else DCIM_INT8_OUT_WORDS_PER_TILE
     wei_base_words = [
         (ibuf_wei // IBUF_WORD_BYTES) + t * acc * DCIM_CYCLE
         for t in range(NUM_TILES)
@@ -878,7 +875,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
     use_int16 = spec.get('int16', False)
     meta = conv_meta(net, spec['layer'])
     if 'synthetic_out_ch' in spec:
-        meta.out_ch = min(NUM_TILES * DCIM_CYCLE, int(spec['synthetic_out_ch']))
+        meta.out_ch = min(NUM_TILES * DCIM_INT8_OUT_CH_PER_TILE, int(spec['synthetic_out_ch']))
     h, w, oh, ow, hw_note = resolve_dcim_in_hw(spec, shapes, meta)
     matmul_m = oh * ow
     weights = load_layer_npz_checked(meta, net)['weight_int8']
@@ -1022,19 +1019,28 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         exp_words = int16_hwc_words(qa.reshape(1, 1, oh * ow * num_logical_oc))
         weight_words = []
         for t in range(meta.num_tiles):
-            weight_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, int16=True)]
-        src_words = int8_hwc_words_packed(feat)
+            tile_w16 = w16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE]
+            weight_words += [f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)]
+        src_words = bytes_to_128_words(feat.astype(np.int16).tobytes())
+        # INT16 im2col 需要 2× INT8 的 OBUF_AUX 空间；在 suite 中前 case 可能只写了一半，
+        # 须用全零清空整个 AUX 区，避免残留数据影响后半段激活搬运结果
+        im2col_aux_bytes = oh * ow * acc * DCIM_CH_IN * 2
+        aux_zero_words = bytes_to_128_words(bytes(im2col_aux_bytes))
+        write_hex(os.path.join(out_dir, 'aux_zero.hex'), aux_zero_words)
         write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
         write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
         write_hex(os.path.join(out_dir, 'weight.hex'), weight_words)
-        # Instructions: im2col(INT16) → DCIM(INT16) → DQA(accum16→fp32) → QA(fp32→int16)
+        # Instructions: im2col(INT16) → DCIM(INT16) → DQA(INT32 accum→fp32) → QA(fp32→int16)
+        # DCIM MODE_INT16 still writes 32-bit logical-channel accumulators; DQA int16 mode is only for synthetic INT16 accumulator inputs.
         fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_AUX,
                              encode_addr_break(meta), oh, ow, flags=0x2)
         fast_inst += dcim_layer_inst(meta, oh * ow, OBUF_AUX, OBUF_SRC1, IBUF_ACT, IBUF_WEI, int16=True)
-        fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, num_logical_oc, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x3)
+        fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, num_logical_oc, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x1)
         fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, OBUF_DST, flags=0x2)
         fast_inst += [header(OP_END, 0, 0)]
-        make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0), ('weight.hex', IBUF_PHY_BASE + IBUF_WEI)], out_dir)
+        make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0),
+                       ('aux_zero.hex', OBUF_PHY_BASE + OBUF_AUX),
+                       ('weight.hex', IBUF_PHY_BASE + IBUF_WEI)], out_dir)
         wb = wb_blob([(WB_SCALE, fp32_blob(scale[:num_logical_oc])), (WB_BIAS, fp32_blob(bias[:num_logical_oc])),
                       (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
         hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(weight_words))])
@@ -1498,16 +1504,17 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
         f.write('runtime_files: inst.hex preload.txt checks.txt\n')
 
 
-def _apply_dim_overrides(spec: dict, args: argparse.Namespace) -> dict:
+def _apply_dim_overrides(spec: dict, args: argparse.Namespace, module: str) -> dict:
     """Apply --quant and --dim overrides to a case spec (returns modified copy)."""
     spec = dict(spec)
 
-    # quant override: set/override the int16 flag in the spec
-    if args.quant == 'int16':
-        spec['int16'] = True
-    elif args.quant == 'int8':
-        spec.pop('int16', None)
-        spec['int16'] = False
+    # dcim_matmul 的精度由 case 名/spec 决定，避免出现 extreme_int16..._qint8 这类矛盾命名。
+    if module != 'dcim_matmul':
+        if args.quant == 'int16':
+            spec['int16'] = True
+        elif args.quant == 'int8':
+            spec.pop('int16', None)
+            spec['int16'] = False
 
     # dim override: format "C=N" or "H=N,W=N,C=N" or "HW=HxW"
     if args.dim:
@@ -1575,7 +1582,7 @@ def generate(args: argparse.Namespace) -> None:
         raise SystemExit(f'Unknown case {args.case!r} for module {module}; use --case list')
 
     # apply --quant and --dim overrides
-    spec = _apply_dim_overrides(spec, args)
+    spec = _apply_dim_overrides(spec, args, module)
 
     out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)

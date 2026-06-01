@@ -280,8 +280,8 @@ module tb_lite_bd_module;
             bank_sel  = word_addr >> (`DCIM_IBUF_ADDR_WIDTH - 1);
             bank_addr = word_addr & ((1 << (`DCIM_IBUF_ADDR_WIDTH - 1)) - 1);
             case (bank_sel)
-                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_ibuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_ibuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
+                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
+                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
                 default: begin
                     $display("FATAL: IBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
                     $finish(1);
@@ -296,8 +296,8 @@ module tb_lite_bd_module;
             bank_sel  = word_addr >> (`DCIM_OBUF_ADDR_WIDTH - 1);
             bank_addr = word_addr & ((1 << (`DCIM_OBUF_ADDR_WIDTH - 1)) - 1);
             case (bank_sel)
-                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_groups[0].u_group.u_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
+                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
+                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
                 default: begin
                     $display("FATAL: OBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
                     $finish(1);
