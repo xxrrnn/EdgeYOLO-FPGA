@@ -5,8 +5,6 @@
 // DCIM_Array stub - 只检查控制信号，无内部逻辑，瞬间仿真
 //////////////////////////////////////////////////////////////////////////////////
 module DCIM_Array #(
-    parameter NUM_GROUPS      = `DCIM_NUM_GROUPS,
-    parameter TILES_PER_GROUP = `DCIM_TILES_PER_GROUP,
     parameter NUM_TILES       = `DCIM_NUM_TILES,
     parameter WD1             = `DCIM_WD1,
     parameter CH_IN           = `DCIM_CH_IN,
@@ -20,29 +18,32 @@ module DCIM_Array #(
     localparam ACC_UBD_WD = $clog2(ACC+1),
     localparam STRB_WIDTH = BUF_DATA_WIDTH / 8
 )(
-    input  wire clk, rst_n, start,
+    input  wire clk, rstn, start,
     output reg  done, ready,
     input  wire [2:0]                             mode,
     input  wire [ACC_UBD_WD-1:0]                  acc_depth,
-    input  wire [BUF_ADDR_WIDTH-1:0]              act_base_addr,    // 全局统一激活基址
+    input  wire [BUF_ADDR_WIDTH-1:0]              act_base_addr,
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]    wei_base_addrs,
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0]    out_base_addrs,
-    input  wire [NUM_GROUPS*STRB_WIDTH-1:0]       ibuf_ext_wea,
-    input  wire [NUM_GROUPS-1:0]                  ibuf_ext_ena,
-    input  wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]   ibuf_ext_addra,
-    input  wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]   ibuf_ext_dina,
-    output wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]   ibuf_ext_douta,
-    input  wire [NUM_GROUPS*STRB_WIDTH-1:0]       obuf_ext_wea,
-    input  wire [NUM_GROUPS-1:0]                  obuf_ext_ena,
-    input  wire [NUM_GROUPS*BUF_ADDR_WIDTH-1:0]   obuf_ext_addra,
-    input  wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]   obuf_ext_dina,
-    output wire [NUM_GROUPS*BUF_DATA_WIDTH-1:0]   obuf_ext_douta
+    input  wire [NUM_TILES-1:0]                   tile_mask,
+    input  wire [STRB_WIDTH-1:0]                  ibuf_ext_wea,
+    input  wire                                   ibuf_ext_ena,
+    input  wire [BUF_ADDR_WIDTH-1:0]              ibuf_ext_addra,
+    input  wire [BUF_DATA_WIDTH-1:0]              ibuf_ext_dina,
+    output wire [BUF_DATA_WIDTH-1:0]              ibuf_ext_douta,
+    input  wire [STRB_WIDTH-1:0]                  obuf_ext_wea,
+    input  wire                                   obuf_ext_ena,
+    input  wire [BUF_ADDR_WIDTH-1:0]              obuf_ext_addra,
+    input  wire [BUF_DATA_WIDTH-1:0]              obuf_ext_dina,
+    output wire [BUF_DATA_WIDTH-1:0]              obuf_ext_douta,
+    output wire                                   obuf_ext_douta_valid
 );
     assign ibuf_ext_douta = 0;
     assign obuf_ext_douta = 0;
+    assign obuf_ext_douta_valid = 0;
     reg [2:0] cnt;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin done <= 0; ready <= 1; cnt <= 0; end
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin done <= 0; ready <= 1; cnt <= 0; end
         else if (start && ready) begin done <= 0; ready <= 0; cnt <= 0; end
         else if (!ready) begin
             cnt <= cnt + 1;

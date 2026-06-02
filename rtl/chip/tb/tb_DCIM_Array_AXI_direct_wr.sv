@@ -5,14 +5,12 @@
 // tb_DCIM_Array_bd_cfg_mini - 4-tile 配置接口快速验证
 //
 // 只测 cfg_wr_* → 内部寄存器 → DCIM_Array 控制信号，
-// 用 NUM_TILES=4 (1组×4Tile) 大幅缩短仿真时间
+// NUM_TILES=4 快速 cfg 接口验证
 //////////////////////////////////////////////////////////////////////////////////
 
 module tb_DCIM_Array_AXI_direct_wr;
 
     localparam CLK_PERIOD     = 10;
-    localparam NUM_GROUPS_T   = 1;   // 1 组
-    localparam TILES_PER_GRP  = 4;   // 每组 4 Tile
     localparam NUM_TILES_T    = 4;
     localparam BUF_AW         = 14;
     localparam ACC            = 80;
@@ -61,51 +59,21 @@ module tb_DCIM_Array_AXI_direct_wr;
 
     // 4-tile DUT（最小配置）
     DCIM_Array_bd #(
-        .NUM_GROUPS      (NUM_GROUPS_T),
-        .TILES_PER_GROUP (TILES_PER_GRP),
         .NUM_TILES       (NUM_TILES_T),
         .WD1(4), .CH_IN(16), .CH_OUT(16), .SRAM_DP(128),
         .CYCLE(8), .ACC(ACC),
-        .BUF_ADDR_WIDTH  (BUF_AW),
         .BUF_DATA_WIDTH  (128),
         .AXI_BRAM_ADDR_WIDTH(18),
         .IBUF_RD_LATENCY (8)
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .cfg_wr_en(cfg_wr_en), .cfg_wr_addr(cfg_wr_addr), .cfg_wr_data(cfg_wr_data),
-        // Group 0 IBUF/OBUF (only 1 group)
-        .ibuf_ext_wea_0(0), .ibuf_ext_ena_0(0), .ibuf_ext_addra_0(0),
-        .ibuf_ext_dina_0(0), .ibuf_ext_douta_0(),
-        .ibuf_ext_wea_1(0), .ibuf_ext_ena_1(0), .ibuf_ext_addra_1(0),
-        .ibuf_ext_dina_1(0), .ibuf_ext_douta_1(),
-        .ibuf_ext_wea_2(0), .ibuf_ext_ena_2(0), .ibuf_ext_addra_2(0),
-        .ibuf_ext_dina_2(0), .ibuf_ext_douta_2(),
-        .ibuf_ext_wea_3(0), .ibuf_ext_ena_3(0), .ibuf_ext_addra_3(0),
-        .ibuf_ext_dina_3(0), .ibuf_ext_douta_3(),
-        .ibuf_ext_wea_4(0), .ibuf_ext_ena_4(0), .ibuf_ext_addra_4(0),
-        .ibuf_ext_dina_4(0), .ibuf_ext_douta_4(),
-        .ibuf_ext_wea_5(0), .ibuf_ext_ena_5(0), .ibuf_ext_addra_5(0),
-        .ibuf_ext_dina_5(0), .ibuf_ext_douta_5(),
-        .ibuf_ext_wea_6(0), .ibuf_ext_ena_6(0), .ibuf_ext_addra_6(0),
-        .ibuf_ext_dina_6(0), .ibuf_ext_douta_6(),
-        .ibuf_ext_wea_7(0), .ibuf_ext_ena_7(0), .ibuf_ext_addra_7(0),
-        .ibuf_ext_dina_7(0), .ibuf_ext_douta_7(),
-        .obuf_ext_wea_0(0), .obuf_ext_ena_0(0), .obuf_ext_addra_0(0),
-        .obuf_ext_dina_0(0), .obuf_ext_douta_0(),
-        .obuf_ext_wea_1(0), .obuf_ext_ena_1(0), .obuf_ext_addra_1(0),
-        .obuf_ext_dina_1(0), .obuf_ext_douta_1(),
-        .obuf_ext_wea_2(0), .obuf_ext_ena_2(0), .obuf_ext_addra_2(0),
-        .obuf_ext_dina_2(0), .obuf_ext_douta_2(),
-        .obuf_ext_wea_3(0), .obuf_ext_ena_3(0), .obuf_ext_addra_3(0),
-        .obuf_ext_dina_3(0), .obuf_ext_douta_3(),
-        .obuf_ext_wea_4(0), .obuf_ext_ena_4(0), .obuf_ext_addra_4(0),
-        .obuf_ext_dina_4(0), .obuf_ext_douta_4(),
-        .obuf_ext_wea_5(0), .obuf_ext_ena_5(0), .obuf_ext_addra_5(0),
-        .obuf_ext_dina_5(0), .obuf_ext_douta_5(),
-        .obuf_ext_wea_6(0), .obuf_ext_ena_6(0), .obuf_ext_addra_6(0),
-        .obuf_ext_dina_6(0), .obuf_ext_douta_6(),
-        .obuf_ext_wea_7(0), .obuf_ext_ena_7(0), .obuf_ext_addra_7(0),
-        .obuf_ext_dina_7(0), .obuf_ext_douta_7(),
+        .ibuf_ext_wea(0), .ibuf_ext_ena(0), .ibuf_ext_addra(0),
+        .ibuf_ext_dina(0), .ibuf_ext_douta(),
+        .obuf_ext_wea(0), .obuf_ext_ena(0), .obuf_ext_addra(0),
+        .obuf_ext_dina(0), .obuf_ext_douta(),
+        .vpu_obuf_addr(0), .vpu_obuf_en(0), .vpu_obuf_we(0), .vpu_obuf_din(0),
+        .vpu_obuf_dout(), .vpu_obuf_rd_valid(),
         .ready(ready)
     );
 

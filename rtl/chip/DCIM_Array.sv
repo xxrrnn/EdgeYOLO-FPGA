@@ -12,8 +12,6 @@
 // ============================================================================
 
 module DCIM_Array #(
-    parameter NUM_GROUPS      = `DCIM_NUM_GROUPS,
-    parameter TILES_PER_GROUP = `DCIM_TILES_PER_GROUP,
     parameter NUM_TILES       = `DCIM_NUM_TILES,
     parameter WD1             = `DCIM_WD1,
     parameter CH_IN           = `DCIM_CH_IN,
@@ -55,15 +53,6 @@ module DCIM_Array #(
     output wire [BUF_DATA_WIDTH-1:0]     obuf_ext_douta,
     output wire                          obuf_ext_douta_valid
 );
-
-    initial begin
-        if (NUM_GROUPS != 1) begin
-            $error("DCIM_Array tile-array implementation requires NUM_GROUPS=1");
-        end
-        if (TILES_PER_GROUP != NUM_TILES) begin
-            $error("DCIM_Array tile-array expects TILES_PER_GROUP == NUM_TILES");
-        end
-    end
 
     wire [NUM_TILES-1:0] tile_done;
     wire [NUM_TILES-1:0] tile_ready;

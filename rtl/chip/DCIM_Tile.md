@@ -8,13 +8,11 @@
 
 | 参数 | 当前值 | 说明 |
 |---|---:|---|
-| `DCIM_NUM_GROUPS` | 1 | lite 版本仅 1 组 |
-| `DCIM_TILES_PER_GROUP` | 8 | 每组 8 个 Tile |
-| `DCIM_NUM_TILES` | 8 | 总 Tile 数 |
+| `DCIM_NUM_TILES` | 4 | Tile 数量（Array–Tile，无 Group 层） |
 | `DCIM_WD1` | 4 | 底层乘法位宽，所有计算最终拆成 4-bit nibble 乘法 |
-| `DCIM_CH_IN` | 16 | 每个 acc row 处理 16 个输入通道 |
-| `DCIM_CH_OUT` | 16 | 每 Tile 内部 16 个 physical output lanes |
-| `DCIM_CYCLE` | 8 | 每个 acc row 需要 8 个 128-bit weight word，覆盖 16 个 physical output lanes |
+| `DCIM_CH_IN` | 64 | 每个 acc step 处理 64 个输入通道 |
+| `DCIM_CH_OUT` | 64 | 每 Tile 64 个 physical output lanes |
+| `DCIM_CYCLE` | 128 | 每个 acc step 需要 128 个 128-bit weight word |
 | `DCIM_ACC_MAX` | 80 | 最大 `acc_depth` |
 | `DCIM_BUF_DATA_WIDTH` | 128 | IBUF/OBUF word 宽度 |
 | `DCIM_IBUF_ADDR_WIDTH` | 17 | IBUF 为 2MB，128K 个 128-bit word |

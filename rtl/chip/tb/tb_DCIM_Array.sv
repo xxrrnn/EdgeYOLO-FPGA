@@ -10,9 +10,7 @@
 
 module tb_DCIM_Array;
 
-    // 测试 Tile 数：使用 1 个 Group（8 Tile）做快速冒烟测试
-    // 完整 64 Tile 测试需更大内存和更长仿真时间
-    localparam NUM_TILES    = `DCIM_TILES_PER_GROUP;
+    localparam NUM_TILES    = `DCIM_NUM_TILES;
     localparam WD1          = `DCIM_WD1;
     localparam CH_IN        = `DCIM_CH_IN;
     localparam CH_OUT       = `DCIM_CH_OUT;
@@ -44,15 +42,14 @@ module tb_DCIM_Array;
     reg [11:0] cfg_wr_addr;
     reg [31:0] cfg_wr_data;
 
-    // IBUF 单套广播端口（DCIM_Array_bd 内部展开到 NUM_GROUPS 组）
+    // IBUF 单套端口（与 DCIM_Array 一致）
     reg  [BUF_DATA_WIDTH/8-1:0] ibuf_ext_wea;
     reg                         ibuf_ext_ena;
     reg  [`DCIM_IBUF_ADDR_WIDTH+3:0] ibuf_ext_addra;
     reg  [BUF_DATA_WIDTH-1:0]   ibuf_ext_dina;
     wire [BUF_DATA_WIDTH-1:0]   ibuf_ext_douta;
 
-    // OBUF 统一端口（扩展地址：高3位=Group选择，低BUF_ADDR_WIDTH+4位=字节地址）
-    // 简化：tb 直接使用字地址，高位置0（Group 0），按 Group 分别验证
+    // OBUF 统一端口（字节地址 = {字地址, 4'b0}）
     localparam OBUF_EXT_ABITS = `DCIM_OBUF_EXT_ADDR_BITS + 4; // 字节地址位宽 = 17+4=21
     reg  [BUF_DATA_WIDTH/8-1:0] obuf_ext_wea;
     reg                         obuf_ext_ena;
@@ -91,8 +88,6 @@ module tb_DCIM_Array;
     // DUT: DCIM_Array_bd（包含广播 IBUF 展开 + 统一 OBUF MUX）
     // ========================================================================
     DCIM_Array_bd #(
-        .NUM_GROUPS      (`DCIM_NUM_GROUPS),
-        .TILES_PER_GROUP (`DCIM_TILES_PER_GROUP),
         .NUM_TILES       (NUM_TILES),
         .WD1             (WD1),
         .CH_IN           (CH_IN),
@@ -137,24 +132,13 @@ module tb_DCIM_Array;
         end
     endtask
 
-    // read_obuf: group=0 时高3位为0，直接按字节地址访问 Group 0 的 OBUF
-    // 如需访问其他 Group，调用 read_obuf_grp
     task read_obuf(input [BUF_ADDR_WIDTH-1:0] addr, output [BUF_DATA_WIDTH-1:0] data);
-        begin
-            read_obuf_grp(0, addr, data);
-        end
-    endtask
-
-    task read_obuf_grp(input integer grp, input [BUF_ADDR_WIDTH-1:0] addr,
-                       output [BUF_DATA_WIDTH-1:0] data);
-        // 扩展地址：{group_sel[2:0], word_addr[BUF_ADDR_WIDTH-1:0], 4'b0}
         localparam OBUF_ABITS = `DCIM_OBUF_EXT_ADDR_BITS + 4;
         begin
             @(posedge clk);
             obuf_ext_ena   <= 1'b1;
             obuf_ext_wea   <= '0;
-            obuf_ext_addra <= {{(OBUF_ABITS - `DCIM_OBUF_GROUP_BITS - BUF_ADDR_WIDTH - 4){1'b0}},
-                                grp[`DCIM_OBUF_GROUP_BITS-1:0], addr, 4'b0000};
+            obuf_ext_addra <= {{(OBUF_ABITS - BUF_ADDR_WIDTH - 4){1'b0}}, addr, 4'b0000};
             repeat (6) @(posedge clk);  // OBUF 读延迟 + 1 margin
             data = obuf_ext_douta;
             obuf_ext_ena <= 1'b0;
@@ -327,18 +311,16 @@ module tb_DCIM_Array;
 
     task verify_tile(input integer tile_id, input [BUF_ADDR_WIDTH-1:0] out_base,
                      input integer rows, input integer t_acc, output integer errors);
-        integer row, ch, num_outputs, acc_val, grp_id;
+        integer row, ch, num_outputs, acc_val;
         reg [BUF_DATA_WIDTH-1:0] result_lo, result_hi;
         reg signed [31:0] dut_val, exp_val;
         begin
             errors     = 0;
             acc_val    = (t_acc == 0) ? 1 : t_acc;
             num_outputs = rows / acc_val;
-            grp_id     = tile_id / `DCIM_TILES_PER_GROUP;
-
             for (row = 0; row < num_outputs; row = row + 1) begin
-                read_obuf_grp(grp_id, out_base + row * 2,     result_lo);
-                read_obuf_grp(grp_id, out_base + row * 2 + 1, result_hi);
+                read_obuf(out_base + row * 2,     result_lo);
+                read_obuf(out_base + row * 2 + 1, result_hi);
                 for (ch = 0; ch < 4; ch = ch + 1) begin
                     dut_val = $signed(result_lo[ch*32 +: 32]);
                     exp_val = golden[tile_id][row][ch];

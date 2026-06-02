@@ -41,7 +41,7 @@ module tb_im2col_dcim_joint;
     localparam IM2COL_ROWS = OH * OW;
 
     // DCIM 参数
-    localparam NUM_TILES       = `DCIM_TILES_PER_GROUP;  // 8
+    localparam NUM_TILES       = `DCIM_NUM_TILES;
     localparam WD1             = `DCIM_WD1;              // 4
     localparam DCIM_CH_IN      = `DCIM_CH_IN;            // 16
     localparam DCIM_CH_OUT     = `DCIM_CH_OUT;           // 16
@@ -127,8 +127,6 @@ module tb_im2col_dcim_joint;
     // DUT: DCIM_Array_bd
     // =========================================================================
     DCIM_Array_bd #(
-        .NUM_GROUPS      (`DCIM_NUM_GROUPS),
-        .TILES_PER_GROUP (`DCIM_TILES_PER_GROUP),
         .NUM_TILES       (NUM_TILES),
         .WD1             (WD1),
         .CH_IN           (DCIM_CH_IN),

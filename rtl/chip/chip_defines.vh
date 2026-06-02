@@ -109,10 +109,8 @@
 // 4. DCIM 阵列参数
 // ============================================================================
 
-// ── 阵列拓扑 ──────────────────────────────────────────────────────────────
-`define DCIM_NUM_GROUPS         1       // 单组共享 IBUF/OBUF，避免复制大容量 URAM
-`define DCIM_TILES_PER_GROUP    4       // 单组内 4 Tile，64×64 配置下等效 2.048 TOPS@250MHz INT8
-`define DCIM_NUM_TILES          4       // 总 Tile 数 = NUM_GROUPS × TILES_PER_GROUP
+// ── 阵列拓扑（Array–Tile，无 Group 层）────────────────────────────────────
+`define DCIM_NUM_TILES          4       // DCIM_Tile 数量；64×64 @250MHz INT8 峰值约 2.048 TOPS
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
@@ -147,15 +145,13 @@
 // OBUF 读延迟 = IN_REG1(1) + IN_REG2(1) + IN_REG3(1) + memrega(1) + NBPIPE(2) + douta(1) = 7
 // VPU 单元 rd_wait_cnt >= 10 (等 11 拍含 LOAD_X 发地址那拍)
 
-// ── 统一 OBUF 外部地址扩展（lite: NUM_GROUPS=1，无 group select）─────────
-// 当 NUM_GROUPS=1 时，extended_addr 直接等于 OBUF 字地址，GROUP_BITS=0
-`define DCIM_OBUF_GROUP_BITS    0       // $clog2(DCIM_NUM_GROUPS) = $clog2(1) = 0
-`define DCIM_OBUF_EXT_ADDR_BITS `DCIM_OBUF_ADDR_WIDTH  // = 20 bits (1 group only)
+// ── OBUF 外部字节地址：无 group 选择位，字地址即 OBUF 内部地址 ───────────
+`define DCIM_OBUF_EXT_ADDR_BITS `DCIM_OBUF_ADDR_WIDTH  // = 20 bits
 
 // ── DCIM 配置寄存器地址（与 INST_Decoder OP_DCIM_CFG 一致）─────────────────
 `define DCIM_REG_CTRL           12'h000  // [0] start (W1S, 自清)
 `define DCIM_REG_MODE           12'h008  // [15:8] acc_depth | [2:0] mode
-`define DCIM_REG_ACT_BASE       12'h010  // 全局激活基址（1 个，广播到所有 Group）
+`define DCIM_REG_ACT_BASE       12'h010  // 全局激活基址（广播到所有 Tile）
 `define DCIM_REG_WEI_BASE       12'h040  // WEI_BASE[0..63]: 每 Tile 权重基址 (+4 per tile)
 `define DCIM_REG_OUT_BASE       12'h140  // OUT_BASE[0..63]: 每 Tile 输出基址 (+4 per tile)
 `define DCIM_REG_TILE_MASK      12'h240  // TILE_MASK[31:0]: 低 32 个 Tile 使能

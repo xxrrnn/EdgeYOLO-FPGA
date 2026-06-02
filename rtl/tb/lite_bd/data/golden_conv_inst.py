@@ -55,7 +55,7 @@ WEIGHT_DIR = os.path.join(
     '..', '..', '..', '..', 'model', 'yolov5n', 'parsed', 'weights'
 )
 
-NUM_TILES_PER_GROUP = 8           # DCIM TILES_PER_GROUP
+NUM_TILES = 4                     # DCIM_NUM_TILES (chip_defines.vh)
 DCIM_CH_IN  = 16                   # ch per CIM op
 TILE_CH_OUT = 16                   # CH_OUT per tile
 OBUF_WORD_BYTES = 16               # 128-bit word
@@ -729,7 +729,7 @@ def build_layer_instructions(layer,
 
     # One-time config: MODE + WEI_BASE + TILE_MASK (constant across pixels)
     init_pairs = [(DCIM_REG_MODE, mode_reg)]
-    for t in range(NUM_TILES_PER_GROUP):
+    for t in range(NUM_TILES):
         wei_word = (ibuf_wei_byte_per_tile[t] if t < len(ibuf_wei_byte_per_tile)
                     else 0) // IBUF_WORD_BYTES
         init_pairs.append((DCIM_REG_WEI_BASE + t * 4, wei_word))
@@ -750,7 +750,7 @@ def build_layer_instructions(layer,
         # Unused tiles (t >= layer.num_tiles) are gated off by
         # DCIM_REG_TILE_MASK below, so their OUT_BASE is don't-care.
         px_pairs = [(DCIM_REG_ACT_BASE, px_act)]
-        for t in range(NUM_TILES_PER_GROUP):
+        for t in range(NUM_TILES):
             if t < layer.num_tiles:
                 # Pixel-major layout: all tiles' channels contiguous per pixel
                 # pixel px occupies num_tiles * 2 words, tile t at offset t*2 within that
@@ -927,7 +927,7 @@ def main():
 
         # Weights per tile
         wei_byte_per_tile = []
-        for t in range(NUM_TILES_PER_GROUP):
+        for t in range(NUM_TILES):
             if t < ly.num_tiles:
                 entries = pack_weight_to_sram(ly, t)
             else:

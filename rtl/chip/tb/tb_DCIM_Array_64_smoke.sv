@@ -46,8 +46,6 @@ module tb_DCIM_Array_64_smoke;
     always #2 clk = ~clk;
 
     DCIM_Array #(
-        .NUM_GROUPS(`DCIM_NUM_GROUPS),
-        .TILES_PER_GROUP(`DCIM_TILES_PER_GROUP),
         .NUM_TILES(NUM_TILES),
         .WD1(`DCIM_WD1),
         .CH_IN(CH_IN),

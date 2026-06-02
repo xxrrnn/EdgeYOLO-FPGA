@@ -4,13 +4,10 @@
 // ============================================================================
 // DCIM_Array_bd - Vivado Block Design 顶层封装
 // ============================================================================
-// lite/chip 结构：DCIM_Tile × NUM_TILES + 单 IBUF + 单 OBUF。
-// Group 层已取消，NUM_GROUPS 仅保留为 BD 参数兼容项，实际要求为 1。
+// lite/chip 结构：DCIM_Tile × NUM_TILES + 单 IBUF + 单 OBUF（无 Group 层）。
 // ============================================================================
 
 module DCIM_Array_bd #(
-    parameter NUM_GROUPS          = `DCIM_NUM_GROUPS,
-    parameter TILES_PER_GROUP     = `DCIM_TILES_PER_GROUP,
     parameter NUM_TILES           = `DCIM_NUM_TILES,
     parameter WD1                 = `DCIM_WD1,
     parameter CH_IN               = `DCIM_CH_IN,
@@ -23,7 +20,6 @@ module DCIM_Array_bd #(
     parameter BUF_DATA_WIDTH      = `DCIM_BUF_DATA_WIDTH,
     parameter AXI_BRAM_ADDR_WIDTH = `DCIM_AXI_BRAM_ADDR_WIDTH,
     parameter IBUF_RD_LATENCY     = `DCIM_IBUF_RD_LATENCY,
-    parameter OBUF_GROUP_BITS     = `DCIM_OBUF_GROUP_BITS,
     parameter OBUF_EXT_ADDR_BITS  = `DCIM_OBUF_EXT_ADDR_BITS,
     parameter BUF_ADDR_WIDTH      = IBUF_ADDR_WIDTH
 )(
@@ -55,15 +51,6 @@ module DCIM_Array_bd #(
 
     output wire ready
 );
-
-    initial begin
-        if (NUM_GROUPS != 1) begin
-            $error("DCIM_Array_bd tile-array implementation requires NUM_GROUPS=1");
-        end
-        if (TILES_PER_GROUP != NUM_TILES) begin
-            $error("DCIM_Array_bd expects TILES_PER_GROUP == NUM_TILES after group removal");
-        end
-    end
 
     localparam ADDR_SHIFT = 4;
     localparam STRB_WIDTH = BUF_DATA_WIDTH / 8;
@@ -170,8 +157,6 @@ module DCIM_Array_bd #(
     assign vpu_obuf_rd_valid = array_obuf_douta_valid;
 
     DCIM_Array #(
-        .NUM_GROUPS      (NUM_GROUPS),
-        .TILES_PER_GROUP (TILES_PER_GROUP),
         .NUM_TILES       (NUM_TILES),
         .WD1             (WD1),
         .CH_IN           (CH_IN),
