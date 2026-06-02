@@ -137,6 +137,7 @@ module im2col_unit #(
     // 保留 rd_wait_cnt 仅作仿真超时保护
     localparam READ_TIMEOUT = 17;  // 16+1 margin（用于强制重编译 VCS 缓存）
     reg [4:0] rd_wait_cnt;
+    reg [4:0] latch_stall_cnt;     // S_READ_LATCH：valid 残留过高时的退出保护
 
     // 锁存的读数据 + 读地址在 128-bit 字内的字节偏移
     reg [GB_BANDWIDTH-1:0] rd_data_reg;
@@ -264,6 +265,7 @@ module im2col_unit #(
             write_chunk_nbyte_r <= '0;
             in_bound          <= 1'b0;
             rd_wait_cnt       <= 0;
+            latch_stall_cnt   <= 0;
             rd_data_reg       <= 0;
             rd_tail_data_reg  <= 0;
             in_byte_in_word_r <= 0;
@@ -361,6 +363,7 @@ module im2col_unit #(
                     ih <= ih_calc;
                     iw <= iw_calc;
                     rd_wait_cnt <= 0;
+                    latch_stall_cnt <= 0;
                     if (ih_calc_ok && iw_calc_ok) begin
                         in_bound          <= 1'b1;
                         // 像素数据在 16B 对齐槽位内的偏移 = (align - CH_IN) + c_chunk*0（c_chunk已含在in_pixel_byte_addr）
@@ -402,12 +405,22 @@ module im2col_unit #(
                 end
 
                 S_READ_LATCH: begin
-                    // 等待流水线残留 valid 消失，防止下一次读操作在 S_READ_WAIT 收到旧数据
-                    if (gb_doutb_valid) begin
-                        // 流水线仍有残留脉冲，在此等待（丢弃残留 valid）
-                        gb_enb <= 1'b0;
-                    end else begin
+                    // 等待流水线残留 valid 消失，防止下一次读操作在 S_READ_WAIT 收到旧数据。
+                    // 若 QA/CDMA 后 valid 异常保持为高，超时后强制进入 S_WRITE（与 READ_TIMEOUT 同量级）。
+                    if (!gb_doutb_valid) begin
+                        latch_stall_cnt <= 0;
+                        state           <= S_WRITE;
+                    end else if (latch_stall_cnt >= READ_TIMEOUT) begin
+                        latch_stall_cnt <= 0;
+                        gb_enb          <= 1'b0;
+`ifdef SIMULATION
+                        $display("[im2col] READ_LATCH timeout oh=%0d ow=%0d kh=%0d kw=%0d c_chunk=%0d",
+                                 oh, ow, kh, kw, c_chunk);
+`endif
                         state <= S_WRITE;
+                    end else begin
+                        gb_enb          <= 1'b0;
+                        latch_stall_cnt <= latch_stall_cnt + 1;
                     end
                 end
 
