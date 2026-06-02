@@ -255,9 +255,9 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 ## 当前验证状态（2026-05-30）
 
-硬件拓扑策略更新：DCIM lite 当前主线为 **4 Tile × 64×64**，`DCIM_Array` 直接由 Tile 阵列 + 共享 2MB IBUF + 共享 16MB OBUF 构成。`Group` 层已退出主 flow，不再作为功能验证对象；`NUM_GROUPS` 仅保留为 BD/module_ref 参数兼容项，实际要求为 1。
+硬件拓扑：DCIM lite 为 **4 Tile × 64×64** 的 Array–Tile 结构（`DCIM_Array` = 4×`DCIM_Tile` + 共享 IBUF/OBUF），无 Group 层。
 
-注意：Vivado module_ref wrapper 会把 `NUM_GROUPS/TILES_PER_GROUP/NUM_TILES/CH_IN/CH_OUT/CYCLE` 固化到 `lite_dcim_array_0_0.v`。修改 `chip_defines.vh` 后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`；否则仿真仍可能使用旧 wrapper 参数，导致数值布局和 golden 不一致。
+注意：Vivado module_ref wrapper 会把 `NUM_TILES/CH_IN/CH_OUT/CYCLE` 固化到 `lite_dcim_array_0_0.v`。修改 `chip_defines.vh` 后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`。
 
 ### 行为模型与综合 RTL 一致性约定
 

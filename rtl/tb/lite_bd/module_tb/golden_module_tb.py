@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """Generate focused module-level BD tests for the lite block design.
 
 The generated data keeps the host/decoder/BD interface unchanged: the testbench still
@@ -21,8 +23,8 @@ import json
 import math
 import os
 import struct
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -49,12 +51,28 @@ require_consistent()
 
 NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'network.json')
 WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'weights')
+RESNET18_NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_qdq', 'network.json')
+RESNET18_WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_qdq', 'weights')
 
 OBUF_WORD_BYTES = BYTES_PER_WORD
 IBUF_WORD_BYTES = BYTES_PER_WORD
 WB_SIZE_BYTES = 0x8000
 NUM_TILES = DCIM_NUM_TILES
 DCIM_CH_IN_INT16 = DCIM_CH_IN // 2
+
+
+def dcim_effective_out_ch(meta: 'ConvMeta', int16: bool = False) -> int:
+    """Actual number of channels DCIM writes per pixel (rounded UP to tile boundary).
+
+    DCIM_Tile always writes INT8_OUT_CH_PER_TILE (=32) channels per tile regardless
+    of meta.out_ch.  When meta.out_ch < num_tiles * INT8_OUT_CH_PER_TILE (e.g. CH_OUT=16
+    with 1 tile = 32 effective channels), DQA/QA must use this larger count for correct
+    per-pixel addressing; the extra channels (out_ch:eff_ch) receive zero weight/bias from
+    WB (zero-initialised) so produce exactly INT8(0) after QA — safe to pass to next layer.
+    """
+    if int16:
+        return meta.num_tiles * DCIM_INT16_OUT_CH_PER_TILE
+    return meta.num_tiles * DCIM_INT8_OUT_CH_PER_TILE
 
 HBM_PHY_BASE = 0x0
 IBUF_PHY_BASE = 0x1000_0000_0
@@ -169,7 +187,8 @@ MODULE_CASES = {
         {'name': 'im2col_1x1_c512', 'layer': 'model.9.cv2.conv', 'in_hw': (4, 4)},
     ],
     'conv_pipeline': [
-        {'name': 'pipe_conv3_s2_c32_to64', 'layer': 'model.3.conv', 'in_hw': (8, 8)},
+        {'name': 'pipe_conv1_c16_to16',      'layer': 'model.2.m.0.cv1.conv', 'in_hw': (4, 4)},  # CH_OUT=16 → eff_ch=32
+        {'name': 'pipe_conv3_s2_c32_to64',   'layer': 'model.3.conv',         'in_hw': (8, 8)},
         {'name': 'pipe_conv1_c512_to64_tilepass', 'layer': 'model.9.cv2.conv', 'in_hw': (4, 4), 'out_ch_limit': 64},
     ],
     'concat_by_cdma': [
@@ -186,10 +205,14 @@ MODULE_CASES = {
     ],
     'mini_network': [
         {'name': 'mini_2conv_c16',
-         'desc': '2-layer Conv1x1 16→16 back-to-back, tests multi-layer OBUF management',
+         'desc': '2-layer Conv1x1 16→16 back-to-back, tests multi-layer OBUF management.'
+                 ' Both layers use genuine 1×1 convs (model.2.m.0.cv1.conv for both).'
+                 ' NOTE: 3×3 second layer (cv2) is intentionally excluded here because'
+                 ' eff_ch propagation with kH*kW > 1 requires CDMA channel-compaction,'
+                 ' which is a separate unimplemented feature.',
          'layers': [
              {'layer': 'model.2.m.0.cv1.conv', 'in_hw': (4, 4), 'in_ch': 16, 'out_ch': 16},
-             {'layer': 'model.2.m.0.cv2.conv', 'in_hw': (4, 4), 'in_ch': 16, 'out_ch': 16},
+             {'layer': 'model.2.m.0.cv1.conv', 'in_hw': (4, 4), 'in_ch': 16, 'out_ch': 16},
          ]},
         {'name': 'mini_3conv_residual_c32',
          'desc': '3-layer: Conv1x1 32→32, Conv1x1 32→32, Add + QA (CSP residual pattern)',
@@ -199,7 +222,427 @@ MODULE_CASES = {
          ],
          'residual_add': True},
     ],
+    # ResNet18 分段（STEP-3）：ResnetSegmentBuilder + 多 checkpoint checks.txt
+    # 可选 spec 字段：checkpoint_policy, output_format, num_blocks, weight_dir
+    'resnet_partial': [
+        {'name': 'resnet_stem_tiny',
+         'desc': 'conv1+MP；32×32 输入，module_tb 快速冒烟（约 1–2 分钟）',
+         'preset': 'stem', 'in_hw': (32, 32)},
+        {'name': 'resnet_stem_smoke',
+         'desc': 'conv1+MP；112×112（完整 BD 上 im2col 很慢，可跑数小时，勿与 tiny 并行双开 simv）',
+         'preset': 'stem', 'in_hw': (112, 112)},
+        {'name': 'resnet_stem_full',
+         'desc': 'conv1 + MaxPool，输入 224×224（压力测试，仿真极慢）',
+         'preset': 'stem', 'in_hw': (224, 224)},
+        {'name': 'resnet_stage1',
+         'desc': 'MaxPool 后 56×56×64 输入，layer1 两个 basic block（conv 1–4）+ 残差',
+         'preset': 'stage1', 'input_hw': (56, 56), 'input_ch': 64},
+        {'name': 'resnet_stage1_2',
+         'desc': '56×56×64 输入，layer1+layer2（conv 1–9，含 downsample），最终 28×28×128',
+         'preset': 'stage1_2', 'input_hw': (56, 56), 'input_ch': 64},
+    ],
 }
+
+# ResNet18 conv[] 下标 → basic block（与 lower_full.py 一致）
+RESNET_BLOCK_SCHEDULE = [
+    ([1, 2], None),
+    ([3, 4], None),
+    ([5, 6], 7),
+    ([8, 9], None),
+    ([10, 11], 12),
+    ([13, 14], None),
+    ([15, 16], 17),
+    ([18, 19], None),
+]
+
+
+def write_checks_list(path: str, entries: Sequence[Tuple[str, str, int, int, int]]) -> None:
+    """Write checks.txt lines: name fname dst_obuf_hex words is_fp32."""
+    with open(path, 'w') as f:
+        for name, fname, dst, words, is_fp32 in entries:
+            f.write(f'{name} {fname} {dst:06x} {words} {is_fp32}\n')
+
+
+# ---------------------------------------------------------------------------
+# ResNet / 多段网络：通用 OBUF 槽位 + numpy golden + 指令发射
+# ---------------------------------------------------------------------------
+class ObufSlots:
+    """1MB 槽位；IM2COL 专用槽在 im2col/DCIM 期间不得存放 live feature。"""
+    FEAT0 = 0x000000
+    FEAT1 = 0x100000   # DCIM 累加输出 / ping-pong 特征
+    OUT = 0x200000
+    IM2COL = 0x300000
+    DQA = 0x400000
+    SHORT = 0x500000
+
+
+@dataclass
+class FeatureTensor:
+    """段内逻辑张量；storage 表示 OBUF 上 im2col 前的数据类型。"""
+    data: np.ndarray
+    storage: str  # 'int8' | 'fp32'
+    slot: int
+
+    @property
+    def h(self) -> int:
+        return int(self.data.shape[0])
+
+    @property
+    def w(self) -> int:
+        return int(self.data.shape[1])
+
+    @property
+    def c(self) -> int:
+        return int(self.data.shape[2])
+
+    def nbytes_obuf(self) -> int:
+        bpe = 4 if self.storage == 'fp32' else 1
+        return self.h * self.w * self.c * bpe
+
+    def fp32_hwc(self) -> np.ndarray:
+        return self.data.astype(np.float32, copy=False)
+
+    def with_slot(self, slot: int) -> 'FeatureTensor':
+        return FeatureTensor(self.data, self.storage, slot)
+
+
+def golden_conv_forward(
+    feat_hwc: np.ndarray,
+    meta: 'ConvMeta',
+    npz: np.lib.npyio.NpzFile,
+    *,
+    im2col_in_ch: Optional[int] = None,
+    acc_eff: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """INT8 im2col → matmul → DQA(ReLU) → QA；返回 (qa_int8_hwc, dqa_fp32_hwc)。"""
+    h, w = feat_hwc.shape[0], feat_hwc.shape[1]
+    ic = im2col_in_ch if im2col_in_ch is not None else feat_hwc.shape[2]
+    feat_i8 = feat_hwc.reshape(h, w, ic).astype(np.int8)
+    if acc_eff is None:
+        acc_eff = (meta.kh * meta.kw * ic + DCIM_CH_IN - 1) // DCIM_CH_IN
+
+    cols = im2col(feat_i8, meta)
+    wflat = npz['weight_int8'].reshape(meta.out_ch, -1).astype(np.int32)
+    k_size = acc_eff * DCIM_CH_IN
+    if wflat.shape[1] < k_size:
+        wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
+    accum = cols.astype(np.int32) @ wflat.T
+
+    eff_ch = dcim_effective_out_ch(meta, False)
+    scale = np.resize(npz['dqa_scale'].astype(np.float32), eff_ch)
+    bias = np.resize(npz['dqa_bias'].astype(np.float32), eff_ch)
+    qscale = np.float32(1.0 / float(npz['act_scale']))
+    oh, ow = out_hw(h, w, meta)
+
+    dqa_flat = np.maximum(
+        accum.astype(np.float32) * scale[None, :eff_ch] + bias[None, :eff_ch], 0.0)
+    dqa_hwc = dqa_flat.reshape(oh, ow, eff_ch)
+
+    qa = np.clip(np.round(dqa_flat * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta.out_ch)
+    if eff_ch > meta.out_ch:
+        qa_pad = np.zeros((oh, ow, eff_ch), dtype=np.int8)
+        qa_pad[:, :, :meta.out_ch] = qa
+        qa = qa_pad
+    return qa, dqa_hwc
+
+
+def golden_basic_block(
+    x_hwc: np.ndarray,
+    metas: Sequence['ConvMeta'],
+    npzs: Sequence[np.lib.npyio.NpzFile],
+    ds_meta: Optional['ConvMeta'] = None,
+    ds_npz: Optional[np.lib.npyio.NpzFile] = None,
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    """ResNet basic block 参考：conv1→conv2 [→ downsample(shortcut)] → FP32 add → INT8 QA。
+
+    残差在 FP32 域相加（与 lower_full emit_add 一致）；INT8 段入口 shortcut 用 fp32(x) 提升。
+    """
+    skip = x_hwc.copy()
+    cur = x_hwc
+    ckpt: Dict[str, np.ndarray] = {}
+    dqa_main = None
+
+    for i, (meta, npz) in enumerate(zip(metas, npzs)):
+        ic = cur.shape[2]
+        acc_eff = (meta.kh * meta.kw * ic + DCIM_CH_IN - 1) // DCIM_CH_IN
+        cur, dqa = golden_conv_forward(cur, meta, npz, im2col_in_ch=ic, acc_eff=acc_eff)
+        ckpt[f'conv{i}_dqa'] = dqa
+        dqa_main = dqa
+
+    if ds_meta is not None and ds_npz is not None:
+        sic = skip.shape[2]
+        acc_ds = (ds_meta.kh * ds_meta.kw * sic + DCIM_CH_IN - 1) // DCIM_CH_IN
+        _, dqa_ds = golden_conv_forward(skip, ds_meta, ds_npz, im2col_in_ch=sic, acc_eff=acc_ds)
+        ckpt['downsample_dqa'] = dqa_ds
+        if dqa_main.shape != dqa_ds.shape:
+            raise ValueError(
+                f'basic block add shape mismatch main{dqa_main.shape} vs ds{dqa_ds.shape}')
+        sum_fp32 = (dqa_main + dqa_ds).astype(np.float32)
+    else:
+        skip_fp32 = skip.astype(np.float32)
+        if dqa_main.shape != skip_fp32.shape:
+            raise ValueError(
+                f'basic block add shape mismatch main{dqa_main.shape} vs skip{skip_fp32.shape}')
+        sum_fp32 = (dqa_main + skip_fp32).astype(np.float32)
+
+    ckpt['block_sum_fp32'] = sum_fp32
+    return sum_fp32.astype(np.float32), ckpt
+
+
+def golden_qa_int8_from_fp32(fp32_hwc: np.ndarray, act_scale: float) -> np.ndarray:
+    qscale = np.float32(1.0 / float(act_scale))
+    eff_ch = fp32_hwc.shape[2]
+    flat = np.clip(np.round(fp32_hwc.reshape(-1, eff_ch) * qscale), -128, 127).astype(np.int8)
+    return flat.reshape(fp32_hwc.shape[0], fp32_hwc.shape[1], eff_ch)
+
+
+@dataclass
+class ResnetSegmentBuilder:
+    """从 network.json + block 调度生成 inst / preload / 多 checkpoint。"""
+    net: Dict[str, dict]
+    conv_names: List[str]
+    weight_dir: str
+    rng: np.random.Generator
+    out_dir: str
+
+    fast_inst: List[int] = field(default_factory=list)
+    wb_data: bytearray = field(default_factory=lambda: bytearray(WB_SIZE_BYTES))
+    all_weight_words: List[str] = field(default_factory=list)
+    ibuf_weight_offsets: List[int] = field(default_factory=list)
+    ibuf_byte_cursor: int = 0
+    wb_layer_i: int = 0
+    checks: List[Tuple[str, str, int, int, int]] = field(default_factory=list)
+    fast_preloads: List[Tuple[str, int]] = field(default_factory=list)
+    checkpoint_policy: str = 'per_conv_dqa'  # 'final_only' | 'per_conv_dqa' | 'all'
+
+    WB_LAYER_STRIDE: int = 0x100
+    WB_BIAS_BASE: int = 0x1000
+    WB_QSCALE_BASE: int = 0x2000
+    _dqa_flags: int = 0x1
+    _qa_flags: int = 0x0
+    _im2col_flags: int = 0x0
+
+    def meta_for(self, conv_idx: int) -> ConvMeta:
+        return conv_meta(self.net, self.conv_names[conv_idx], weight_dir=self.weight_dir)
+
+    def _pack_weights(self, meta: ConvMeta, weights: np.ndarray, acc_eff: int) -> int:
+        off = self.ibuf_byte_cursor
+        self.ibuf_weight_offsets.append(off)
+        tile_words = []
+        for t in range(meta.num_tiles):
+            tile_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, acc_override=acc_eff)]
+        self.all_weight_words.extend(tile_words)
+        self.ibuf_byte_cursor += len(tile_words) * IBUF_WORD_BYTES
+        return len(self.ibuf_weight_offsets) - 1
+
+    def _pack_wb(self, npz: np.lib.npyio.NpzFile, meta: ConvMeta) -> int:
+        idx = self.wb_layer_i
+        s_off = self.WB_LAYER_STRIDE * idx
+        b_off = self.WB_BIAS_BASE + self.WB_LAYER_STRIDE * idx
+        q_off = self.WB_QSCALE_BASE + 4 * idx
+        scale = np.resize(npz['dqa_scale'].astype(np.float32), meta.out_ch)
+        bias = np.resize(npz['dqa_bias'].astype(np.float32), meta.out_ch)
+        qscale = np.float32(1.0 / float(npz['act_scale']))
+        self.wb_data[s_off:s_off + len(scale.tobytes())] = scale.tobytes()
+        self.wb_data[b_off:b_off + len(bias.tobytes())] = bias.tobytes()
+        self.wb_data[q_off:q_off + 4] = qscale.tobytes()
+        self.wb_layer_i += 1
+        return idx
+
+    def append_check(self, tag: str, arr: np.ndarray, dst_slot: int, is_fp32: bool) -> None:
+        words = fp32_hwc_words(arr) if is_fp32 else int8_hwc_words(arr)
+        fname = f'expected_{tag}.hex'
+        write_hex(os.path.join(self.out_dir, fname), words)
+        self.checks.append((tag, fname, dst_slot, len(words), int(is_fp32)))
+
+    def emit_qa_int8(self, feat: FeatureTensor, wb_i: int, meta: ConvMeta) -> FeatureTensor:
+        """FP32 feature → in-place INT8（下一段 conv 的 im2col 输入）。"""
+        ch = feat.c
+        self.fast_inst += vpu_exec(
+            UNIT_QA, feat.slot, 0, ch, feat.h, feat.w,
+            0, self.WB_QSCALE_BASE + 4 * wb_i, feat.slot, flags=self._qa_flags)
+        qscale = np.float32(1.0 / float(load_layer_npz_checked(meta, self.net)['act_scale']))
+        out = np.clip(np.round(feat.fp32_hwc() * qscale), -128, 127).astype(np.int8)
+        return FeatureTensor(out, 'int8', feat.slot)
+
+    def emit_save_shortcut_fp32(self, feat: FeatureTensor) -> None:
+        """CDMA 保存 FP32 shortcut（lower_full：elem_bytes=4）。"""
+        if feat.storage != 'fp32':
+            raise ValueError('emit_save_shortcut_fp32 requires fp32 feature tensor')
+        self.fast_inst += cdma_copy(
+            OBUF_PHY_BASE + feat.slot, OBUF_PHY_BASE + ObufSlots.SHORT, feat.nbytes_obuf())
+
+    def emit_preload_shortcut_fp32(self, feat: FeatureTensor, tag: str = 'skip_fp32') -> None:
+        """段入口 INT8 特征：预加载 fp32(x) 到 SHORT，供块末 AD 使用。"""
+        fname = f'{tag}.hex'
+        write_hex(os.path.join(self.out_dir, fname), fp32_hwc_words(feat.fp32_hwc()))
+        self.fast_preloads.append((fname, OBUF_PHY_BASE + ObufSlots.SHORT))
+
+    def emit_conv(
+        self,
+        meta: ConvMeta,
+        feat: FeatureTensor,
+        *,
+        skip_input_qa: bool,
+        dqa_slot: int = ObufSlots.DQA,
+        qa_dst_slot: Optional[int] = ObufSlots.FEAT1,
+        checkpoint_tag: Optional[str] = None,
+    ) -> Tuple[FeatureTensor, np.ndarray]:
+        """im2col(FEAT*) → DCIM(FEAT1) → DQA → [QA]；返回更新后的特征与 dqa HWC。"""
+        wb_i = self._pack_wb(load_layer_npz_checked(meta, self.net, require_activation=True), meta)
+        npz = load_layer_npz_checked(meta, self.net, require_activation=True)
+        acc_eff = (meta.kh * meta.kw * feat.c + DCIM_CH_IN - 1) // DCIM_CH_IN
+        widx = self._pack_weights(meta, npz['weight_int8'], acc_eff)
+
+        if not skip_input_qa and feat.storage == 'fp32':
+            self.fast_inst += vpu_exec(
+                UNIT_QA, feat.slot, 0, feat.c, feat.h, feat.w,
+                0, self.WB_QSCALE_BASE + 4 * wb_i, feat.slot, flags=self._qa_flags)
+            qscale = np.float32(1.0 / float(npz['act_scale']))
+            feat = FeatureTensor(
+                np.clip(np.round(feat.fp32_hwc() * qscale), -128, 127).astype(np.int8),
+                'int8', feat.slot)
+
+        oh, ow = out_hw(feat.h, feat.w, meta)
+        eff_ch = dcim_effective_out_ch(meta, False)
+        self.fast_inst += vpu_exec(
+            UNIT_IM2COL, feat.slot, 0, feat.c, feat.h, feat.w,
+            0, 0, ObufSlots.IM2COL, encode_addr_break(meta), oh, ow, flags=self._im2col_flags)
+        self.fast_inst += dcim_layer_inst(
+            meta, oh * ow, ObufSlots.IM2COL, ObufSlots.FEAT1,
+            IBUF_ACT, IBUF_WEI + self.ibuf_weight_offsets[widx], int16=False, acc_override=acc_eff)
+        self.fast_inst += vpu_exec(
+            UNIT_DQA, ObufSlots.FEAT1, 0, eff_ch, oh, ow,
+            self.WB_BIAS_BASE + self.WB_LAYER_STRIDE * wb_i,
+            self.WB_LAYER_STRIDE * wb_i, dqa_slot, flags=self._dqa_flags)
+
+        qa_out, dqa_hwc = golden_conv_forward(
+            feat.data, meta, npz, im2col_in_ch=feat.c, acc_eff=acc_eff)
+
+        if checkpoint_tag and self.checkpoint_policy != 'final_only':
+            self.append_check(checkpoint_tag, dqa_hwc, dqa_slot, is_fp32=True)
+
+        if qa_dst_slot is not None:
+            self.fast_inst += vpu_exec(
+                UNIT_QA, dqa_slot, 0, eff_ch, oh, ow,
+                0, self.WB_QSCALE_BASE + 4 * wb_i, qa_dst_slot, flags=self._qa_flags)
+            return FeatureTensor(qa_out, 'int8', qa_dst_slot), dqa_hwc
+
+        return FeatureTensor(dqa_hwc, 'fp32', dqa_slot), dqa_hwc
+
+    def emit_add_fp32(self, main_slot: int, skip_slot: int, dst_slot: int,
+                      h: int, w: int, c: int) -> None:
+        self.fast_inst += vpu_exec(
+            UNIT_AD, main_slot, skip_slot, c, h, w, 0, 0, dst_slot)
+
+    def emit_basic_block(
+        self,
+        conv_ids: Sequence[int],
+        ds_idx: Optional[int],
+        cur: FeatureTensor,
+        *,
+        block_entry_preloaded_shortcut: bool = False,
+    ) -> FeatureTensor:
+        """一个 ResNet basic block；块末 FP32 落在 FEAT1（与 compiler 一致，下一块再 QA）。"""
+        metas = [self.meta_for(i) for i in conv_ids]
+        npzs = [load_layer_npz_checked(m, self.net, require_activation=True) for m in metas]
+        block_in = cur.data.copy()
+
+        if block_entry_preloaded_shortcut:
+            pass
+        elif cur.storage == 'fp32':
+            self.emit_save_shortcut_fp32(cur)
+        else:
+            raise ValueError(
+                'INT8 block input requires preload fp32 shortcut on ObufSlots.SHORT')
+
+        skip_input_qa = (cur.storage == 'fp32')
+        for ci, cidx in enumerate(conv_ids):
+            meta = metas[ci]
+            is_last_conv = (ci == len(conv_ids) - 1)
+            qa_slot = ObufSlots.FEAT1 if not is_last_conv else None
+            cur, _ = self.emit_conv(
+                meta, cur,
+                skip_input_qa=skip_input_qa and ci == 0,
+                dqa_slot=ObufSlots.DQA,
+                qa_dst_slot=qa_slot,
+                checkpoint_tag=(
+                    f'conv{cidx}_dqa' if self.checkpoint_policy != 'final_only' else None),
+            )
+            skip_input_qa = False
+
+        meta_ds = self.meta_for(ds_idx) if ds_idx is not None else None
+        npz_ds = (load_layer_npz_checked(meta_ds, self.net, require_activation=True)
+                  if meta_ds is not None else None)
+        sum_fp32, ckpt = golden_basic_block(block_in, metas, npzs, meta_ds, npz_ds)
+        oh, ow, oc = sum_fp32.shape[0], sum_fp32.shape[1], sum_fp32.shape[2]
+
+        if ds_idx is not None:
+            skip_feat = FeatureTensor(
+                block_in.astype(np.float32), 'fp32', ObufSlots.SHORT)
+            self.emit_conv(
+                meta_ds, skip_feat,
+                skip_input_qa=False,
+                dqa_slot=ObufSlots.SHORT,
+                qa_dst_slot=None,
+                checkpoint_tag=(
+                    'downsample_dqa' if self.checkpoint_policy != 'final_only' else None),
+            )
+            self.emit_add_fp32(ObufSlots.DQA, ObufSlots.SHORT, ObufSlots.FEAT1, oh, ow, oc)
+        else:
+            self.emit_add_fp32(ObufSlots.DQA, ObufSlots.SHORT, ObufSlots.FEAT1, oh, ow, oc)
+
+        if self.checkpoint_policy == 'all':
+            self.append_check('block_sum_fp32', sum_fp32, ObufSlots.FEAT1, is_fp32=True)
+        return FeatureTensor(sum_fp32, 'fp32', ObufSlots.FEAT1)
+
+    def finalize_case(
+        self,
+        *,
+        name: str,
+        layer: str,
+        shape: str,
+        input_feat: FeatureTensor,
+        output_feat: FeatureTensor,
+        primary_check_tag: str = 'final',
+    ) -> dict:
+        if output_feat.storage == 'int8':
+            exp = output_feat.data
+            self.append_check(primary_check_tag, exp, output_feat.slot, is_fp32=False)
+            exp_words = int8_hwc_words(exp)
+        else:
+            exp = output_feat.fp32_hwc()
+            self.append_check(primary_check_tag, exp, output_feat.slot, is_fp32=True)
+            exp_words = fp32_hwc_words(exp)
+
+        src_words = (int8_hwc_words(input_feat.data) if input_feat.storage == 'int8'
+                     else fp32_hwc_words(input_feat.fp32_hwc()))
+        write_hex(os.path.join(self.out_dir, 'expected.hex'),
+                  fp32_hwc_words(exp) if output_feat.storage == 'fp32' else int8_hwc_words(exp))
+        write_hex(os.path.join(self.out_dir, 'src0.hex'), src_words)
+        write_hex(os.path.join(self.out_dir, 'weight.hex'), self.all_weight_words)
+        loads = [('src0.hex', OBUF_PHY_BASE + input_feat.slot),
+                 ('weight.hex', IBUF_PHY_BASE + IBUF_WEI)]
+        loads.extend(self.fast_preloads)
+        make_fast_svh(loads, self.out_dir)
+        write_checks_list(os.path.join(self.out_dir, 'checks.txt'), self.checks)
+        self.fast_inst += [header(OP_END, 0, 0)]
+        return {
+            'module': 'resnet_partial',
+            'name': name,
+            'layer': layer,
+            'dst': output_feat.slot,
+            'words': len(exp_words),
+            'fast_inst': self.fast_inst,
+            'hbm': hbm_blob([
+                (HBM_OFF_INPUT0, words_to_blob(src_words)),
+                (HBM_OFF_WEIGHT, words_to_blob(self.all_weight_words)),
+            ]),
+            'wb': bytes(self.wb_data),
+            'shape': shape,
+            'checks': self.checks,
+        }
+
 
 @dataclass
 class ConvMeta:
@@ -226,13 +669,16 @@ class ConvMeta:
 
     @property
     def acc_depth(self) -> int:
-        """acc_depth 对应 INT8 模式（ceil(K/16)）"""
+        """acc_depth = ceil(kH*kW*CH_IN / DCIM_CH_IN) = ceil(K / 64).
+        每个 acc step 从 IBUF 读 INT8_ACT_WORDS=4 个 128-bit 字 = 64 INT8 通道。
+        注意：此处除数是 DCIM_CH_IN=64，不是 16（16 是每个 128-bit 字的 INT8 容量）。"""
         return (self.in_ch * self.kh * self.kw + DCIM_CH_IN - 1) // DCIM_CH_IN
 
     @property
     def acc_depth_int16(self) -> int:
-        """INT16 模式 acc_depth = ceil(K/16)
-        每步读 2 IBUF word（lo: ch0..7 INT16，hi: ch8..15 INT16）= 16 个 INT16。"""
+        """INT16 模式 acc_depth = ceil(K / DCIM_CH_IN) = ceil(K / 64).
+        INT16 时每步读 INT16_ACT_WORDS=8 个 128-bit 字（每字 8 个 INT16），
+        仍对应 DCIM_CH_IN=64 个逻辑通道（每通道 2 bytes）。"""
         return (self.in_ch * self.kh * self.kw + DCIM_CH_IN - 1) // DCIM_CH_IN
 
     @property
@@ -272,23 +718,34 @@ def layer_npz(name: str) -> str:
     return os.path.join(WEIGHT_DIR, name.replace('.', '_') + '.npz')
 
 
-def conv_meta(net: Dict[str, dict], name: str) -> ConvMeta:
+def conv_meta(net: Dict[str, dict], name: str, weight_dir: str = None) -> ConvMeta:
     ly = net[name]
     if isinstance(ly['stride'], list):
         stride_h, stride_w = ly['stride'][0], ly['stride'][1]
     else:
-        stride_h = stride_w = int(ly['stride'])
+        stride_h, stride_w = int(ly['stride'])
     pad = ly['padding']
     if isinstance(pad, list):
         pad_h0, pad_w0, pad_h1, pad_w1 = pad[0], pad[1], pad[2], pad[3]
     else:
         pad_h0 = pad_w0 = pad_h1 = pad_w1 = int(pad)
+    wd = weight_dir if weight_dir is not None else WEIGHT_DIR
+    npz_path = os.path.join(wd, name.replace('.', '_') + '.npz')
     return ConvMeta(
         name, ly['in_channels'], ly['out_channels'],
         ly['kernel_h'], ly['kernel_w'],
         stride_h, stride_w, pad_h0, pad_w0, pad_h1, pad_w1,
-        layer_npz(name),
+        npz_path,
     )
+
+
+def resnet_conv_layer_names(network: dict) -> List[str]:
+    return [ly['name'] for ly in network['layers'] if ly.get('type') == 'conv']
+
+
+def resnet_maxpool_hw(h: int, w: int) -> Tuple[int, int]:
+    """ResNet stem MaxPool 3×3 stride 2 pad 1."""
+    return (h + 2 - 3) // 2 + 1, (w + 2 - 3) // 2 + 1
 
 
 def propagate_conv_im2col_shapes(network: dict) -> Dict[str, ConvIm2colShape]:
@@ -517,14 +974,16 @@ def im2col(feat: np.ndarray, meta: ConvMeta) -> np.ndarray:
     return out
 
 
-def im2col_int16(feat: np.ndarray, meta: ConvMeta) -> np.ndarray:
-    """INT16 im2col：每行 acc_depth_int16×16 个 INT16 元素（每步 CH_IN=16 个 INT16）
-    每 acc step = 2 IBUF words（lo: ch0..7 INT16，hi: ch8..15 INT16）= 16 个 INT16。
-    布局：连续行 K=acc_depth×16 列，dtype int16，激活值 sign-extend INT8→INT16。"""
+def im2col_int16(feat: np.ndarray, meta: ConvMeta, acc_override: int = None) -> np.ndarray:
+    """INT16 im2col：每行 acc×DCIM_CH_IN 个 INT16 元素（每 acc step 64 逻辑通道）。
+    布局与 INT8 im2col 同构，dtype int16；输入可为 INT8/INT16（经 int() sign-extend）。"""
     h, w, c = feat.shape
     oh, ow = out_hw(h, w, meta)
-    acc = meta.acc_depth_int16          # = ceil(K / 16)
-    cols = acc * DCIM_CH_IN             # = acc * 16（每步 16 个 INT16）
+    if acc_override is not None:
+        acc = acc_override
+    else:
+        acc = (c * meta.kh * meta.kw + DCIM_CH_IN - 1) // DCIM_CH_IN
+    cols = acc * DCIM_CH_IN
     out = np.zeros((oh * ow, cols), dtype=np.int16)
     for oy in range(oh):
         for ox in range(ow):
@@ -593,11 +1052,19 @@ def pack_weight_entry(weights_16: np.ndarray) -> int:
 
 
 def pack_weight_tile(meta: ConvMeta, weight_int8: np.ndarray, tile: int,
-                     int16: bool = False) -> List[int]:
-    """打包单个 Tile 的 INT8 权重到 IBUF SRAM word 格式。"""
+                     int16: bool = False, acc_override: int = None) -> List[int]:
+    """打包单个 Tile 的 INT8 权重到 IBUF SRAM word 格式。
+
+    acc_override: 如果非 None，用此值代替 meta.acc_depth 计算 K（DCIM acc steps 数）。
+    当 im2col_in_ch > meta.in_ch 时，acc_depth_eff = ceil(kH*kW*im2col_in_ch / DCIM_CH_IN)
+    可能大于 meta.acc_depth。额外 acc steps 对应的权重补零。
+    """
     ch_base = tile * DCIM_INT8_OUT_CH_PER_TILE
     flat = weight_int8.reshape(meta.out_ch, -1)
-    acc = meta.acc_depth_int16 if int16 else meta.acc_depth
+    if acc_override is not None:
+        acc = acc_override
+    else:
+        acc = meta.acc_depth_int16 if int16 else meta.acc_depth
     pad_to = acc * DCIM_CH_IN
     if flat.shape[1] < pad_to:
         flat = np.pad(flat, ((0, 0), (0, pad_to - flat.shape[1])), constant_values=0)
@@ -761,15 +1228,22 @@ def make_fast_svh(fast_loads: List[Tuple[str, int]], out_dir: str) -> None:
 
 def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_obuf: int,
                     ibuf_act: int, ibuf_wei: int, skip_cdma: bool = False,
-                    int16: bool = False) -> List[int]:
+                    int16: bool = False, acc_override: int = None) -> List[int]:
     """生成 DCIM 指令序列。
     int16=True 时：
       - mode = MODE_INT16，acc_depth = acc_depth_int16
       - 每像素 ACT_BASE 步进 acc_depth_int16 * INT16_ACT_WORDS
       - 每像素每 tile 输出 DCIM_INT16_OUT_WORDS_PER_TILE 个 128-bit word
+
+    acc_override: 当 im2col_in_ch > meta.in_ch 时，有效 acc_depth =
+      ceil(kH*kW*im2col_in_ch / DCIM_CH_IN)，需通过此参数传入。
+      额外 acc steps 对应的权重补零（zero-padded in pack_weight_tile）。
     """
     inst = []
-    acc = meta.acc_depth_int16 if int16 else meta.acc_depth
+    if acc_override is not None:
+        acc = acc_override
+    else:
+        acc = meta.acc_depth_int16 if int16 else meta.acc_depth
     act_words_per_row = DCIM_INT16_ACT_WORDS if int16 else DCIM_INT8_ACT_WORDS
     im2col_bytes = num_pixels * acc * OBUF_WORD_BYTES * act_words_per_row
     if not skip_cdma:
@@ -1055,8 +1529,17 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     accum = cols.astype(np.int32) @ wflat.T
     dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
     qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta.out_ch)
+    # Pad to effective DCIM output channels: DCIM tile always writes
+    # INT8_OUT_CH_PER_TILE (=32) channels per pixel regardless of meta.out_ch.
+    # Extra channels receive zero weight/bias from WB → QA output = 0.
+    eff_ch = dcim_effective_out_ch(meta)
+    if eff_ch > meta.out_ch:
+        qa_padded = np.zeros((oh, ow, eff_ch), dtype=np.int8)
+        qa_padded[:, :, :meta.out_ch] = qa
+    else:
+        qa_padded = qa
     src_words = int8_hwc_words(feat)
-    exp_words = int8_hwc_words(qa)
+    exp_words = int8_hwc_words(qa_padded)
     weight_words = []
     for t in range(meta.num_tiles):
         weight_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t)]
@@ -1066,8 +1549,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_AUX,
                          encode_addr_break(meta), oh, ow)
     fast_inst += dcim_layer_inst(meta, oh * ow, OBUF_AUX, OBUF_SRC1, IBUF_ACT, IBUF_WEI)
-    fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, meta.out_ch, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x1)
-    fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, meta.out_ch, oh, ow, 0, WB_QSCALE, OBUF_DST)
+    fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, eff_ch, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x1)
+    fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, eff_ch, oh, ow, 0, WB_QSCALE, OBUF_DST)
     fast_inst += [header(OP_END, 0, 0)]
     fast_loads = [
         ('src0.hex', OBUF_PHY_BASE + OBUF_SRC0),
@@ -1078,7 +1561,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     wb = wb_blob([(WB_SCALE, fp32_blob(scale)), (WB_BIAS, fp32_blob(bias)), (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
     return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST, 'words': len(exp_words),
             'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
-            'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{meta.out_ch} acc_depth={meta.acc_depth} tiles={meta.num_tiles}'}
+            'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{meta.out_ch}(eff={eff_ch}) acc={meta.acc_depth} tiles={meta.num_tiles}'}
 
 
 def make_concat_by_cdma_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
@@ -1262,39 +1745,34 @@ def make_add_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
             'wb': bytes(WB_SIZE_BYTES), 'shape': f'hwc={h}x{w}x{c}'}
 
 
-def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
-    """Multi-layer network test: chain conv layers with optional residual add.
-    Supports QUANT=int8 (default) and QUANT=int16 via spec['int16'].
-    INT16: DCIM INT16, DQA accum16→fp32, QA fp32→int16.
-    All layers use the same quant mode within one mini_network test.
+def mini_int16_im2col_bytes(h: int, w: int, acc_eff: int) -> int:
+    return h * w * acc_eff * DCIM_CH_IN * 2
 
-    OBUF slot plan (each 1MB region, OBUF total 16MB):
-      SLOT_A = 0x000000  input feature (INT8)
-      SLOT_B = 0x100000  layer 0 QA output / layer 1 input (INT8 or INT16)
-      SLOT_C = 0x200000  DCIM accumulator scratch / final output
-      SLOT_D = 0x300000  im2col scratch / DQA scratch
-      SLOT_E = 0x400000  layer 0 DQA output (FP32, saved for residual add)
-      SLOT_F = 0x500000  layer 1 DQA output (FP32, saved for residual add)
+
+def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
+    """Multi-layer conv chain (+ optional residual add). QUANT=int8 or int16.
+
+    OBUF slots (INT8/INT16 multi-layer share inter-layer layout):
+      A/0x000000  input   B/0x100000  DCIM out + inter-layer feature
+      C/0x200000  final output (INT16) / DCIM out (INT8 single-path)
+      D/0x300000  im2col + DQA FP32 scratch   E/F  residual FP32   F  zero pool (INT16 CDMA)
     """
     layer_specs = spec['layers']
     has_residual = spec.get('residual_add', False)
     num_layers = len(layer_specs)
     use_int16: bool = spec.get('int16', False)
-    # flags for instructions
-    _dqa_flags = 0x3 if use_int16 else 0x1  # bit0=relu, bit1=int16_mode
-    _qa_flags  = 0x2 if use_int16 else 0x0   # bit1=int16_mode
-    _im2col_flags = 0x2 if use_int16 else 0x0  # bit1=int16_mode
+    _dqa_flags = 0x1
+    _qa_flags = 0x2 if use_int16 else 0x0
+    _im2col_flags = 0x2 if use_int16 else 0x0
 
-    WB_LAYER_STRIDE = 0x100   # 256 bytes per layer (fits up to 64 channels × 4B)
+    WB_LAYER_STRIDE = 0x100
     WB_BIAS_BASE = 0x1000
     WB_QSCALE_BASE = 0x2000
 
-    SLOT_A = 0x000000
-    SLOT_B = 0x100000
-    SLOT_C = 0x200000
-    SLOT_D = 0x300000
-    SLOT_E = 0x400000
-    SLOT_F = 0x500000
+    SLOT_A, SLOT_B, SLOT_C, SLOT_D = 0x000000, 0x100000, 0x200000, 0x300000
+    SLOT_E, SLOT_F = 0x400000, 0x500000
+    SLOT_DCIM_OUT = SLOT_B if use_int16 else SLOT_C
+    SLOT_ZERO = SLOT_F
 
     # --- Load per-layer conv metadata ---
     metas = []
@@ -1306,6 +1784,20 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         metas.append(m)
 
     h0, w0 = layer_specs[0]['in_hw']
+
+    # Per-layer effective DCIM output channel counts (computed early; used in both
+    # expected-output generation and instruction-stream building).
+    layer_eff_ch = [dcim_effective_out_ch(m, use_int16) for m in metas]
+
+    # Per-layer effective acc_depth for DCIM, accounting for eff_ch propagation.
+    # When im2col_in_ch > meta.in_ch (from prev layer's eff_ch), the im2col produces
+    # more acc steps: acc_eff = ceil(kH*kW*im2col_in_ch / DCIM_CH_IN).
+    # The extra acc steps have zero activations + zero-padded weights → contribute 0.
+    _im2col_ins = [metas[0].in_ch] + [layer_eff_ch[i - 1] for i in range(1, len(metas))]
+    layer_acc_eff = [
+        (m.kh * m.kw * ic + DCIM_CH_IN - 1) // DCIM_CH_IN
+        for m, ic in zip(metas, _im2col_ins)
+    ]
 
     # --- Golden computation + WB/weight packing ---
     feat = random_int8(rng, (h0, w0, metas[0].in_ch))
@@ -1338,48 +1830,97 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         # Golden: im2col → matmul → DQA/ReLU
         oh = (cur_h + meta.pad_h0 + meta.pad_h1 - meta.kh) // meta.stride_h + 1
         ow = (cur_w + meta.pad_w0 + meta.pad_w1 - meta.kw) // meta.stride_w + 1
-        cols = im2col(current_int8.reshape(cur_h, cur_w, meta.in_ch), meta)
-        wflat = weights.reshape(meta.out_ch, -1).astype(np.int32)
-        k_size = meta.acc_depth * DCIM_CH_IN
-        if wflat.shape[1] < k_size:
-            wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
-        accum = cols.astype(np.int32) @ wflat.T
-        dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
+
+        acc_eff_i = layer_acc_eff[i]
+
+        eff_ch_i = layer_eff_ch[i]
+        im2col_in_ch = meta.in_ch if i == 0 else layer_eff_ch[i - 1]
+
+        if use_int16:
+            # INT16 golden: im2col_in_ch may exceed meta.in_ch when eff_ch padding propagates.
+            feat_i = current_int8.reshape(cur_h, cur_w, im2col_in_ch)
+            cols = im2col_int16(feat_i, meta, acc_override=acc_eff_i)
+
+            # INT16 DCIM: 4 nibbles = 1 INT16 weight — cannot sign-extend INT8 model weights.
+            # Same as conv_pipeline / dcim_matmul INT16 cases: random w16 + model DQA scale/bias.
+            num_logical_oc = meta.num_tiles * DCIM_LOGICAL_OUT_PER_TILE
+            K_eff = acc_eff_i * DCIM_CH_IN
+            w16 = rng.integers(-2048, 2048, size=(num_logical_oc, K_eff), dtype=np.int32).astype(np.int16)
+            scale_ext = np.resize(scale, num_logical_oc)
+            bias_ext = np.resize(bias, num_logical_oc)
+            accum = (cols.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
+        else:
+            cols = im2col(current_int8.reshape(cur_h, cur_w, meta.in_ch).astype(np.int8), meta)
+            wflat = weights.reshape(meta.out_ch, -1).astype(np.int32)
+            k_size = meta.acc_depth * DCIM_CH_IN
+            if wflat.shape[1] < k_size:
+                wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
+            accum = cols.astype(np.int32) @ wflat.T
+
+        if use_int16:
+            dqa = np.maximum(accum.astype(np.float32) * scale_ext[None, :] + bias_ext[None, :], 0.0)
+            qa_ch = num_logical_oc
+        else:
+            dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
+            qa_ch = meta.out_ch
         layer_dqa_fp32.append(dqa)
         qa_out_dtype = np.int16 if use_int16 else np.int8
         qa_clip = (-32768, 32767) if use_int16 else (-128, 127)
-        qa = np.clip(np.round(dqa * qscale), qa_clip[0], qa_clip[1]).astype(qa_out_dtype).reshape(oh, ow, meta.out_ch)
-        current_int8 = qa.astype(np.int8)  # next layer still reads INT8 feature (re-quant)
+        qa = np.clip(np.round(dqa * qscale), qa_clip[0], qa_clip[1]).astype(qa_out_dtype).reshape(oh, ow, qa_ch)
+        # Pad to eff_ch so golden im2col matches hardware OBUF layout for the next layer.
+        if eff_ch_i > meta.out_ch:
+            qa_padded = np.zeros((oh, ow, eff_ch_i), dtype=qa_out_dtype)
+            qa_padded[:, :, :meta.out_ch] = qa
+            current_int8 = qa_padded
+        else:
+            current_int8 = qa
         layer_oh_ow.append((oh, ow))
         cur_h, cur_w = oh, ow
 
-        # Weight packing for IBUF
+        # Weight packing for IBUF (use acc_eff_i so DCIM reads the correct
+        # number of acc steps including zero-padded extra steps from eff_ch propagation).
         ibuf_weight_offsets.append(ibuf_byte_cursor)
         tile_words = []
         for t in range(meta.num_tiles):
-            tile_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t)]
+            if use_int16:
+                w16_tile = w16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE, :]
+                tile_words += [f'{e:032x}' for e in pack_weight_tile_int16(w16_tile, t, acc_eff_i)]
+            else:
+                tile_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, acc_override=acc_eff_i)]
         all_weight_words += tile_words
         ibuf_byte_cursor += len(tile_words) * IBUF_WORD_BYTES
 
     # --- Compute final expected output ---
+    # The DCIM tile always writes eff_ch channels per pixel (rounded up to tile boundary).
+    # DQA/QA instructions use eff_ch; extra channels produce INT8(0) from zero WB.
+    # Expected output must match this eff_ch-wide layout.
+    eff_ch_final = layer_eff_ch[-1]
     if has_residual and num_layers >= 2:
         fp32_sum = (layer_dqa_fp32[0] + layer_dqa_fp32[1]).astype(np.float32)
         qscale_final = layer_qscales[-1]
         oh_f, ow_f = layer_oh_ow[1]
         qa_clip = (-32768, 32767) if use_int16 else (-128, 127)
         qa_out_dtype = np.int16 if use_int16 else np.int8
+        logic_out = metas[-1].num_tiles * DCIM_LOGICAL_OUT_PER_TILE if use_int16 else metas[-1].out_ch
         final = np.clip(np.round(fp32_sum * qscale_final), qa_clip[0], qa_clip[1]).astype(qa_out_dtype)
-        final = final.reshape(oh_f, ow_f, metas[1].out_ch)
+        final = final.reshape(oh_f, ow_f, logic_out)
+        if eff_ch_final > logic_out:
+            final_padded = np.zeros((oh_f, ow_f, eff_ch_final), dtype=qa_out_dtype)
+            final_padded[:, :, :logic_out] = final
+            final = final_padded
         if use_int16:
-            exp_words = int16_hwc_words(final.reshape(1, 1, oh_f * ow_f * metas[1].out_ch))
+            exp_words = int16_hwc_words(final)
         else:
             exp_words = int8_hwc_words(final)
         final_dst = SLOT_C
     else:
+        oh_f, ow_f = layer_oh_ow[-1]
+        qa_out_dtype = np.int16 if use_int16 else np.int8
+        final = current_int8.reshape(oh_f, ow_f, eff_ch_final).astype(qa_out_dtype)
         if use_int16:
-            exp_words = int16_hwc_words(current_int8.astype(np.int16).reshape(1, 1, -1))
+            exp_words = int16_hwc_words(final)
         else:
-            exp_words = int8_hwc_words(current_int8)
+            exp_words = int8_hwc_words(final)
         final_dst = SLOT_C
 
     # --- Build instruction stream ---
@@ -1395,51 +1936,57 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         wb_s = WB_LAYER_STRIDE * i
         wb_b = WB_BIAS_BASE + WB_LAYER_STRIDE * i
         wb_q = WB_QSCALE_BASE + 4 * i
+        eff_ch = layer_eff_ch[i]
+        im2col_in_ch = meta.in_ch if i == 0 else layer_eff_ch[i - 1]
+        acc_eff = layer_acc_eff[i]
+        dqa_ch = (meta.num_tiles * DCIM_LOGICAL_OUT_PER_TILE) if use_int16 else eff_ch
 
-        # im2col: src → SLOT_D
-        fast_inst += vpu_exec(UNIT_IM2COL, src_slot, 0, meta.in_ch, lh, lw,
+        fast_inst += vpu_exec(UNIT_IM2COL, src_slot, 0, im2col_in_ch, lh, lw,
                               0, 0, SLOT_D, encode_addr_break(meta), oh_i, ow_i, flags=_im2col_flags)
-        # DCIM: SLOT_D(→IBUF via CDMA) × weight → SLOT_C
-        fast_inst += dcim_layer_inst(meta, oh_i * ow_i, SLOT_D, SLOT_C,
-                                     IBUF_ACT, ibuf_wei_off, int16=use_int16)
+        fast_inst += dcim_layer_inst(meta, oh_i * ow_i, SLOT_D, SLOT_DCIM_OUT,
+                                     IBUF_ACT, ibuf_wei_off, int16=use_int16, acc_override=acc_eff)
 
         if has_residual:
-            # DQA/ReLU: SLOT_C → SLOT_E (layer 0) or SLOT_F (layer 1)
             dqa_dst = SLOT_E if i == 0 else SLOT_F
-            fast_inst += vpu_exec(UNIT_DQA, SLOT_C, 0, meta.out_ch, oh_i, ow_i,
+            fast_inst += vpu_exec(UNIT_DQA, SLOT_DCIM_OUT, 0, dqa_ch, oh_i, ow_i,
                                   wb_b, wb_s, dqa_dst, flags=_dqa_flags)
             if i < num_layers - 1:
-                # QA: dqa_dst → SLOT_B (feed next layer)
-                fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, meta.out_ch, oh_i, ow_i,
+                fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, dqa_ch, oh_i, ow_i,
                                       0, wb_q, SLOT_B, flags=_qa_flags)
         else:
-            # DQA/ReLU: SLOT_C → SLOT_D
-            fast_inst += vpu_exec(UNIT_DQA, SLOT_C, 0, meta.out_ch, oh_i, ow_i,
-                                  wb_b, wb_s, SLOT_D, flags=_dqa_flags)
+            # INT16 multi-layer: keep SLOT_D for im2col only; DQA FP32 → SLOT_E between layers.
+            # OBUF CDMA F→D before 2nd im2col hangs simv; do not use cdma_copy to clear SLOT_D.
+            dqa_dst = SLOT_E if (use_int16 and i < num_layers - 1) else SLOT_D
+            fast_inst += vpu_exec(UNIT_DQA, SLOT_DCIM_OUT, 0, dqa_ch, oh_i, ow_i,
+                                  wb_b, wb_s, dqa_dst, flags=_dqa_flags)
             if i < num_layers - 1:
-                # QA: SLOT_D → SLOT_B (feed next layer)
-                fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, meta.out_ch, oh_i, ow_i,
-                                      0, wb_q, SLOT_B, flags=_qa_flags)
+                qa_dst = SLOT_B
             else:
-                # Last layer QA: SLOT_D → final_dst
-                fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, meta.out_ch, oh_i, ow_i,
-                                      0, wb_q, final_dst, flags=_qa_flags)
+                qa_dst = final_dst
+            fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, dqa_ch, oh_i, ow_i,
+                                  0, wb_q, qa_dst, flags=_qa_flags)
 
     if has_residual:
         # ADD: SLOT_E + SLOT_F → SLOT_D
         oh_f, ow_f = layer_oh_ow[-1]
         out_ch = metas[-1].out_ch
-        fast_inst += vpu_exec(UNIT_AD, SLOT_E, SLOT_F, out_ch, oh_f, ow_f,
+        ad_ch = (metas[-1].num_tiles * DCIM_LOGICAL_OUT_PER_TILE) if use_int16 else out_ch
+        fast_inst += vpu_exec(UNIT_AD, SLOT_E, SLOT_F, ad_ch, oh_f, ow_f,
                               0, 0, SLOT_D)
         # Final QA: SLOT_D → SLOT_C
         wb_q_final = WB_QSCALE_BASE + 4 * (num_layers - 1)
-        fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, out_ch, oh_f, ow_f,
+        qa_ch_final = ad_ch
+        fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, qa_ch_final, oh_f, ow_f,
                               0, wb_q_final, final_dst, flags=_qa_flags)
 
     fast_inst += [header(OP_END, 0, 0)]
 
     # --- Write output files ---
-    src_words = int8_hwc_words(feat)
+    # INT16 im2col reads 2 B/element; src0 must be INT16-packed (same as conv_pipeline).
+    if use_int16:
+        src_words = bytes_to_128_words(feat.astype(np.int16).tobytes())
+    else:
+        src_words = int8_hwc_words(feat)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
     write_hex(os.path.join(out_dir, 'weight.hex'), all_weight_words)
@@ -1447,6 +1994,14 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         ('src0.hex', OBUF_PHY_BASE + SLOT_A),
         ('weight.hex', IBUF_PHY_BASE + IBUF_WEI),
     ]
+    if use_int16:
+        max_aux_bytes = max(
+            mini_int16_im2col_bytes(layer_oh_ow[i][0], layer_oh_ow[i][1], layer_acc_eff[i])
+            for i in range(len(metas))
+        )
+        aux_zero_words = bytes_to_128_words(bytes(max_aux_bytes))
+        write_hex(os.path.join(out_dir, 'aux_zero.hex'), aux_zero_words)
+        fast_loads.append(('aux_zero.hex', OBUF_PHY_BASE + SLOT_D))
     make_fast_svh(fast_loads, out_dir)
     hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)),
                      (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
@@ -1459,10 +2014,100 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
             'shape': f'{num_layers}-layer {total_shape} residual={has_residual} int16={use_int16}'}
 
 
+def make_resnet_partial_case(out_dir: str, net: Dict[str, dict], network: dict, spec: dict,
+                             rng: np.random.Generator) -> dict:
+    """ResNet18 分段（通用 ResnetSegmentBuilder）。
+
+    preset:
+      stem       — conv[0] + MaxPool3×3（DQA FP32 → MP → OUT，比对 FP32）
+      stage1     — 从 INT8 输入跑 block 0–1（conv 1–4）
+      stage1_2   — block 0–3（conv 1–9，含 downsample）
+
+    spec 可选:
+      checkpoint_policy: final_only | per_conv_dqa | all
+      output_format: fp32 | int8  （段末是否 QA 并比对 INT8）
+      num_blocks: 覆盖默认 block 数
+    """
+    preset = spec['preset']
+    weight_dir = spec.get('weight_dir', RESNET18_WEIGHT_DIR)
+    conv_names = resnet_conv_layer_names(network)
+    ckpt_policy = spec.get('checkpoint_policy', 'per_conv_dqa')
+    output_format = spec.get('output_format', 'int8')
+
+    bld = ResnetSegmentBuilder(
+        net=net, conv_names=conv_names, weight_dir=weight_dir,
+        rng=rng, out_dir=out_dir,
+    )
+    bld.checkpoint_policy = ckpt_policy
+
+    if preset == 'stem':
+        h0, w0 = spec['in_hw']
+        meta0 = bld.meta_for(0)
+        feat = random_int8(rng, (h0, w0, meta0.in_ch))
+        inp = FeatureTensor(feat, 'int8', ObufSlots.FEAT0)
+        cur, dqa_hwc = bld.emit_conv(
+            meta0, inp, skip_input_qa=True, dqa_slot=ObufSlots.FEAT1, qa_dst_slot=None,
+            checkpoint_tag='conv0_dqa')
+        mp_out = maxpool_generic(dqa_hwc.astype(np.float32), kernel=3, stride=2, pad=1)
+        eff_ch = dqa_hwc.shape[2]
+        bld.fast_inst += vpu_exec(
+            UNIT_MP, ObufSlots.FEAT1, 0, eff_ch, cur.h, cur.w,
+            0, 0, ObufSlots.OUT, addr_break=1)
+        out = FeatureTensor(mp_out, 'fp32', ObufSlots.OUT)
+        meta = bld.finalize_case(
+            name=spec['name'], layer=meta0.name,
+            shape=f'resnet stem in_hw={h0}x{w0} conv0+mp3x3',
+            input_feat=inp, output_feat=out, primary_check_tag='stem_mp',
+        )
+        meta['checks'] = bld.checks
+        return meta
+
+    if preset not in ('stage1', 'stage1_2'):
+        raise ValueError(f'unknown resnet_partial preset {preset!r}')
+
+    ih, iw = spec['input_hw']
+    ic = spec['input_ch']
+    num_blocks = spec.get('num_blocks', 2 if preset == 'stage1' else 4)
+
+    feat_i8 = random_int8(rng, (ih, iw, ic))
+    cur = FeatureTensor(feat_i8, 'int8', ObufSlots.FEAT0)
+    bld.emit_preload_shortcut_fp32(cur, tag='skip_entry_fp32')
+
+    for bi in range(num_blocks):
+        conv_ids, ds_idx = RESNET_BLOCK_SCHEDULE[bi]
+        cur = bld.emit_basic_block(
+            conv_ids, ds_idx, cur,
+            block_entry_preloaded_shortcut=(bi == 0),
+        )
+
+    if output_format == 'int8':
+        last_conv_idx = RESNET_BLOCK_SCHEDULE[num_blocks - 1][0][-1]
+        last_meta = bld.meta_for(last_conv_idx)
+        npz_last = load_layer_npz_checked(last_meta, net, require_activation=True)
+        out_i8 = golden_qa_int8_from_fp32(cur.fp32_hwc(), float(npz_last['act_scale']))
+        wb_i = max(0, bld.wb_layer_i - 1)
+        bld.fast_inst += vpu_exec(
+            UNIT_QA, cur.slot, 0, out_i8.shape[2], out_i8.shape[0], out_i8.shape[1],
+            0, bld.WB_QSCALE_BASE + 4 * wb_i, cur.slot, flags=bld._qa_flags)
+        cur = FeatureTensor(out_i8, 'int8', cur.slot)
+
+    meta = bld.finalize_case(
+        name=spec['name'],
+        layer=conv_names[RESNET_BLOCK_SCHEDULE[0][0][0]],
+        shape=(f'resnet {preset} blocks={num_blocks} in={ih}x{iw}x{ic} '
+               f'out={cur.h}x{cur.w}x{cur.c} fmt={output_format}'),
+        input_feat=FeatureTensor(feat_i8, 'int8', ObufSlots.FEAT0),
+        output_feat=cur,
+        primary_check_tag='final',
+    )
+    meta['checks'] = bld.checks
+    return meta
+
+
 
 def module_needs_wb(module: str) -> bool:
-    """Only DQA/QA/conv_pipeline/mini_network read scale/bias from WB."""
-    return module in ('dqa', 'qa', 'conv_pipeline', 'mini_network')
+    """Only DQA/QA/conv_pipeline/mini_network/resnet_partial read scale/bias from WB."""
+    return module in ('dqa', 'qa', 'conv_pipeline', 'mini_network', 'resnet_partial')
 
 
 def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
@@ -1490,7 +2135,12 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
     with open(os.path.join(out_dir, 'module_manifest.svh'), 'w') as f:
         f.write('\n'.join(lines) + '\n')
     with open(os.path.join(out_dir, 'checks.txt'), 'w') as f:
-        f.write(f'{meta["name"]} expected.hex {meta["dst"]:06x} {check_words} {is_fp32}\n')
+        if meta.get('checks'):
+            for name, fname, dst, words, fp32_flag in meta['checks']:
+                cw = words if verify_words == 0 else min(words, verify_words)
+                f.write(f'{name} {fname} {dst:06x} {cw} {fp32_flag}\n')
+        else:
+            f.write(f'{meta["name"]} expected.hex {meta["dst"]:06x} {check_words} {is_fp32}\n')
     with open(os.path.join(out_dir, 'manifest.txt'), 'w') as f:
         for k in ('module', 'name', 'layer', 'shape', 'words'):
             f.write(f'{k}: {meta[k]}\n')
@@ -1564,11 +2214,13 @@ def _apply_dim_overrides(spec: dict, args: argparse.Namespace, module: str) -> d
 
 
 def generate(args: argparse.Namespace) -> None:
-    net = load_network(args.network_json)
-    network = load_network_file(args.network_json)
-    im2col_shapes = propagate_conv_im2col_shapes(network)
     module = args.module
-    cases = module_cases(module, args.network_json)
+    network_json = (RESNET18_NETWORK_JSON if module == 'resnet_partial'
+                    else args.network_json)
+    net = load_network(network_json)
+    network = load_network_file(network_json)
+    im2col_shapes = propagate_conv_im2col_shapes(network)
+    cases = module_cases(module, network_json)
     if args.case == 'list':
         for c in cases:
             extra = ''
@@ -1608,11 +2260,17 @@ def generate(args: argparse.Namespace) -> None:
         meta = make_add_case(out_dir, spec, rng)
     elif effective_module == 'mini_network':
         meta = make_mini_network_case(out_dir, net, spec, rng)
+    elif effective_module == 'resnet_partial':
+        meta = make_resnet_partial_case(out_dir, net, network, spec, rng)
     else:
         raise AssertionError(effective_module)
 
     if meta['layer'] != 'cdma_concat':
-        meta['npz_sha256_16'] = layer_fingerprint(conv_meta(net, meta['layer']))
+        if effective_module == 'resnet_partial':
+            meta['npz_sha256_16'] = layer_fingerprint(
+                conv_meta(net, meta['layer'], weight_dir=RESNET18_WEIGHT_DIR))
+        else:
+            meta['npz_sha256_16'] = layer_fingerprint(conv_meta(net, meta['layer']))
     write_hex(os.path.join(out_dir, 'hbm_image.hex'), bytes_to_128_words(meta['hbm']))
     write_hex(os.path.join(out_dir, 'wb_init.hex'), bytes_to_128_words(meta['wb']))
     if module_needs_wb(meta['module']):

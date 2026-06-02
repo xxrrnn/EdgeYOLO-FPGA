@@ -117,6 +117,8 @@ BATCH_SUITE_conv_pipe_all   := pipe_conv3_s2_c32_to64 pipe_conv1_c512_to64_tilep
 BATCH_SUITE_concat_all      := concat_2src_c64_c64_hw8x8 concat_2src_c128_c128_hw10x10 concat_4src_sppf_c128_hw10x10
 BATCH_SUITE_large_channel_all := dcim_conv1_c512_to64_tilepass pipe_conv1_c512_to64_tilepass dqa_c256_pressure qa_c256_pressure concat_c128_c128_to256
 BATCH_SUITE_mini_network_all := mini_2conv_c16 mini_3conv_residual_c32
+BATCH_SUITE_resnet_partial := resnet_stem_tiny resnet_stage1
+BATCH_SUITE_resnet_partial_full := resnet_stem_tiny resnet_stem_smoke resnet_stage1 resnet_stage1_2
 .PHONY: export compile run sim sim-export fsdb fsdb-export verdi data clean help
 .PHONY: list-cases list-suites check-export sim-all sim-results
 .PHONY: sim-batch sim-batch-export data-batch _sim_batch_run _data_batch_run
@@ -164,7 +166,8 @@ sim-all: check-export
 run: check-export
 	ACTION=run COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
-	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
+	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) MODULE_QUANT=$(QUANT) MODULE_DIM="$(DIM)" \
+	FAST=$(FAST) VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=0 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
 
 sim: check-export
 	ACTION=sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
