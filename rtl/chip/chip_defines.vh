@@ -120,30 +120,58 @@
 `define DCIM_CYCLE              128     // 64×64×4bit / 128bit = 128 个 128-bit weight word/acc step
 `define DCIM_ACC_MAX            80      // 最大累加深度（num_rows / acc_depth 上界）
 
-// ── Buffer 参数（lite: 拆分 IBUF/OBUF 地址宽度）──────────────────────────
-`define DCIM_IBUF_ADDR_WIDTH    17      // IBUF 字地址位宽（2MB / 16B = 128K words）
-`define DCIM_OBUF_ADDR_WIDTH    20      // OBUF 字地址位宽（16MB / 16B = 1M words）
-`define DCIM_BUF_DATA_WIDTH     128     // IBUF/OBUF 数据位宽
+// ── Buffer 容量 / 数据宽度（主旋钮）────────────────────────────────────────
+// 字地址位宽决定容量：SIZE_BYTES = (1<<ADDR_WIDTH) * BYTES_PER_WORD
+`define DCIM_IBUF_ADDR_WIDTH    17      // 2MB  IBUF（128K × 16B words）
+`define DCIM_OBUF_ADDR_WIDTH    20      // 16MB OBUF（1M  × 16B words）
+`define DCIM_BUF_DATA_WIDTH     128     // IBUF/OBUF 128-bit 字宽
+
+`define DCIM_BUF_COL_WIDTH      `CHIP_BYTE_WIDTH                        // 每列 8 bit = 1 byte
+`define DCIM_BUF_NUM_COL        (`DCIM_BUF_DATA_WIDTH / `DCIM_BUF_COL_WIDTH)  // 16 列 byte-enable
+`define DCIM_BUF_BYTES_PER_WORD (`DCIM_BUF_DATA_WIDTH / `CHIP_BYTE_WIDTH)    // 128b → 16B（勿用 NUM_COL*COL_WIDTH）
+`define DCIM_IBUF_SIZE_BYTES    ((1 << `DCIM_IBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
+`define DCIM_OBUF_SIZE_BYTES    ((1 << `DCIM_OBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
 
 // 向后兼容：BUF_ADDR_WIDTH 默认指向 IBUF（旧代码可能用到）
 `define DCIM_BUF_ADDR_WIDTH     `DCIM_IBUF_ADDR_WIDTH
 
-// AXI BRAM 接口字节地址位宽（连接 AXI BRAM Controller）
-`define DCIM_AXI_BRAM_ADDR_WIDTH  24    // OBUF: 20+4=24 bits
+// AXI BRAM 字节地址 = 字地址左移 BYTE_ADDR_SHIFT
+`define DCIM_BYTE_ADDR_SHIFT    `CHIP_BYTE_ADDR_SHIFT
+`define DCIM_AXI_BRAM_ADDR_WIDTH (`DCIM_OBUF_ADDR_WIDTH + `DCIM_BYTE_ADDR_SHIFT)
 
-// IBUF 物理参数（ibuf.v 参数）
-`define DCIM_IBUF_NBPIPE        2       // URAM 输出流水线级数
-`define DCIM_IBUF_NUM_BANKS     2       // 每组 IBUF 的 bank 数
-`define DCIM_IBUF_IN_REG        1       // 输入寄存器级数
-// 总 IBUF 读延迟 = NBPIPE + IN_REG + bank_pipe + mux_reg + SLR_crossing_reg = 2+1+1+1+1 = 6
-// 仲裁器设为 9 留余量（含 arbiter 状态机开销）
-`define DCIM_IBUF_RD_LATENCY    9
+// ============================================================================
+// IBUF / OBUF 流水线与多 bank — 仅改「主旋钮」，其余由表达式推导
+// （与 rtl/DCIM_Macro/ibuf.v、obuf.v、ibuf_rd_arbiter.sv 结构一一对应）
+// ============================================================================
 
-// OBUF 物理参数（obuf.v 参数）
-`define DCIM_OBUF_NBPIPE        2
-`define DCIM_OBUF_NUM_BANKS     2
-// OBUF 读延迟 = IN_REG1(1) + IN_REG2(1) + IN_REG3(1) + memrega(1) + NBPIPE(2) + douta(1) = 7
-// VPU 单元 rd_wait_cnt >= 10 (等 11 拍含 LOAD_X 发地址那拍)
+// ── IBUF 主旋钮 ───────────────────────────────────────────────────────────
+`define DCIM_IBUF_NUM_BANKS          2       // 须为 2 的幂
+`define DCIM_IBUF_NBPIPE             4       // ibuf_bank：URAM 输出流水级数
+`define DCIM_IBUF_IN_REG             1       // Port A/B 输入寄存（0=旁路）
+`define DCIM_IBUF_BANK_SEL_PIPE_EXTRA 3      // ibuf.v bank_sel_*_pipe：NBPIPE 之后再打 3 拍
+
+// ── IBUF 推导 ─────────────────────────────────────────────────────────────
+`define DCIM_IBUF_BANK_BITS          ($clog2(`DCIM_IBUF_NUM_BANKS))
+`define DCIM_IBUF_BANK_ADDR_WIDTH    (`DCIM_IBUF_ADDR_WIDTH - `DCIM_IBUF_BANK_BITS)
+`define DCIM_IBUF_BANK_RD_EN_DEPTH   (`DCIM_IBUF_NBPIPE + 1)
+`define DCIM_IBUF_BANK_MUX_PIPE      (`DCIM_IBUF_NBPIPE + `DCIM_IBUF_BANK_SEL_PIPE_EXTRA)
+`define DCIM_IBUF_ARB_LATENCY_EXTRA  1       // ibuf_rd_arbiter grant/计数余量
+`define DCIM_IBUF_RD_LATENCY         (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE + `DCIM_IBUF_ARB_LATENCY_EXTRA)
+
+// ── OBUF 主旋钮 ───────────────────────────────────────────────────────────
+`define DCIM_OBUF_NUM_BANKS          2
+`define DCIM_OBUF_NBPIPE             4
+`define DCIM_OBUF_IN_REG_STAGES      3       // obuf.v：中心 reg1 + per-bank reg2/reg3
+`define DCIM_OBUF_POST_URAM_PIPE     3       // obuf_bank：memrega + mem_rstage + douta
+`define DCIM_OBUF_WR_URAM_DRAIN_EXTRA 5     // Tile 写：IN_REG 之后 URAM 写级联排空余量
+
+// ── OBUF 推导 ─────────────────────────────────────────────────────────────
+`define DCIM_OBUF_BANK_BITS          ($clog2(`DCIM_OBUF_NUM_BANKS))
+`define DCIM_OBUF_BANK_ADDR_WIDTH    (`DCIM_OBUF_ADDR_WIDTH - `DCIM_OBUF_BANK_BITS)
+`define DCIM_OBUF_BANK_RD_EN_DEPTH   (`DCIM_OBUF_NBPIPE + 1)
+`define DCIM_OBUF_BANK_MUX_PIPE      (`DCIM_OBUF_NBPIPE + `DCIM_OBUF_IN_REG_STAGES + `DCIM_OBUF_POST_URAM_PIPE)
+`define DCIM_OBUF_RD_TOTAL_PIPE      `DCIM_OBUF_BANK_MUX_PIPE
+`define DCIM_OBUF_WR_DRAIN           (`DCIM_OBUF_IN_REG_STAGES + `DCIM_OBUF_WR_URAM_DRAIN_EXTRA)
 
 // ── OBUF 外部字节地址：无 group 选择位，字地址即 OBUF 内部地址 ───────────
 `define DCIM_OBUF_EXT_ADDR_BITS `DCIM_OBUF_ADDR_WIDTH  // = 20 bits

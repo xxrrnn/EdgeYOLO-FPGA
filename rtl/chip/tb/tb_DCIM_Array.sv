@@ -98,7 +98,6 @@ module tb_DCIM_Array;
         .BUF_ADDR_WIDTH  (BUF_ADDR_WIDTH),
         .BUF_DATA_WIDTH  (BUF_DATA_WIDTH),
         .AXI_BRAM_ADDR_WIDTH(`DCIM_AXI_BRAM_ADDR_WIDTH),
-        .IBUF_RD_LATENCY (`DCIM_IBUF_RD_LATENCY)
     ) dut (
         .clk             (clk),
         .rst_n           (rst_n),

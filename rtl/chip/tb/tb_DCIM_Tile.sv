@@ -25,7 +25,6 @@ module tb_DCIM_Tile;
     // num_rows 变量已移除：在 CNN 应用中 num_rows == acc_depth
     reg [BUF_ADDR_WIDTH-1:0] wei_base_addr, act_base_addr, out_base_addr;
     
-    localparam IBUF_RD_LATENCY = 4;  // 与 DCIM_Array / ibuf NBPIPE=1 一致
     
     // Tile <-> 单 Tile 仲裁（与 DCIM_Array 相同握手与读延迟模型）
     wire                         ibuf_rd_valid, ibuf_rd_ready, ibuf_rd_data_valid;
@@ -79,7 +78,6 @@ module tb_DCIM_Tile;
         .NUM_TILES(1),
         .ADDR_WIDTH(BUF_ADDR_WIDTH),
         .DATA_WIDTH(BUF_DATA_WIDTH),
-        .IBUF_RD_LATENCY(IBUF_RD_LATENCY)
     ) u_ibuf_arb (
         .clk(clk), .rst_n(rst_n),
         .tile_rd_valid(ibuf_rd_valid),
@@ -109,12 +107,7 @@ module tb_DCIM_Tile;
         .obuf_din(obuf_int_din)
     );
     
-    ibuf #(
-        .AWIDTH(BUF_ADDR_WIDTH),
-        .NUM_COL(BUF_DATA_WIDTH/8),
-        .DWIDTH(BUF_DATA_WIDTH),
-        .NBPIPE(1)
-    ) ibuf_inst (
+    ibuf ibuf_inst (
         .clk(clk),
         .wea(ibuf_wea),
         .mem_ena(ibuf_ena),
@@ -128,12 +121,7 @@ module tb_DCIM_Tile;
         .doutb(ibuf_int_dout)
     );
     
-    obuf #(
-        .AWIDTH(BUF_ADDR_WIDTH),
-        .NUM_COL(BUF_DATA_WIDTH/8),
-        .DWIDTH(BUF_DATA_WIDTH),
-        .NBPIPE(1)
-    ) obuf_inst (
+    obuf obuf_inst (
         .clk(clk),
         .wea(obuf_wea),
         .mem_ena(obuf_ena),

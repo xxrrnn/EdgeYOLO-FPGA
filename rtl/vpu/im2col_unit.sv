@@ -133,9 +133,8 @@ module im2col_unit #(
     reg [4:0]         write_chunk_nbyte_r;
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
-    // 读延迟：使用 obuf.v douta_valid（NBPIPE=3 时 Port A 端到端 8 拍）
-    // 保留 rd_wait_cnt 仅作仿真超时保护
-    localparam READ_TIMEOUT = 17;  // 16+1 margin（用于强制重编译 VCS 缓存）
+    // 读延迟：douta_valid 握手（lite DCIM_OBUF_NBPIPE=4 → 端到端 10 拍）
+    localparam READ_TIMEOUT = 18;
     reg [4:0] rd_wait_cnt;
     reg [4:0] latch_stall_cnt;     // S_READ_LATCH：valid 残留过高时的退出保护
 

@@ -14,7 +14,6 @@ module DCIM_Array #(
     parameter ACC             = `DCIM_ACC_MAX,
     parameter BUF_ADDR_WIDTH  = `DCIM_BUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
-    parameter IBUF_RD_LATENCY = `DCIM_IBUF_RD_LATENCY,
     localparam ACC_UBD_WD = $clog2(ACC+1),
     localparam STRB_WIDTH = BUF_DATA_WIDTH / 8
 )(

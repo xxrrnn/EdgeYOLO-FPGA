@@ -21,7 +21,6 @@ module DCIM_Array #(
     parameter ACC             = `DCIM_ACC_MAX,
     parameter BUF_ADDR_WIDTH  = `DCIM_BUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
-    parameter IBUF_RD_LATENCY = `DCIM_IBUF_RD_LATENCY,
 
     localparam ACC_UBD_WD = $clog2(ACC+1),
     localparam STRB_WIDTH = BUF_DATA_WIDTH / 8
@@ -129,8 +128,7 @@ module DCIM_Array #(
     ibuf_rd_arbiter #(
         .NUM_TILES(NUM_TILES),
         .ADDR_WIDTH(BUF_ADDR_WIDTH),
-        .DATA_WIDTH(BUF_DATA_WIDTH),
-        .IBUF_RD_LATENCY(IBUF_RD_LATENCY)
+        .DATA_WIDTH(BUF_DATA_WIDTH)
     ) u_ibuf_arb (
         .clk(clk),
         .rst_n(rst_n),
@@ -162,14 +160,7 @@ module DCIM_Array #(
         .obuf_din(obuf_int_din)
     );
 
-    ibuf #(
-        .AWIDTH(`DCIM_IBUF_ADDR_WIDTH),
-        .NUM_COL(BUF_DATA_WIDTH/8),
-        .DWIDTH(BUF_DATA_WIDTH),
-        .NBPIPE(`DCIM_IBUF_NBPIPE),
-        .NUM_BANKS(`DCIM_IBUF_NUM_BANKS),
-        .IN_REG(`DCIM_IBUF_IN_REG)
-    ) u_ibuf (
+    ibuf u_ibuf (
         .clk(clk),
         .wea(ibuf_ext_wea),
         .mem_ena(ibuf_ext_ena),
@@ -183,13 +174,7 @@ module DCIM_Array #(
         .doutb(ibuf_int_dout_raw)
     );
 
-    obuf #(
-        .AWIDTH(BUF_ADDR_WIDTH),
-        .NUM_COL(BUF_DATA_WIDTH/8),
-        .DWIDTH(BUF_DATA_WIDTH),
-        .NBPIPE(`DCIM_OBUF_NBPIPE),
-        .NUM_BANKS(`DCIM_OBUF_NUM_BANKS)
-    ) u_obuf (
+    obuf u_obuf (
         .clk(clk),
         .wea(obuf_ext_wea),
         .mem_ena(obuf_ext_ena),

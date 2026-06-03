@@ -55,7 +55,6 @@ module tb_DCIM_Array_64_smoke;
         .ACC(ACC),
         .BUF_ADDR_WIDTH(BUF_AW),
         .BUF_DATA_WIDTH(BUF_DW),
-        .IBUF_RD_LATENCY(`DCIM_IBUF_RD_LATENCY)
     ) dut (
         .clk(clk),
         .rst_n(rst_n),

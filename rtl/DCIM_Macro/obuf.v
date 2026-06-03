@@ -1,70 +1,60 @@
 
 //  Xilinx UltraRAM True Dual Port Mode - Byte write with Multi-Bank Architecture
 //  ============================================================================
-//  优化版本 v2：双级输入寄存器（中心 reg1 → per-bank reg2）以收敛时序
+//  优化版本 v4：写侧 reg3 + 读侧 memrega/mem_rstage（均 DONT_TOUCH）
 //
 //  关键优化：
 //  1. 多 Bank 并行：将大容量存储分成 NUM_BANKS 个独立 bank
-//  2. 双级输入寄存器：
+//  2. 三级输入寄存器（写路径）：
 //     - reg1（中心，1 份）：吸收上游长 routing（含 SLR 跨越）
-//     - reg2（per-bank，N 份）：被 Vivado 放置到各 bank URAM cascade 起点附近，
-//       彻底打断 "中心 reg → 远端 URAM cascade 末端" 这条 -2 ns 失败路径
-//  3. 输出流水线：保持原有的 NBPIPE 级输出流水，bank 选择 pipeline 长度 +1
+//     - reg2（per-bank）：bank 选择后的第一级
+//     - reg3（per-bank，DONT_TOUCH）：紧贴 URAM cascade 起点，打断写路径
+//  3. 读侧硬隔离：mem_rstage + NBPIPE 输出流水（DONT_TOUCH，在 memrega 之后）；
+//     memrega/memregb 不可 DONT_TOUCH（会阻断 URAM288 推断，Synth 8-2914）
+//  4. 输出流水线：bank 选择 pipeline 长度 +3（相对 v2）
 //  ============================================================================
 //
 //  时序契约（重要）：
 //  - 写延迟：从 wea/dina/addra/mem_ena 输入到末端 URAM 实际写入完成
-//      = 2 拍 (IN_REG1 + IN_REG2) + URAM 内部 cascade 传播
+//      = 3 拍 (IN_REG1 + IN_REG2 + IN_REG3) + URAM 内部 cascade 传播
 //    写为 fire-and-forget，外部无需感知。
-//  - 读延迟：从 mem_ena 输入到 douta 出 = IN_REG1 + IN_REG2 + memrega + NBPIPE + douta
-//      = 1 + 1 + 1 + NBPIPE + 1 = NBPIPE + 4
-//    当 NBPIPE=2 时为 6 拍。原 v1 为 5 拍，**调用方需相应放宽等待**
-//    （im2col_unit.READ_LATENCY 已从 9 → 10）。
+//  - 读延迟：DCIM_OBUF_BANK_MUX_PIPE = NBPIPE + IN_REG_STAGES + POST_URAM_PIPE
+//    VPU 通过 douta_valid 握手，无需硬编码等待。
+//  参数统一见 rtl/chip/chip_defines.vh
 //  ============================================================================
 
-module obuf #(
-  parameter AWIDTH   = 14,  // Address Width
-  parameter NUM_COL  = 16,  // Number of columns (bytes)
-  parameter DWIDTH   = 128, // Data Width
-  parameter NBPIPE   = 3,   // Number of pipeline Registers
-  parameter NUM_BANKS = 4   // Number of parallel banks
-) (
+`include "chip_defines.vh"
+
+module obuf (
     input clk,
     // Port A (External AXI interface)
-    input [NUM_COL-1:0] wea,
+    input [`DCIM_BUF_NUM_COL-1:0] wea,
     input mem_ena,
-    input [DWIDTH-1:0] dina,
-    input [AWIDTH-1:0] addra,
-    output reg [DWIDTH-1:0] douta,
+    input [`DCIM_BUF_DATA_WIDTH-1:0] dina,
+    input [`DCIM_OBUF_ADDR_WIDTH-1:0] addra,
+    output reg [`DCIM_BUF_DATA_WIDTH-1:0] douta,
     output wire             douta_valid,  // 读数据有效脉冲（与 douta 同拍）
     // Port B (Internal Tile write interface)
-    input [NUM_COL-1:0] web,
+    input [`DCIM_BUF_NUM_COL-1:0] web,
     input mem_enb,
-    input [DWIDTH-1:0] dinb,
-    input [AWIDTH-1:0] addrb,
-    output reg [DWIDTH-1:0] doutb
+    input [`DCIM_BUF_DATA_WIDTH-1:0] dinb,
+    input [`DCIM_OBUF_ADDR_WIDTH-1:0] addrb,
+    output reg [`DCIM_BUF_DATA_WIDTH-1:0] doutb
 );
-
-// ============================================================================
-// 参数计算
-// ============================================================================
-localparam BANK_BITS = $clog2(NUM_BANKS);
-localparam BANK_AWIDTH = AWIDTH - BANK_BITS;
-localparam CWIDTH = DWIDTH / NUM_COL;
 
 // ============================================================================
 // 第 1 级输入寄存器（中心，1 份）
 // 作用：吸收上游 routing 与 SLR 跨越延迟
 // ============================================================================
-(* shreg_extract = "no" *) reg [NUM_COL-1:0] wea_reg;
+(* shreg_extract = "no" *) reg [`DCIM_BUF_NUM_COL-1:0] wea_reg;
 (* shreg_extract = "no" *) reg               mem_ena_reg;
-(* shreg_extract = "no" *) reg [DWIDTH-1:0]  dina_reg;
-(* shreg_extract = "no" *) reg [AWIDTH-1:0]  addra_reg;
+(* shreg_extract = "no" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]  dina_reg;
+(* shreg_extract = "no" *) reg [`DCIM_OBUF_ADDR_WIDTH-1:0]  addra_reg;
 
-(* shreg_extract = "no" *) reg [NUM_COL-1:0] web_reg;
+(* shreg_extract = "no" *) reg [`DCIM_BUF_NUM_COL-1:0] web_reg;
 (* shreg_extract = "no" *) reg               mem_enb_reg;
-(* shreg_extract = "no" *) reg [DWIDTH-1:0]  dinb_reg;
-(* shreg_extract = "no" *) reg [AWIDTH-1:0]  addrb_reg;
+(* shreg_extract = "no" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]  dinb_reg;
+(* shreg_extract = "no" *) reg [`DCIM_OBUF_ADDR_WIDTH-1:0]  addrb_reg;
 
 always @(posedge clk) begin
     wea_reg     <= wea;
@@ -89,20 +79,20 @@ initial begin
 end
 
 // 第 1 级的 bank 选择（用 reg 后的 addr 算）
-wire [BANK_BITS-1:0]    bank_sel_a_q1 = addra_reg[AWIDTH-1 -: BANK_BITS];
-wire [BANK_BITS-1:0]    bank_sel_b_q1 = addrb_reg[AWIDTH-1 -: BANK_BITS];
-wire [BANK_AWIDTH-1:0]  bank_addr_a_q1 = addra_reg[BANK_AWIDTH-1:0];
-wire [BANK_AWIDTH-1:0]  bank_addr_b_q1 = addrb_reg[BANK_AWIDTH-1:0];
+wire [`DCIM_OBUF_BANK_BITS-1:0]    bank_sel_a_q1 = addra_reg[`DCIM_OBUF_ADDR_WIDTH-1 -: `DCIM_OBUF_BANK_BITS];
+wire [`DCIM_OBUF_BANK_BITS-1:0]    bank_sel_b_q1 = addrb_reg[`DCIM_OBUF_ADDR_WIDTH-1 -: `DCIM_OBUF_BANK_BITS];
+wire [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0]  bank_addr_a_q1 = addra_reg[`DCIM_OBUF_BANK_ADDR_WIDTH-1:0];
+wire [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0]  bank_addr_b_q1 = addrb_reg[`DCIM_OBUF_BANK_ADDR_WIDTH-1:0];
 
 // ============================================================================
 // 多 Bank 存储阵列（每 bank 内嵌第 2 级输入寄存器）
 // ============================================================================
-wire [DWIDTH-1:0] bank_douta [0:NUM_BANKS-1];
-wire [DWIDTH-1:0] bank_doutb [0:NUM_BANKS-1];
+wire [`DCIM_BUF_DATA_WIDTH-1:0] bank_douta [0:`DCIM_OBUF_NUM_BANKS-1];
+wire [`DCIM_BUF_DATA_WIDTH-1:0] bank_doutb [0:`DCIM_OBUF_NUM_BANKS-1];
 
 genvar bank;
 generate
-    for (bank = 0; bank < NUM_BANKS; bank = bank + 1) begin : gen_banks
+    for (bank = 0; bank < `DCIM_OBUF_NUM_BANKS; bank = bank + 1) begin : gen_banks
         // 第 1 级 bank 命中信号（参与第 2 级的 mem_ena 计算）
         wire bank_hit_a_q1 = mem_ena_reg && (bank_sel_a_q1 == bank);
         wire bank_hit_b_q1 = mem_enb_reg && (bank_sel_b_q1 == bank);
@@ -112,15 +102,15 @@ generate
         // 但必须保留独立的物理寄存器——Vivado 否则会把四个 bank 合并成一个物理 FF，
         // 放在 SLR0 附近，导致 bank[2]/bank[3] 的 URAM cascade 需要 2+ SLR 穿越。
         // DONT_TOUCH 确保每个 bank 的 reg2 被 placer 放在本 bank 的 URAM 旁边。
-        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [NUM_COL-1:0]      wea_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_NUM_COL-1:0]      wea_reg2;
         (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg                    mem_ena_reg2;
-        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [DWIDTH-1:0]       dina_reg2;
-        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [BANK_AWIDTH-1:0]  addra_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]       dina_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0]  addra_reg2;
 
-        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [NUM_COL-1:0]      web_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_NUM_COL-1:0]      web_reg2;
         (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg                    mem_enb_reg2;
-        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [DWIDTH-1:0]       dinb_reg2;
-        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [BANK_AWIDTH-1:0]  addrb_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]       dinb_reg2;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0]  addrb_reg2;
 
         initial begin
             wea_reg2 = 0; mem_ena_reg2 = 0;
@@ -138,45 +128,60 @@ generate
             mem_enb_reg2 <= bank_hit_b_q1;
         end
 
-        obuf_bank #(
-            .AWIDTH(BANK_AWIDTH),
-            .NUM_COL(NUM_COL),
-            .DWIDTH(DWIDTH),
-            .NBPIPE(NBPIPE)
-        ) u_bank (
+        // 第 3 级 per-bank 输入寄存器（紧贴 URAM，DONT_TOUCH）
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_NUM_COL-1:0]      wea_reg3;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg                    mem_ena_reg3;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]       dina_reg3;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0]  addra_reg3;
+
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_NUM_COL-1:0]      web_reg3;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg                    mem_enb_reg3;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]       dinb_reg3;
+        (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0]  addrb_reg3;
+
+        initial begin
+            wea_reg3 = 0; mem_ena_reg3 = 0;
+            web_reg3 = 0; mem_enb_reg3 = 0;
+        end
+        always @(posedge clk) begin
+            wea_reg3     <= wea_reg2;
+            dina_reg3    <= dina_reg2;
+            addra_reg3   <= addra_reg2;
+            mem_ena_reg3 <= mem_ena_reg2;
+
+            web_reg3     <= web_reg2;
+            dinb_reg3    <= dinb_reg2;
+            addrb_reg3   <= addrb_reg2;
+            mem_enb_reg3 <= mem_enb_reg2;
+        end
+
+        obuf_bank u_bank (
             .clk(clk),
-            .wea(wea_reg2),
-            .mem_ena(mem_ena_reg2),
-            .dina(dina_reg2),
-            .addra(addra_reg2),
+            .wea(wea_reg3),
+            .mem_ena(mem_ena_reg3),
+            .dina(dina_reg3),
+            .addra(addra_reg3),
             .douta(bank_douta[bank]),
-            .web(web_reg2),
-            .mem_enb(mem_enb_reg2),
-            .dinb(dinb_reg2),
-            .addrb(addrb_reg2),
+            .web(web_reg3),
+            .mem_enb(mem_enb_reg3),
+            .dinb(dinb_reg3),
+            .addrb(addrb_reg3),
             .doutb(bank_doutb[bank])
         );
     end
 endgenerate
 
 // ============================================================================
-// Bank 选择流水线（相比 v1 多 1 拍，匹配新增的 reg2）
-// ============================================================================
+// Bank 选择流水线（相比 v2 多 1 拍，匹配新增的 reg3）
 // 读路径总延迟（端到端）：
-//   IN_REG1 (1) + IN_REG2 (1) + IN_REG3 (1, obuf_bank内新增) + memrega (1) + NBPIPE + douta (1) = NBPIPE + 5
-// bank_sel pipe 用于追踪某个读请求最后落在哪个 bank 的输出 mux 上：
-//   IN_REG1 已用 bank_sel_a_q1（来自 addra_reg），后续需要再 pipe NBPIPE+4 拍
-//   到达最终 output mux（douta）
-localparam TOTAL_PIPE = NBPIPE + 4;
-
-(* shreg_extract = "no" *) reg [BANK_BITS-1:0] bank_sel_a_pipe [0:TOTAL_PIPE-1];
-(* shreg_extract = "no" *) reg [BANK_BITS-1:0] bank_sel_b_pipe [0:TOTAL_PIPE-1];
+(* shreg_extract = "no" *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_a_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
+(* shreg_extract = "no" *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_b_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
 
 integer i;
 always @(posedge clk) begin
     bank_sel_a_pipe[0] <= bank_sel_a_q1;
     bank_sel_b_pipe[0] <= bank_sel_b_q1;
-    for (i = 1; i < TOTAL_PIPE; i = i + 1) begin
+    for (i = 1; i < `DCIM_OBUF_BANK_MUX_PIPE; i = i + 1) begin
         bank_sel_a_pipe[i] <= bank_sel_a_pipe[i-1];
         bank_sel_b_pipe[i] <= bank_sel_b_pipe[i-1];
     end
@@ -186,28 +191,28 @@ end
 // 输出多路选择器
 // ============================================================================
 // read_en_pipe：跟踪 Port A 读使能，流水到输出，产生 douta_valid
-(* shreg_extract = "no" *) reg read_en_pipe_a [0:TOTAL_PIPE];
+(* shreg_extract = "no" *) reg read_en_pipe_a [0:`DCIM_OBUF_BANK_MUX_PIPE];
 always @(posedge clk) begin
     // 第 0 级：IN_REG1 完成后（addra_reg 有效，wea=0）
     read_en_pipe_a[0] <= mem_ena_reg && ~|wea_reg;
-    for (i = 0; i < TOTAL_PIPE; i = i + 1)
+    for (i = 0; i < `DCIM_OBUF_BANK_MUX_PIPE; i = i + 1)
         read_en_pipe_a[i+1] <= read_en_pipe_a[i];
 end
 integer read_en_init_j;
 initial begin
-    for (read_en_init_j = 0; read_en_init_j <= TOTAL_PIPE; read_en_init_j = read_en_init_j + 1)
+    for (read_en_init_j = 0; read_en_init_j <= `DCIM_OBUF_BANK_MUX_PIPE; read_en_init_j = read_en_init_j + 1)
         read_en_pipe_a[read_en_init_j] = 1'b0;
-    for (read_en_init_j = 0; read_en_init_j < TOTAL_PIPE; read_en_init_j = read_en_init_j + 1) begin
-        bank_sel_a_pipe[read_en_init_j] = {BANK_BITS{1'b0}};
-        bank_sel_b_pipe[read_en_init_j] = {BANK_BITS{1'b0}};
+    for (read_en_init_j = 0; read_en_init_j < `DCIM_OBUF_BANK_MUX_PIPE; read_en_init_j = read_en_init_j + 1) begin
+        bank_sel_a_pipe[read_en_init_j] = {`DCIM_OBUF_BANK_BITS{1'b0}};
+        bank_sel_b_pipe[read_en_init_j] = {`DCIM_OBUF_BANK_BITS{1'b0}};
     end
 end
-assign douta_valid = read_en_pipe_a[TOTAL_PIPE];
+assign douta_valid = read_en_pipe_a[`DCIM_OBUF_BANK_MUX_PIPE];
 
-initial douta = {DWIDTH{1'b0}};
+initial douta = {`DCIM_BUF_DATA_WIDTH{1'b0}};
 always @(posedge clk) begin
-    douta <= bank_douta[bank_sel_a_pipe[TOTAL_PIPE-1]];
-    doutb <= bank_doutb[bank_sel_b_pipe[TOTAL_PIPE-1]];
+    douta <= bank_douta[bank_sel_a_pipe[`DCIM_OBUF_BANK_MUX_PIPE-1]];
+    doutb <= bank_doutb[bank_sel_b_pipe[`DCIM_OBUF_BANK_MUX_PIPE-1]];
 end
 
 endmodule
@@ -216,54 +221,50 @@ endmodule
 // ============================================================================
 // obuf_bank - 单个 Bank 的 URAM 存储模块
 // ============================================================================
-module obuf_bank #(
-  parameter AWIDTH  = 12,
-  parameter NUM_COL = 16,
-  parameter DWIDTH  = 128,
-  parameter NBPIPE  = 3
-) (
+module obuf_bank (
     input clk,
-    input [NUM_COL-1:0] wea,
+    input [`DCIM_BUF_NUM_COL-1:0] wea,
     input mem_ena,
-    input [DWIDTH-1:0] dina,
-    input [AWIDTH-1:0] addra,
-    output reg [DWIDTH-1:0] douta,
-    input [NUM_COL-1:0] web,
+    input [`DCIM_BUF_DATA_WIDTH-1:0] dina,
+    input [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0] addra,
+    output reg [`DCIM_BUF_DATA_WIDTH-1:0] douta,
+    input [`DCIM_BUF_NUM_COL-1:0] web,
     input mem_enb,
-    input [DWIDTH-1:0] dinb,
-    input [AWIDTH-1:0] addrb,
-    output reg [DWIDTH-1:0] doutb
+    input [`DCIM_BUF_DATA_WIDTH-1:0] dinb,
+    input [`DCIM_OBUF_BANK_ADDR_WIDTH-1:0] addrb,
+    output reg [`DCIM_BUF_DATA_WIDTH-1:0] doutb
 );
 
-localparam CWIDTH = DWIDTH / NUM_COL;
-
 (* ram_style = "ultra" *)
-reg [DWIDTH-1:0] mem [(1<<AWIDTH)-1:0];
+reg [`DCIM_BUF_DATA_WIDTH-1:0] mem [(1<<`DCIM_OBUF_BANK_ADDR_WIDTH)-1:0];
 
 // Initialize mem to 0 to avoid X propagation in simulation.
 // On actual FPGA, URAM is initialized to 0 by configuration bitstream.
 integer mem_init_i;
 initial begin
-    for (mem_init_i = 0; mem_init_i < (1<<AWIDTH); mem_init_i = mem_init_i + 1)
-        mem[mem_init_i] = {DWIDTH{1'b0}};
+    for (mem_init_i = 0; mem_init_i < (1<<`DCIM_OBUF_BANK_ADDR_WIDTH); mem_init_i = mem_init_i + 1)
+        mem[mem_init_i] = {`DCIM_BUF_DATA_WIDTH{1'b0}};
 end
 
-reg [DWIDTH-1:0] memrega;
-reg [DWIDTH-1:0] mem_pipe_rega [NBPIPE-1:0];
-reg mem_en_pipe_rega [NBPIPE:0];
+// memrega/memregb：URAM 读输出边界，须允许综合器吸收进 URAM macro
+reg [`DCIM_BUF_DATA_WIDTH-1:0] memrega;
+(* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_rstage_rega;
+(* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_pipe_rega [`DCIM_OBUF_NBPIPE-1:0];
+reg mem_en_pipe_rega [`DCIM_OBUF_BANK_RD_EN_DEPTH:0];
 
-reg [DWIDTH-1:0] memregb;
-reg [DWIDTH-1:0] mem_pipe_regb [NBPIPE-1:0];
-reg mem_en_pipe_regb [NBPIPE:0];
+reg [`DCIM_BUF_DATA_WIDTH-1:0] memregb;
+(* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_rstage_regb;
+(* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_pipe_regb [`DCIM_OBUF_NBPIPE-1:0];
+reg mem_en_pipe_regb [`DCIM_OBUF_BANK_RD_EN_DEPTH:0];
 
 integer i;
 
 // Port A 写操作
 always @(posedge clk) begin
     if (mem_ena) begin
-        for (i = 0; i < NUM_COL; i = i + 1) begin
+        for (i = 0; i < `DCIM_BUF_NUM_COL; i = i + 1) begin
             if (wea[i])
-                mem[addra][i*CWIDTH +: CWIDTH] <= dina[i*CWIDTH +: CWIDTH];
+                mem[addra][i*`DCIM_BUF_COL_WIDTH +: `DCIM_BUF_COL_WIDTH] <= dina[i*`DCIM_BUF_COL_WIDTH +: `DCIM_BUF_COL_WIDTH];
         end
     end
 end
@@ -276,46 +277,53 @@ end
 
 always @(posedge clk) begin
     mem_en_pipe_rega[0] <= mem_ena && ~|wea;
-    for (i = 0; i < NBPIPE; i = i + 1)
+    for (i = 0; i < `DCIM_OBUF_BANK_RD_EN_DEPTH; i = i + 1)
         mem_en_pipe_rega[i+1] <= mem_en_pipe_rega[i];
 end
 
 always @(posedge clk) begin
     if (mem_en_pipe_rega[0])
-        mem_pipe_rega[0] <= memrega;
+        mem_rstage_rega <= memrega;
 end
 
 always @(posedge clk) begin
-    for (i = 0; i < NBPIPE-1; i = i + 1) begin
-        if (mem_en_pipe_rega[i+1])
+    if (mem_en_pipe_rega[1])
+        mem_pipe_rega[0] <= mem_rstage_rega;
+end
+
+always @(posedge clk) begin
+    for (i = 0; i < `DCIM_OBUF_NBPIPE-1; i = i + 1) begin
+        if (mem_en_pipe_rega[i+2])
             mem_pipe_rega[i+1] <= mem_pipe_rega[i];
     end
 end
 
     integer mem_pipe_init_i;
     initial begin
-        memrega = {DWIDTH{1'b0}};
-        memregb = {DWIDTH{1'b0}};
-        for (mem_pipe_init_i = 0; mem_pipe_init_i < NBPIPE; mem_pipe_init_i = mem_pipe_init_i + 1) begin
-            mem_pipe_rega[mem_pipe_init_i] = {DWIDTH{1'b0}};
-            mem_pipe_regb[mem_pipe_init_i] = {DWIDTH{1'b0}};
+        memrega = {`DCIM_BUF_DATA_WIDTH{1'b0}};
+        mem_rstage_rega = {`DCIM_BUF_DATA_WIDTH{1'b0}};
+        memregb = {`DCIM_BUF_DATA_WIDTH{1'b0}};
+        mem_rstage_regb = {`DCIM_BUF_DATA_WIDTH{1'b0}};
+        for (mem_pipe_init_i = 0; mem_pipe_init_i < `DCIM_OBUF_NBPIPE; mem_pipe_init_i = mem_pipe_init_i + 1) begin
+            mem_pipe_rega[mem_pipe_init_i] = {`DCIM_BUF_DATA_WIDTH{1'b0}};
+            mem_pipe_regb[mem_pipe_init_i] = {`DCIM_BUF_DATA_WIDTH{1'b0}};
         end
-        for (mem_pipe_init_i = 0; mem_pipe_init_i <= NBPIPE; mem_pipe_init_i = mem_pipe_init_i + 1) begin
+        for (mem_pipe_init_i = 0; mem_pipe_init_i <= `DCIM_OBUF_BANK_RD_EN_DEPTH; mem_pipe_init_i = mem_pipe_init_i + 1) begin
             mem_en_pipe_rega[mem_pipe_init_i] = 1'b0;
             mem_en_pipe_regb[mem_pipe_init_i] = 1'b0;
         end
     end
 always @(posedge clk) begin
-    if (mem_en_pipe_rega[NBPIPE])
-        douta <= mem_pipe_rega[NBPIPE-1];
+    if (mem_en_pipe_rega[`DCIM_OBUF_BANK_RD_EN_DEPTH])
+        douta <= mem_pipe_rega[`DCIM_OBUF_NBPIPE-1];
 end
 
 // Port B 写操作
 always @(posedge clk) begin
     if (mem_enb) begin
-        for (i = 0; i < NUM_COL; i = i + 1) begin
+        for (i = 0; i < `DCIM_BUF_NUM_COL; i = i + 1) begin
             if (web[i])
-                mem[addrb][i*CWIDTH +: CWIDTH] <= dinb[i*CWIDTH +: CWIDTH];
+                mem[addrb][i*`DCIM_BUF_COL_WIDTH +: `DCIM_BUF_COL_WIDTH] <= dinb[i*`DCIM_BUF_COL_WIDTH +: `DCIM_BUF_COL_WIDTH];
         end
     end
 end
@@ -328,25 +336,30 @@ end
 
 always @(posedge clk) begin
     mem_en_pipe_regb[0] <= mem_enb && ~|web;
-    for (i = 0; i < NBPIPE; i = i + 1)
+    for (i = 0; i < `DCIM_OBUF_BANK_RD_EN_DEPTH; i = i + 1)
         mem_en_pipe_regb[i+1] <= mem_en_pipe_regb[i];
 end
 
 always @(posedge clk) begin
     if (mem_en_pipe_regb[0])
-        mem_pipe_regb[0] <= memregb;
+        mem_rstage_regb <= memregb;
 end
 
 always @(posedge clk) begin
-    for (i = 0; i < NBPIPE-1; i = i + 1) begin
-        if (mem_en_pipe_regb[i+1])
+    if (mem_en_pipe_regb[1])
+        mem_pipe_regb[0] <= mem_rstage_regb;
+end
+
+always @(posedge clk) begin
+    for (i = 0; i < `DCIM_OBUF_NBPIPE-1; i = i + 1) begin
+        if (mem_en_pipe_regb[i+2])
             mem_pipe_regb[i+1] <= mem_pipe_regb[i];
     end
 end
 
 always @(posedge clk) begin
-    if (mem_en_pipe_regb[NBPIPE])
-        doutb <= mem_pipe_regb[NBPIPE-1];
+    if (mem_en_pipe_regb[`DCIM_OBUF_BANK_RD_EN_DEPTH])
+        doutb <= mem_pipe_regb[`DCIM_OBUF_NBPIPE-1];
 end
 
 endmodule

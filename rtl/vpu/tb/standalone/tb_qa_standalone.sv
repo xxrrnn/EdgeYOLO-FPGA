@@ -20,9 +20,8 @@ module tb_qa_standalone;
     localparam FP_WIDTH         = `FP_WIDTH;
     localparam Q_INT_WIDTH_OUT  = `Q_INT_WIDTH_OUT;
     localparam MAX_CHANNEL_NUM  = `MAX_CHANNEL_NUM;
-    localparam OBUF_AWIDTH      = 20;
-    localparam OBUF_NBPIPE      = 3;
-    localparam OBUF_RD_LATENCY  = OBUF_NBPIPE + 4;   // obuf.v TOTAL_PIPE
+    localparam OBUF_AWIDTH      = `DCIM_OBUF_ADDR_WIDTH;
+    localparam OBUF_RD_LATENCY  = `DCIM_OBUF_RD_TOTAL_PIPE;
 
     reg clk = 0;
     always #(CLK_PERIOD/2) clk = ~clk;
@@ -60,13 +59,7 @@ module tb_qa_standalone;
     wire [GB_BANDWIDTH-1:0]   tb_obuf_douta;
     wire                      tb_obuf_douta_valid;
 
-    obuf #(
-        .AWIDTH(OBUF_AWIDTH),
-        .NUM_COL(GB_BANDWIDTH/8),
-        .DWIDTH(GB_BANDWIDTH),
-        .NBPIPE(OBUF_NBPIPE),
-        .NUM_BANKS(2)
-    ) u_obuf (
+    obuf u_obuf (
         .clk(clk),
         .wea(gb_web),
         .mem_ena(gb_enb),

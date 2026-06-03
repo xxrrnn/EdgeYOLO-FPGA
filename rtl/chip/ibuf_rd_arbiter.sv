@@ -7,13 +7,15 @@
 // 不使用单周期全宽 round-robin 优先级编码，而是每拍只检查一个 Tile。
 // 命中后先锁存 tile/address，下一拍再 grant，避免 scan_idx 可变 part-select
 // 与 IBUF 输出寄存器处于同一条组合路径。
+// IBUF 读延迟见 chip_defines DCIM_IBUF_RD_LATENCY
 // ============================================================================
+
+`include "chip_defines.vh"
 
 module ibuf_rd_arbiter #(
     parameter NUM_TILES       = 16,
     parameter ADDR_WIDTH      = 14,
-    parameter DATA_WIDTH      = 128,
-    parameter IBUF_RD_LATENCY = 4
+    parameter DATA_WIDTH      = 128
 )(
     input  wire                              clk,
     input  wire                              rst_n,
@@ -96,7 +98,7 @@ module ibuf_rd_arbiter #(
 
                 ARB_WAIT_DATA: begin
                     latency_cnt <= latency_cnt + 1'b1;
-                    if (latency_cnt >= IBUF_RD_LATENCY) begin
+                    if (latency_cnt >= `DCIM_IBUF_RD_LATENCY) begin
                         tile_rd_data_valid[active_tile] <= 1'b1;
                         arb_state <= ARB_SCAN;
                     end

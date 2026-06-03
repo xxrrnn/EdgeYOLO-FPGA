@@ -554,10 +554,7 @@ module DCIM_Macro #(
     );
     
     // IBUF：双端口 BRAM，端口 A 外部访问，端口 B 内部读取
-    ibuf #(
-        .AWIDTH(BUF_ADDR_WIDTH), .NUM_COL(BUF_DATA_WIDTH/8),
-        .DWIDTH(BUF_DATA_WIDTH), .NBPIPE(1)
-    ) u_ibuf (
+    ibuf u_ibuf (
         .clk(clk),
         .wea(ibuf_wea), .mem_ena(ibuf_ena), .dina(ibuf_dina), .addra(ibuf_addra), .douta(ibuf_douta),
         .web({(BUF_DATA_WIDTH/8){1'b0}}), .mem_enb(ibuf_enb), .dinb({BUF_DATA_WIDTH{1'b0}}), 
@@ -565,10 +562,7 @@ module DCIM_Macro #(
     );
     
     // OBUF：双端口 BRAM，端口 A 外部访问，端口 B 内部写入
-    obuf #(
-        .AWIDTH(BUF_ADDR_WIDTH), .NUM_COL(BUF_DATA_WIDTH/8),
-        .DWIDTH(BUF_DATA_WIDTH), .NBPIPE(1)
-    ) u_obuf (
+    obuf u_obuf (
         .clk(clk),
         .wea(obuf_wea), .mem_ena(obuf_ena), .dina(obuf_dina), .addra(obuf_addra), .douta(obuf_douta),
         .web(obuf_web), .mem_enb(obuf_enb), .dinb(obuf_dinb), .addrb(obuf_addrb), .doutb()

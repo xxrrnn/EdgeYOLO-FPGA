@@ -64,7 +64,6 @@ module tb_DCIM_Array_AXI_direct_wr;
         .CYCLE(8), .ACC(ACC),
         .BUF_DATA_WIDTH  (128),
         .AXI_BRAM_ADDR_WIDTH(18),
-        .IBUF_RD_LATENCY (8)
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .cfg_wr_en(cfg_wr_en), .cfg_wr_addr(cfg_wr_addr), .cfg_wr_data(cfg_wr_data),

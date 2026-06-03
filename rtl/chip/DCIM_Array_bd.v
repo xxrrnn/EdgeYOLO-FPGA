@@ -19,7 +19,6 @@ module DCIM_Array_bd #(
     parameter OBUF_ADDR_WIDTH     = `DCIM_OBUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH      = `DCIM_BUF_DATA_WIDTH,
     parameter AXI_BRAM_ADDR_WIDTH = `DCIM_AXI_BRAM_ADDR_WIDTH,
-    parameter IBUF_RD_LATENCY     = `DCIM_IBUF_RD_LATENCY,
     parameter OBUF_EXT_ADDR_BITS  = `DCIM_OBUF_EXT_ADDR_BITS,
     parameter BUF_ADDR_WIDTH      = IBUF_ADDR_WIDTH
 )(
@@ -165,8 +164,7 @@ module DCIM_Array_bd #(
         .CYCLE           (CYCLE),
         .ACC             (ACC),
         .BUF_ADDR_WIDTH  (INT_ADDR_W),
-        .BUF_DATA_WIDTH  (BUF_DATA_WIDTH),
-        .IBUF_RD_LATENCY (IBUF_RD_LATENCY)
+        .BUF_DATA_WIDTH  (BUF_DATA_WIDTH)
     ) u_dcim_array (
         .clk             (clk),
         .rst_n           (rst_n),

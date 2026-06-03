@@ -62,8 +62,7 @@ module tb_dqa_standalone;
     localparam FP_WIDTH         = `FP_WIDTH;
     localparam C_INT_WIDTH_IN   = 32;
     localparam MAX_CHANNEL_NUM  = `MAX_CHANNEL_NUM;
-    localparam OBUF_AWIDTH      = 20;
-    localparam OBUF_NBPIPE      = 3;
+    localparam OBUF_AWIDTH      = `DCIM_OBUF_ADDR_WIDTH;
 
     reg clk = 0;
     always #(CLK_PERIOD/2) clk = ~clk;
@@ -103,13 +102,7 @@ module tb_dqa_standalone;
     wire [GB_BANDWIDTH-1:0]   tb_obuf_douta;
     wire                      tb_obuf_douta_valid;
 
-    obuf #(
-        .AWIDTH(OBUF_AWIDTH),
-        .NUM_COL(GB_BANDWIDTH/8),
-        .DWIDTH(GB_BANDWIDTH),
-        .NBPIPE(OBUF_NBPIPE),
-        .NUM_BANKS(2)
-    ) u_obuf (
+    obuf u_obuf (
         .clk(clk),
         // Port A: DQA unit
         .wea(gb_web),
@@ -268,7 +261,7 @@ module tb_dqa_standalone;
         tb_obuf_ena <= 1'b1;
         tb_obuf_addra <= addr;
         // Testbench 在 posedge 后用 NBA 发请求，OBUF 下一拍才采到；因此比 RTL 端到端延迟多等 1 拍。
-        repeat(OBUF_NBPIPE + 5) @(posedge clk);
+        repeat(`DCIM_OBUF_RD_TOTAL_PIPE + 8) @(posedge clk);
         // 在 posedge 后等待一个 delta，避开 OBUF 内部 doutb <= ... 的 NBA 更新竞态。
         #1;
         result = tb_obuf_douta;
@@ -453,8 +446,8 @@ module tb_dqa_standalone;
         void'($value$plusargs("ONLY_CASE=%d", only_case));
 
         $display("=== tb_dqa_standalone: YOLOv5n L1/L2/L3 (network params golden) ===");
-        $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d GB_BW=%0d OBUF_NBPIPE=%0d",
-                 FP_CORE_NUM, FP_TRAN_NUM, GB_BANDWIDTH, OBUF_NBPIPE);
+        $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d GB_BW=%0d OBUF_RD_PIPE=%0d",
+                 FP_CORE_NUM, FP_TRAN_NUM, GB_BANDWIDTH, `DCIM_OBUF_RD_TOTAL_PIPE);
 
         dqa_unit_start = 0;
         dqa_src_addr = 0; dqa_scale_addr = 0; dqa_bias_addr = 0; dqa_dst_addr = 0;

@@ -86,7 +86,7 @@ module DCIM_Tile #(
         end
     end
 
-    localparam OBUF_WR_DRAIN = 4;
+    // obuf.v：reg1+reg2+reg3 → mem；末次 grant 后等待写流水排空（DCIM_OBUF_WR_DRAIN）
 
     typedef enum logic [3:0] {
         ST_IDLE,
@@ -184,11 +184,11 @@ module DCIM_Tile #(
         else if (state == ST_IDLE && start_pulse) done_reg <= 1'b0;
     end
 
-    reg [$clog2(OBUF_WR_DRAIN+1)-1:0] wr_drain_cnt;
+    reg [$clog2(`DCIM_OBUF_WR_DRAIN+1)-1:0] wr_drain_cnt;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) wr_drain_cnt <= '0;
         else if (state != ST_DONE) wr_drain_cnt <= '0;
-        else if (wr_drain_cnt < OBUF_WR_DRAIN) wr_drain_cnt <= wr_drain_cnt + 1'b1;
+        else if (wr_drain_cnt < `DCIM_OBUF_WR_DRAIN) wr_drain_cnt <= wr_drain_cnt + 1'b1;
     end
 
     (* max_fanout = 8 *) reg ibuf_handshake_done;
@@ -262,7 +262,7 @@ module DCIM_Tile #(
                 if (all_results_collected)
                     next_state = chunk_has_more ? ST_CLEAR : ST_DONE;
             end
-            ST_DONE:          if (wr_drain_cnt >= OBUF_WR_DRAIN) next_state = ST_IDLE;
+            ST_DONE:          if (wr_drain_cnt >= `DCIM_OBUF_WR_DRAIN) next_state = ST_IDLE;
             default:          next_state = ST_IDLE;
         endcase
     end
