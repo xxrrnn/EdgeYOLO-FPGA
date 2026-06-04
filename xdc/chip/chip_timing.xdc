@@ -272,40 +272,70 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 }
 
 # ============================================================================
-# SLR Pblock 约束 (lite: 4 Tile Array, OBUF/IBUF 各 2 bank, 器件仅 SLR0~2)
+# SLR Pblock 约束 (lite: 4 Tile Array, 4 OBUF bank, 器件仅 SLR0~2)
 # ============================================================================
-# 布局失败根因（2026-06）：原先把整个 u_dcim_array 塞进 SLR0（~2× LUT 容量），
-# 又与 OBUF bank[1] 硬约束 SLR1、USER_SLR SLR0 冲突，导致 carry macro 无法放置。
+# 放置失败根因（2026-06）：
+#   1) Place 30-640: pblock_dcim_compute 分配 889K LUT，SLR1+SLR2 只有 864K → 溢出
+#   2) Place 30-99: SLR1↔SLR2 穿越 100,554 nets，可用 SLL 仅 23,040 → SLL 切割违例
 #
-# 策略：
-#   - pblock_dcim_compute：仅 DCIM 计算（gen_tiles + 仲裁），不含 u_ibuf/u_obuf URAM
-#   - 计算核偏好 SLR1+SLR2（IS_SOFT），避免与 OBUF bank0@SLR0 抢资源
-#   - pblock_axi_vpu：SLR0 软约束（近 XDMA / OBUF AXI / VPU 直连 OBUF）
-#   - OBUF：仅 2 bank（DCIM_OBUF_NUM_BANKS=2），bank0@SLR0, bank1@SLR1
-# 约束优先级：OBUF per-bank hard > soft pblock_dcim_compute > USER_SLR_ASSIGNMENT
+# 修复策略（每对 Tile 独立 soft pblock，OBUF bank 与 Tile 同 SLR）：
+#   - Tile 0/1 → SLR1（各 ~224K LUT，合计 ~448K ≤ 432K IS_SOFT 允许少量溢出至邻 SLR）
+#   - Tile 2/3 → SLR2（同上）
+#   - OBUF bank0/1 → SLR1；bank2/3 → SLR2（与 Tile 数据通路同 SLR，消除 SLL）
+#   - 仲裁器 ibuf_arb/obuf_arb: USER_SLR SLR1（居中，连接两侧 Tile）
+#   - IBUF → SLR0（近 XDMA，2MB，64 URAM）
+#   - VPU/CDMA/SMC → SLR0（IS_SOFT，近 OBUF Port A 读写）
+#
+# 注意：IS_SOFT=TRUE 允许 Vivado 在 pblock 满时溢出到相邻 SLR，
+#       只要主要逻辑仍在目标 SLR 内，SLL 穿越即可大幅减少。
 # ============================================================================
 
-# DCIM 计算核（不含 IBUF/OBUF 存储体）
-create_pblock pblock_dcim_compute
-set _g0_cells {}
-foreach _g0_filt {
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles*}
+# Tile 0 + Tile 1 → SLR1
+set _tile01_cells {}
+foreach _t01_filt {
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[0].*}
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[1].*}
+} {
+  set _tc [get_cells -quiet -hierarchical -filter $_t01_filt]
+  if {[llength $_tc]} { set _tile01_cells [concat $_tile01_cells $_tc] }
+}
+if {[llength $_tile01_cells]} {
+  create_pblock pblock_tile_01
+  add_cells_to_pblock [get_pblocks pblock_tile_01] $_tile01_cells
+  resize_pblock [get_pblocks pblock_tile_01] -add {SLR1}
+  set_property IS_SOFT TRUE [get_pblocks pblock_tile_01]
+  puts "INFO: pblock_tile_01 -> SLR1: [llength $_tile01_cells] cells"
+}
+
+# Tile 2 + Tile 3 → SLR2
+set _tile23_cells {}
+foreach _t23_filt {
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[2].*}
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[3].*}
+} {
+  set _tc [get_cells -quiet -hierarchical -filter $_t23_filt]
+  if {[llength $_tc]} { set _tile23_cells [concat $_tile23_cells $_tc] }
+}
+if {[llength $_tile23_cells]} {
+  create_pblock pblock_tile_23
+  add_cells_to_pblock [get_pblocks pblock_tile_23] $_tile23_cells
+  resize_pblock [get_pblocks pblock_tile_23] -add {SLR2}
+  set_property IS_SOFT TRUE [get_pblocks pblock_tile_23]
+  puts "INFO: pblock_tile_23 -> SLR2: [llength $_tile23_cells] cells"
+}
+
+# 仲裁器放 SLR1（居中，面向两侧 Tile 数据通路）
+foreach _arb_cell {
   {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf_arb}
   {NAME =~ */dcim_array_0/inst/u_dcim_array/u_obuf_arb}
 } {
-  set _g0_c [get_cells -quiet -hierarchical -filter $_g0_filt]
-  if {[llength $_g0_c]} {
-    set _g0_cells [concat $_g0_cells $_g0_c]
+  set _arb_c [get_cells -quiet -hierarchical -filter $_arb_cell]
+  if {[llength $_arb_c]} {
+    set_property USER_SLR_ASSIGNMENT SLR1 $_arb_c
   }
 }
-if {[llength $_g0_cells]} {
-  add_cells_to_pblock [get_pblocks pblock_dcim_compute] $_g0_cells
-  resize_pblock [get_pblocks pblock_dcim_compute] -add {SLR1}
-  resize_pblock [get_pblocks pblock_dcim_compute] -add {SLR2}
-  set_property IS_SOFT TRUE [get_pblocks pblock_dcim_compute]
-}
 
-# IBUF（2MB，2 bank）与 OBUF bank0 同处 SLR0，靠近 AXI 写通路
+# IBUF（2MB，64 URAM）→ SLR0，靠近 XDMA AXI 写通路
 set _ibuf_top [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf}]
 if {[llength $_ibuf_top]} {
   create_pblock pblock_ibuf
@@ -339,10 +369,10 @@ foreach _slr_cell {
 }
 
 # ============================================================================
-# OBUF per-bank Pblock（lite: 4 bank × 4MB URAM；xcvu37p-fsvh2892 无 SLR3）
-# ============================================================================
-# wea_reg3 与对应 bank URAM cascade 必须同 SLR；obuf.v reg3 已 DONT_TOUCH。
-# gen_banks[0] 与 URAM cascade (SLR1) 同域，避免 reg2→URAM 跨 SLR。
+# OBUF per-bank Pblock（lite: 4 bank × 4MB URAM = 512 URAM total）
+# bank0/1 → SLR1（与 Tile 0/1 同 SLR，消除 obuf_din/obuf_addr 路径跨 SLR）
+# bank2/3 → SLR2（与 Tile 2/3 同 SLR）
+# wea_reg3 与对应 bank URAM cascade 同 SLR；obuf.v reg3 已 DONT_TOUCH。
 # ============================================================================
 
 set _obuf_b0 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[0].*}]
@@ -357,9 +387,10 @@ set _obuf_b1 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[
 if {[llength $_obuf_b1]} {
   create_pblock pblock_obuf_bank1
   add_cells_to_pblock [get_pblocks pblock_obuf_bank1] $_obuf_b1
-  resize_pblock [get_pblocks pblock_obuf_bank1] -add {SLR2}
+  resize_pblock [get_pblocks pblock_obuf_bank1] -add {SLR1}
   set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank1]
 }
+
 set _obuf_b2 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[2].*}]
 if {[llength $_obuf_b2]} {
   create_pblock pblock_obuf_bank2
