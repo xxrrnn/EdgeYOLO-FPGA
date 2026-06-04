@@ -101,19 +101,23 @@ BATCH_SUITE_concat_all      := concat_2src_c64_c64_hw8x8 concat_2src_c128_c128_h
 BATCH_SUITE_conv_pipe_all   := pipe_conv3_s2_c32_to64 pipe_conv1_c512_to64_tilepass
 BATCH_SUITE_mini_network_all := mini_2conv_c16 mini_3conv_residual_c32
 
-# --- smoke：改 RTL 后快速验证（约 14 用例，全量逐 word 比对 expected.hex，非抽样）---
-#   dcim: INT8+INT16 tiny  |  qa/dqa: int8+int16 各 1 个  |  concat 仅 8x8 c64（避免百次级 CDMA）
-#   pipeline: 1x1 小 conv + 2 层 mini（im2col→CDMA→DCIM→DQA→QA 与多层 OBUF）
-BATCH_SUITE_dcim_smoke      := dcim_tiny_1x1 int16_tiny_1x1
+# --- smoke：改 RTL 后快速验证（约 18 用例，全量逐 word 比对 expected.hex，非抽样）---
+#   dcim: INT8(1x1+3x3 stride-2) + INT16(1x1)  ← 3x3/stride-2 是最高频改动路径
+#   qa/dqa: int8+int16 各 1 个
+#   im2col: 6x6 stride-2 + 3x3 stride-1（覆盖典型 padding/步长组合）
+#   pipeline: 1x1 + stride-2 conv3（全链路 im2col→CDMA→DCIM→DQA→QA）
+#   mini: 2层 + 3层 residual（多层 OBUF + ADD 路径）
+#   concat: 仅 8x8 c64（避免百次级 CDMA 仿真时间）
+BATCH_SUITE_dcim_smoke      := dcim_tiny_1x1 conv3_s2_c32_to64 int16_tiny_1x1
 BATCH_SUITE_qa_smoke        := qa_c16_signed
 BATCH_SUITE_dqa_smoke       := dqa_c32_mid dqa_accum16_c32
-BATCH_SUITE_im2col_smoke    := im2col_6x6_s2_c3
+BATCH_SUITE_im2col_smoke    := im2col_6x6_s2_c3 im2col_3x3_s1_c128
 BATCH_SUITE_mp_smoke        := mp_resnet_stem
 BATCH_SUITE_us_smoke        := us_128_10_to20
 BATCH_SUITE_add_smoke       := add_residual_16
 BATCH_SUITE_concat_smoke    := concat_2src_c64_c64_hw8x8
-BATCH_SUITE_conv_pipe_smoke := pipe_conv1_c16_to16
-BATCH_SUITE_mini_network_smoke := mini_2conv_c16
+BATCH_SUITE_conv_pipe_smoke := pipe_conv1_c16_to16 pipe_conv3_s2_c32_to64
+BATCH_SUITE_mini_network_smoke := mini_2conv_c16 mini_3conv_residual_c32
 
 .PHONY: export compile sim sim-export run fsdb verdi data clean clean-compile help
 .PHONY: check-export sim-batch _sim_batch_run data-batch _data_batch_run
