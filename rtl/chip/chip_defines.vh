@@ -145,8 +145,10 @@
 // ============================================================================
 
 // ── IBUF 主旋钮 ───────────────────────────────────────────────────────────
-`define DCIM_IBUF_NUM_BANKS          2       // 须为 2 的幂
-`define DCIM_IBUF_NBPIPE             4       // ibuf_bank：URAM 输出流水级数
+// 250MHz：更多 bank 缩短每 bank URAM 级联深度；URAM_RD_STAGES 将读拆为 addr→data 两拍
+`define DCIM_IBUF_NUM_BANKS          4       // 须为 2 的幂（2→4：单 bank 地址少 1bit，减 URAM 链长）
+`define DCIM_IBUF_URAM_RD_STAGES     1       // ibuf_bank：单拍 mem[addra]→寄存（Vivado URAM 可推断）；勿用 addr 锁存再读
+`define DCIM_IBUF_NBPIPE             6       // ibuf_bank：URAM 输出之后到 dout 的流水级数
 `define DCIM_IBUF_IN_REG             1       // Port A/B 输入寄存（0=旁路）
 `define DCIM_IBUF_BANK_SEL_PIPE_EXTRA 3      // ibuf.v bank_sel_*_pipe：NBPIPE 之后再打 3 拍
 
@@ -159,10 +161,11 @@
 `define DCIM_IBUF_RD_LATENCY         (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE + `DCIM_IBUF_ARB_LATENCY_EXTRA)
 
 // ── OBUF 主旋钮 ───────────────────────────────────────────────────────────
-`define DCIM_OBUF_NUM_BANKS          2
-`define DCIM_OBUF_NBPIPE             4
+`define DCIM_OBUF_NUM_BANKS          4       // 2→4：减 URAM 级联；8 bank 过小会致 Synth 8-2914/8-6849
+`define DCIM_OBUF_URAM_RD_STAGES     1       // obuf_bank：单拍 mem[addra]→memreg（与 ibuf 同模板）；时序靠 XDC MCP
+`define DCIM_OBUF_NBPIPE             6       // obuf_bank：mem_rstage 之后到 dout 的流水级数
 `define DCIM_OBUF_IN_REG_STAGES      3       // obuf.v：中心 reg1 + per-bank reg2/reg3
-`define DCIM_OBUF_POST_URAM_PIPE     3       // obuf_bank：memrega + mem_rstage + douta
+`define DCIM_OBUF_POST_URAM_PIPE     (`DCIM_OBUF_URAM_RD_STAGES + 1)  // URAM 读流水 + mem_rstage
 `define DCIM_OBUF_WR_URAM_DRAIN_EXTRA 5     // Tile 写：IN_REG 之后 URAM 写级联排空余量
 
 // ── OBUF 推导 ─────────────────────────────────────────────────────────────
@@ -172,6 +175,13 @@
 `define DCIM_OBUF_BANK_MUX_PIPE      (`DCIM_OBUF_NBPIPE + `DCIM_OBUF_IN_REG_STAGES + `DCIM_OBUF_POST_URAM_PIPE)
 `define DCIM_OBUF_RD_TOTAL_PIPE      `DCIM_OBUF_BANK_MUX_PIPE
 `define DCIM_OBUF_WR_DRAIN           (`DCIM_OBUF_IN_REG_STAGES + `DCIM_OBUF_WR_URAM_DRAIN_EXTRA)
+
+// AXI BRAM Controller READ_LATENCY（CDMA/XDMA 经 Port A 读 obuf/ibuf）
+// axi_bram 在 bram_rddata 前再固定 +EXTRA 拍；OBUF = RD_TOTAL_PIPE+EXTRA（concat 标定 EXTRA=2，URAM_RD_STAGES=2 → LAT=14）
+`define DCIM_IBUF_AXI_BRAM_READ_LATENCY_SUB 3
+`define DCIM_OBUF_AXI_BRAM_READ_LATENCY_EXTRA 2
+`define DCIM_IBUF_AXI_BRAM_READ_LATENCY (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE - `DCIM_IBUF_AXI_BRAM_READ_LATENCY_SUB)
+`define DCIM_OBUF_AXI_BRAM_READ_LATENCY (`DCIM_OBUF_RD_TOTAL_PIPE + `DCIM_OBUF_AXI_BRAM_READ_LATENCY_EXTRA)
 
 // ── OBUF 外部字节地址：无 group 选择位，字地址即 OBUF 内部地址 ───────────
 `define DCIM_OBUF_EXT_ADDR_BITS `DCIM_OBUF_ADDR_WIDTH  // = 20 bits

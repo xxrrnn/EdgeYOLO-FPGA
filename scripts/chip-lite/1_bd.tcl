@@ -5,9 +5,8 @@ if {![info exists ScriptDir]} {
     source [file normalize "$thisScriptDir/config.tcl"]
 }
 
-if {[llength [get_projects -quiet]] == 0} {
-    error "Please source 0_build.tcl before 1_bd.tcl."
-}
+source [file normalize "$scriptsDir/common/chip_lite_bd.tcl"]
+chip_lite_ensure_project_open
 
 # FP32 IPs for VPU
 source [file normalize "$scriptsDir/ip/floating_point_fp32.tcl"]
@@ -16,13 +15,22 @@ if {[llength [get_ips -quiet fp32_mult_lane]] == 0 || [llength [get_ips -quiet f
 }
 
 set bdFile [file normalize "$bdDir/$bdName/$bdName.bd"]
+set bdRoot [file normalize "$bdDir/$bdName"]
 if {[llength [get_files -quiet $bdFile]] != 0} {
     remove_files $bdFile
 }
-if {[file exists [file dirname $bdFile]]} {
-    catch {file delete -force [file dirname $bdFile]}
-    if {[file exists [file dirname $bdFile]]} {
-        # Directory still exists (open file handles); do incremental update instead
+if {[file exists $bdRoot]} {
+    puts "INFO: Removing stale BD output tree: $bdRoot"
+    set retries 3
+    while {$retries > 0 && [file exists $bdRoot]} {
+        catch {file delete -force $bdRoot}
+        if {[file exists $bdRoot]} {
+            incr retries -1
+            after 500
+        }
+    }
+    if {[file exists $bdRoot]} {
+        error "Cannot delete $bdRoot (file lock?). Close other Vivado sessions and retry."
     }
 }
 
@@ -121,17 +129,11 @@ set_property verilog_define [list \
 # ============================================================================
 create_bd_cell -type module -reference DCIM_Array_bd dcim_array_0
 set_property -dict [list \
-    CONFIG.NUM_GROUPS {1} \
-    CONFIG.TILES_PER_GROUP {4} \
     CONFIG.NUM_TILES {4} \
 ] [get_bd_cells dcim_array_0]
-# 禁用 dcim_array_0 的 OOC 综合（同 vpu_0，避免 project 重建后 DCP 关联失效）
+# module reference IP 仍需要 OOC 生成 stub/DCP；2_synth.tcl 会显式 launch/wait 并在顶层综合前 export
 catch {set_property generate_synth_checkpoint false [get_bd_cells dcim_array_0]}
 create_bd_cell -type module -reference Global_VPU_top vpu_0
-# 禁用 vpu_0 的 OOC 综合：module reference 类型的 BD cell 在 project 重建后
-# OOC run DCP 有时无法被顶层 synth_design 找到（Vivado bug）。
-# 设置 OOC 属性使 Vivado 在顶层综合中内联展开 RTL，
-# 避免 "module 'lite_vpu_0_0' not found" 错误。
 catch {set_property generate_synth_checkpoint false [get_bd_cells vpu_0]}
 
 # ============================================================================
@@ -145,6 +147,7 @@ source [file normalize "$ipBdDir/address.tcl"]
 
 validate_bd_design
 regenerate_bd_layout
+apply_dcim_axi_bram_read_latency
 save_bd_design
 
 make_wrapper -files [get_files $bdFile] -top
@@ -155,6 +158,14 @@ update_compile_order -fileset sources_1
 report_ip_status -name ip_status
 catch {update_module_reference [get_ips -quiet *dcim_array_0*]}
 catch {update_module_reference [get_ips -quiet *vpu_0*]}
+
+# OOC：在 1_bd 阶段即 generate 全部 IP 并补齐 SmartConnect 嵌套 XDC，
+# 避免 2_synth 首次 create_ip_run 时 OOC 脚本引用不存在的 *_board.xdc
+source [file normalize "$scriptsDir/common/vivado_bd_ooc.tcl"]
+vivado_prepare_bd_ips $bdFile $bdDir $bdName
+create_ip_run [get_files $bdFile]
+export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
+vivado_assert_ooc_xdc_on_disk [file normalize "$bdDir/$bdName/ip"] "1_bd.tcl post-export"
 
 foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
     add_files -fileset constrs_1 $xdcFile

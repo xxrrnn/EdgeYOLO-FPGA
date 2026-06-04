@@ -32,10 +32,35 @@ cd rtl/tb/lite_bd/module_tb
 make sim MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 ```
 
+改 RTL 后快速冒烟（推荐）：
+
+```bash
+make compile         # 改 RTL 后先重编 simv
+make sim-smoke       # 约 12 用例：各 unit 最小例 + conv1x1 + mini_2conv
+make sim-results
+```
+
+**改 RTL 后推荐（小规模、仍逐 word 比对 golden）：**
+
+```bash
+make compile         # 仅改 RTL 时先重编 simv
+make sim-smoke       # 约 14 个用例：unit 冒烟 + pipeline 冒烟（远快于 sim-all）
+make sim-results
+```
+
+全量回归：
+
+```bash
+make sim-unit        # 各 unit：DCIM/QA/DQA/im2col/MP/US/ADD/concat + extreme
+make sim-pipeline    # 算子级：conv_pipeline、mini_network
+make sim-all         # unit + pipeline
+make sim-results     # 汇总 PASS/FAIL
+```
+
 批量跑一个 suite：
 
 ```bash
-make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_int8
+make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all
 ```
 
 查看可用 suite / case：

@@ -1,17 +1,14 @@
 
 //  Xilinx UltraRAM True Dual Port Mode - Byte write with Multi-Bank Architecture
 //  ============================================================================
-//  优化版本 v4：写侧 reg3 + 读侧 memrega/mem_rstage（均 DONT_TOUCH）
+//  优化版本 v6（250MHz）：写侧 reg3 + 读侧 addr 预寄存 + URAM 读 + mem_rstage + NBPIPE
 //
 //  关键优化：
-//  1. 多 Bank 并行：将大容量存储分成 NUM_BANKS 个独立 bank
-//  2. 三级输入寄存器（写路径）：
-//     - reg1（中心，1 份）：吸收上游长 routing（含 SLR 跨越）
-//     - reg2（per-bank）：bank 选择后的第一级
-//     - reg3（per-bank，DONT_TOUCH）：紧贴 URAM cascade 起点，打断写路径
-//  3. 读侧硬隔离：mem_rstage + NBPIPE 输出流水（DONT_TOUCH，在 memrega 之后）；
-//     memrega/memregb 不可 DONT_TOUCH（会阻断 URAM288 推断，Synth 8-2914）
-//  4. 输出流水线：bank 选择 pipeline 长度 +3（相对 v2）
+//  1. 多 Bank 并行（NUM_BANKS=4）：缩短每 bank URAM 级联深度
+//  2. 三级输入寄存器（写路径）：reg1/reg2/reg3（per-bank DONT_TOUCH）
+//  3. 读侧单拍 mem[addra]→memreg（与 ibuf 同 URAM 模板；时序靠 chip_timing.xdc MCP）
+//  4. mem_rstage + NBPIPE 输出流水（DONT_TOUCH）
+//  5. 输出流水线：bank 选择 pipeline 与 chip_defines 中 BANK_MUX_PIPE 一致
 //  ============================================================================
 //
 //  时序契约（重要）：
@@ -19,6 +16,7 @@
 //      = 3 拍 (IN_REG1 + IN_REG2 + IN_REG3) + URAM 内部 cascade 传播
 //    写为 fire-and-forget，外部无需感知。
 //  - 读延迟：DCIM_OBUF_BANK_MUX_PIPE = NBPIPE + IN_REG_STAGES + POST_URAM_PIPE
+//    obuf_bank：URAM_RD_STAGES(2)=addr 预寄存 + URAM 读 + mem_rstage/NBPIPE。
 //    VPU 通过 douta_valid 握手，无需硬编码等待。
 //  参数统一见 rtl/chip/chip_defines.vh
 //  ============================================================================
@@ -177,10 +175,29 @@ endgenerate
 (* shreg_extract = "no" *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_a_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
 (* shreg_extract = "no" *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_b_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
 
+// bank_sel / read_en 与 per-bank reg3 对齐（reg1 就启动会导致 CDMA 读早 1~2 拍 → concat 整体错位）
+reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_a_align [0:`DCIM_OBUF_IN_REG_STAGES-1];
+reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_b_align [0:`DCIM_OBUF_IN_REG_STAGES-1];
+reg port_a_rd_align [0:`DCIM_OBUF_IN_REG_STAGES-1];
+reg port_b_rd_align [0:`DCIM_OBUF_IN_REG_STAGES-1];
+
 integer i;
 always @(posedge clk) begin
-    bank_sel_a_pipe[0] <= bank_sel_a_q1;
-    bank_sel_b_pipe[0] <= bank_sel_b_q1;
+    bank_sel_a_align[0] <= bank_sel_a_q1;
+    bank_sel_b_align[0] <= bank_sel_b_q1;
+    port_a_rd_align[0]   <= mem_ena_reg && ~|wea_reg;
+    port_b_rd_align[0]   <= mem_enb_reg && ~|web_reg;
+    for (i = 1; i < `DCIM_OBUF_IN_REG_STAGES; i = i + 1) begin
+        bank_sel_a_align[i] <= bank_sel_a_align[i-1];
+        bank_sel_b_align[i] <= bank_sel_b_align[i-1];
+        port_a_rd_align[i]   <= port_a_rd_align[i-1];
+        port_b_rd_align[i]   <= port_b_rd_align[i-1];
+    end
+end
+
+always @(posedge clk) begin
+    bank_sel_a_pipe[0] <= bank_sel_a_align[`DCIM_OBUF_IN_REG_STAGES-1];
+    bank_sel_b_pipe[0] <= bank_sel_b_align[`DCIM_OBUF_IN_REG_STAGES-1];
     for (i = 1; i < `DCIM_OBUF_BANK_MUX_PIPE; i = i + 1) begin
         bank_sel_a_pipe[i] <= bank_sel_a_pipe[i-1];
         bank_sel_b_pipe[i] <= bank_sel_b_pipe[i-1];
@@ -193,8 +210,7 @@ end
 // read_en_pipe：跟踪 Port A 读使能，流水到输出，产生 douta_valid
 (* shreg_extract = "no" *) reg read_en_pipe_a [0:`DCIM_OBUF_BANK_MUX_PIPE];
 always @(posedge clk) begin
-    // 第 0 级：IN_REG1 完成后（addra_reg 有效，wea=0）
-    read_en_pipe_a[0] <= mem_ena_reg && ~|wea_reg;
+    read_en_pipe_a[0] <= port_a_rd_align[`DCIM_OBUF_IN_REG_STAGES-1];
     for (i = 0; i < `DCIM_OBUF_BANK_MUX_PIPE; i = i + 1)
         read_en_pipe_a[i+1] <= read_en_pipe_a[i];
 end
@@ -205,6 +221,12 @@ initial begin
     for (read_en_init_j = 0; read_en_init_j < `DCIM_OBUF_BANK_MUX_PIPE; read_en_init_j = read_en_init_j + 1) begin
         bank_sel_a_pipe[read_en_init_j] = {`DCIM_OBUF_BANK_BITS{1'b0}};
         bank_sel_b_pipe[read_en_init_j] = {`DCIM_OBUF_BANK_BITS{1'b0}};
+    end
+    for (read_en_init_j = 0; read_en_init_j <= `DCIM_OBUF_IN_REG_STAGES; read_en_init_j = read_en_init_j + 1) begin
+        bank_sel_a_align[read_en_init_j] = {`DCIM_OBUF_BANK_BITS{1'b0}};
+        bank_sel_b_align[read_en_init_j] = {`DCIM_OBUF_BANK_BITS{1'b0}};
+        port_a_rd_align[read_en_init_j]   = 1'b0;
+        port_b_rd_align[read_en_init_j]   = 1'b0;
     end
 end
 assign douta_valid = read_en_pipe_a[`DCIM_OBUF_BANK_MUX_PIPE];
@@ -246,7 +268,7 @@ initial begin
         mem[mem_init_i] = {`DCIM_BUF_DATA_WIDTH{1'b0}};
 end
 
-// memrega/memregb：URAM 读输出边界，须允许综合器吸收进 URAM macro
+// Port A/B 读：与 ibuf 相同单地址模板 memrega<=mem[addra]（勿读写各用不同 addr，Synth 8-2914）
 reg [`DCIM_BUF_DATA_WIDTH-1:0] memrega;
 (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_rstage_rega;
 (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_pipe_rega [`DCIM_OBUF_NBPIPE-1:0];

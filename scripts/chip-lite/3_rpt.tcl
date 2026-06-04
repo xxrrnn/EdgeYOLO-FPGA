@@ -9,9 +9,8 @@ if {![info exists ScriptDir]} {
     source [file normalize "$thisScriptDir/config.tcl"]
 }
 
-if {[llength [get_projects -quiet]] == 0} {
-    open_project $projPath/$projName.xpr
-}
+source [file normalize "$scriptsDir/common/chip_lite_bd.tcl"]
+chip_lite_ensure_project_open
 
 file mkdir $ImplOutputDir
 set rptDir [file normalize "$ImplOutputDir/reports"]

@@ -32,13 +32,16 @@ if {[llength [get_ports -quiet cpu_reset]]} {
   set_false_path -from [get_ports cpu_reset]
 }
 
-# DCIM 异步复位 (CLR/PRE/RST pins) — 覆盖全路径，包括旧层次 u_top 和新层次 inst
-# post_place async_default Recovery WNS=-1.468ns: main_rst BUFGCE(fan-out=405956) → DCIM CLR
-# 异步复位 recovery/removal check 无实际功能意义，全部 false_path
+# DCIM 异步复位 (CLR/PRE/RST pins) — 覆盖全路径，包括 main_rst → Tile 内部寄存器
 set _dcim_async_rst [get_pins -quiet -hierarchical \
   -filter {NAME =~ *dcim_array_0/*CLR || NAME =~ *dcim_array_0/*PRE}]
 if {[llength $_dcim_async_rst]} {
   set_false_path -to $_dcim_async_rst
+}
+set _main_rst_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */main_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/C}]
+if {[llength $_main_rst_from] && [llength $_dcim_async_rst]} {
+  set_false_path -from $_main_rst_from -to $_dcim_async_rst
 }
 
 # XDMA user_reset → BRAM reset ports
@@ -87,10 +90,14 @@ set_false_path \
   -from [get_pins -quiet -hierarchical -filter {NAME =~ */phy_rate_chain_cp/*/ff_chain_reg*/C}] \
   -to   [get_pins -quiet -hierarchical -filter {NAME =~ */phy_pipeline/phy_rate_chain/*/ff_chain_reg*/D}]
 
-# PCIe SAXISCC (AXI stream crossing) hold
-set_false_path -hold \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/*}] \
-  -to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/SAXISCC*}]
+# PCIe SAXISCC (AXI stream crossing) hold — 仅 reg 时钟脚，避免匹配 BD 端口
+set _fp_saxis_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */xdma_0/inst/* && NAME =~ *_reg*/C}]
+set _fp_saxis_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */pcie_4_c_e4_inst/SAXISCC*}]
+if {[llength $_fp_saxis_from] && [llength $_fp_saxis_to]} {
+  set_false_path -hold -from $_fp_saxis_from -to $_fp_saxis_to
+}
 
 # DCIM weight_reg → SRAM DINB hold（SRAM 写入时序由 DCIM 协议保证）
 # 路径: gen_tiles[N].u_tile/dcim_data_wei_reg → u_dcim/.../mem_reg*/DINBDIN
@@ -167,18 +174,19 @@ if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
 # clk_out1_lite_hbm_axi_clk_wiz_0 setup WNS=-0.198ns (17 EP):
 #   HBM_SNGLBLI_INTF_AXI.WREADY_PIPE → LUT4 → FDCE
 #   HBM AXI IP 内部信号，Xilinx 官方 IP 不需要用户保证此路径时序，豁免之
-set_false_path -setup \
-  -from [get_pins -quiet -hierarchical \
-    -filter {NAME =~ */hbm_0/inst/*HBM_SNGLBLI_INTF_AXI*/WREADY_PIPE}]
+set _hbm_wready [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */hbm_0/inst/*HBM_SNGLBLI_INTF_AXI*/WREADY_PIPE}]
+if {[llength $_hbm_wready]} {
+  set_false_path -setup -from $_hbm_wready
+}
 
-# **async_default** Recovery WNS=-0.145ns (1 EP):
-#   hbm_rst/ACTIVE_LOW_PR_OUT_DFF/FDRE_PER_N → hbm_0/ARESET_N
-#   HBM 复位为异步信号，recovery check 无需满足，豁免之
-set_false_path \
-  -from [get_pins -quiet -hierarchical \
-    -filter {NAME =~ */hbm_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/FDRE_PER_N/C}] \
-  -to   [get_pins -quiet -hierarchical \
-    -filter {NAME =~ */hbm_0/inst/*ARESET_N}]
+set _hbm_rst_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */hbm_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/FDRE_PER_N/C}]
+set _hbm_rst_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */hbm_0/inst/*ARESET_N}]
+if {[llength $_hbm_rst_from] && [llength $_hbm_rst_to]} {
+  set_false_path -from $_hbm_rst_from -to $_hbm_rst_to
+}
 
 # ============================================================================
 # DCIM maArray 多周期路径约束
@@ -264,16 +272,49 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 }
 
 # ============================================================================
-# SLR Pblock 约束 (lite: 仅 1 group，4 Tile × 64×64，逻辑量超出原 20 clock region 约束)
+# SLR Pblock 约束 (lite: 4 Tile Array, OBUF/IBUF 各 2 bank, 器件仅 SLR0~2)
 # ============================================================================
-# pblock_group_0: DCIM 计算核锁在 SLR0（整个 SLR，让 Vivado 在 SLR0 内自由 place）
-# IS_SOFT: 保持默认 TRUE，Vivado 在满足约束的前提下可溢出到相邻区域
-create_pblock pblock_group_0
-add_cells_to_pblock [get_pblocks pblock_group_0] [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array}]
-resize_pblock [get_pblocks pblock_group_0] -add {SLR0}
+# 布局失败根因（2026-06）：原先把整个 u_dcim_array 塞进 SLR0（~2× LUT 容量），
+# 又与 OBUF bank[1] 硬约束 SLR1、USER_SLR SLR0 冲突，导致 carry macro 无法放置。
+#
+# 策略：
+#   - pblock_dcim_compute：仅 DCIM 计算（gen_tiles + 仲裁），不含 u_ibuf/u_obuf URAM
+#   - 计算核偏好 SLR1+SLR2（IS_SOFT），避免与 OBUF bank0@SLR0 抢资源
+#   - pblock_axi_vpu：SLR0 软约束（近 XDMA / OBUF AXI / VPU 直连 OBUF）
+#   - OBUF：仅 2 bank（DCIM_OBUF_NUM_BANKS=2），bank0@SLR0, bank1@SLR1
+# 约束优先级：OBUF per-bank hard > soft pblock_dcim_compute > USER_SLR_ASSIGNMENT
+# ============================================================================
 
-# AXI 互连 + VPU + INST_Decoder + CDMA 放在 SLR0
-# IS_SOFT TRUE: 两部分共享 SLR0，不强制区域边界
+# DCIM 计算核（不含 IBUF/OBUF 存储体）
+create_pblock pblock_dcim_compute
+set _g0_cells {}
+foreach _g0_filt {
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles*}
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf_arb}
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/u_obuf_arb}
+} {
+  set _g0_c [get_cells -quiet -hierarchical -filter $_g0_filt]
+  if {[llength $_g0_c]} {
+    set _g0_cells [concat $_g0_cells $_g0_c]
+  }
+}
+if {[llength $_g0_cells]} {
+  add_cells_to_pblock [get_pblocks pblock_dcim_compute] $_g0_cells
+  resize_pblock [get_pblocks pblock_dcim_compute] -add {SLR1}
+  resize_pblock [get_pblocks pblock_dcim_compute] -add {SLR2}
+  set_property IS_SOFT TRUE [get_pblocks pblock_dcim_compute]
+}
+
+# IBUF（2MB，2 bank）与 OBUF bank0 同处 SLR0，靠近 AXI 写通路
+set _ibuf_top [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf}]
+if {[llength $_ibuf_top]} {
+  create_pblock pblock_ibuf
+  add_cells_to_pblock [get_pblocks pblock_ibuf] $_ibuf_top
+  resize_pblock [get_pblocks pblock_ibuf] -add {SLR0}
+  set_property IS_SOFT TRUE [get_pblocks pblock_ibuf]
+}
+
+# AXI 互连 + VPU + INST_Decoder + CDMA：SLR0 软约束（与 OBUF port A / XDMA 近）
 create_pblock pblock_axi_vpu
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/axi_mem_smc/*}]
 add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
@@ -284,108 +325,193 @@ add_cells_to_pblock [get_pblocks pblock_axi_vpu] [get_cells -quiet -hierarchical
 resize_pblock [get_pblocks pblock_axi_vpu] -add {SLR0}
 set_property IS_SOFT TRUE [get_pblocks pblock_axi_vpu]
 
-# ============================================================================
-# SLR 分配 (lite: DCIM 核逻辑在 SLR0，OBUF 各 bank 分散到各 SLR)
-# ============================================================================
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ *u_dcim_array*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/vpu_0/*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_decoder/*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/cdma_ctrl/*}]
-set_property USER_SLR_ASSIGNMENT SLR0 [get_cells -quiet -hierarchical -filter {NAME =~ lite_i/inst_bram/*}]
-
-# ============================================================================
-# OBUF per-bank Pblock（时序修复核心）
-# ============================================================================
-# 背景：OBUF 是 16MB（AWIDTH=20），分 4 个 bank，每 bank 4MB 需 ~128 URAM。
-# VU37P 每个 SLR 约有 570 URAM，每 bank 独占一个 SLR 资源充足。
-#
-# 问题根源：所有 bank 的 wea_reg2 值相同（均来自 wea_reg），Vivado 将其合并
-# 为一个物理 FF 放在 SLR0，但 bank[1~3] 的 URAM cascade 在 SLR1~3，
-# 造成 2+ SLR 穿越，路由延迟高达 5.3ns，远超 4ns 时钟周期。
-#
-# 修复：obuf.v 已给 reg2 加 DONT_TOUCH 防止合并；此处每 bank 锁一个 SLR，
-# 使 reg2 与对应 URAM cascade 共处同一 SLR，消除跨 SLR 路由。
-#
-# 约束优先级：per-bank hard Pblock > soft pblock_group_0 > USER_SLR_ASSIGNMENT
-# （Vivado 以最严格约束为准，OBUF bank 的放置以下方 hard pblock 为准）
-# ============================================================================
-
-# bank[0] → SLR0（与 DCIM 控制逻辑同层，AXI 接口延迟最小）
-create_pblock pblock_obuf_bank0
-add_cells_to_pblock [get_pblocks pblock_obuf_bank0] \
-  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[0].*}]
-resize_pblock [get_pblocks pblock_obuf_bank0] -add {SLR0}
-set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank0]
-
-# bank[1] → SLR1
-create_pblock pblock_obuf_bank1
-add_cells_to_pblock [get_pblocks pblock_obuf_bank1] \
-  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[1].*}]
-resize_pblock [get_pblocks pblock_obuf_bank1] -add {SLR1}
-set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank1]
-
-# bank[2] → SLR2
-create_pblock pblock_obuf_bank2
-add_cells_to_pblock [get_pblocks pblock_obuf_bank2] \
-  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[2].*}]
-resize_pblock [get_pblocks pblock_obuf_bank2] -add {SLR2}
-set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank2]
-
-# bank[3] → SLR3
-create_pblock pblock_obuf_bank3
-add_cells_to_pblock [get_pblocks pblock_obuf_bank3] \
-  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[3].*}]
-resize_pblock [get_pblocks pblock_obuf_bank3] -add {SLR3}
-set_property IS_SOFT FALSE [get_pblocks pblock_obuf_bank3]
-
-puts "INFO: OBUF per-bank Pblocks created: bank[0]→SLR0, bank[1]→SLR1, bank[2]→SLR2, bank[3]→SLR3"
-
-# ============================================================================
-# OBUF URAM cascade multicycle path
-# ============================================================================
-# OBUF is 16MB deep (AWIDTH=20), requiring 7+ URAM cascade stages.
-# The cascade read data path takes ~5.5ns (> 4ns period at 250MHz).
-# This is safe because obuf_bank has NBPIPE=2 pipeline registers that
-# absorb the extra latency. OBUF READ_LATENCY is set to 9 in chip_defines.
-set_multicycle_path 2 -setup \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_rega_reg*}]
-set_multicycle_path 1 -hold \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_rega_reg*}]
-
-# IBUF URAM cascade (AWIDTH=17, cascade ~16 deep)
-set_multicycle_path 2 -setup \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_rega_reg*}]
-set_multicycle_path 1 -hold \
-  -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}] \
-  -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_rega_reg*}]
-
-# im2col S_INIT one-time precompute registers
-
-# ============================================================================
-# OBUF WRITE PATH: wea_reg2 → LUT decode → cross-SLR route → URAM CAS_IN_EN_B
-# post_place violation: -1.630ns
-# Path: gen_banks[0].wea_reg2_reg[6]/Q → LUT4+LUT6+LUT6 → 3.4ns SLR route →
-#       gen_banks[1].u_bank/mem_reg_uram_207/CAS_IN_EN_B
-#
-# Fix: 2-cycle multicycle path for the write-enable decode to URAM CAS_IN_EN
-# Functional safety: wea_reg2 is already 2 FF stages behind the input (wea→
-# wea_reg→wea_reg2), so the URAM CAS_IN_EN_B sees valid data one cycle early
-# (it samples on the cycle AFTER CAS_IN_EN is set). A 2-cycle setup exception
-# does not alter write semantics.
-# ============================================================================
-set _obuf_wea_src [get_cells -quiet -hierarchical \
-  -filter {NAME =~ *u_obuf*gen_banks*.wea_reg2_reg*}]
-set _obuf_uram_dst [get_cells -quiet -hierarchical \
-  -filter {NAME =~ *u_obuf*mem_reg_uram*}]
-if {[llength $_obuf_wea_src] && [llength $_obuf_uram_dst]} {
-  set_multicycle_path 2 -setup \
-    -from $_obuf_wea_src \
-    -to   $_obuf_uram_dst
-  set_multicycle_path 1 -hold \
-    -from $_obuf_wea_src \
-    -to   $_obuf_uram_dst
-  puts "INFO: OBUF wea→URAM MCP: [llength $_obuf_wea_src] src, [llength $_obuf_uram_dst] dst"
+# SLR 分配：须作用在层次 cell 上（非 leaf）
+foreach _slr_cell {
+  lite_i/vpu_0
+  lite_i/inst_decoder
+  lite_i/cdma_ctrl
+  lite_i/inst_bram
+} {
+  set _c [get_cells -quiet $_slr_cell]
+  if {[llength $_c]} {
+    set_property USER_SLR_ASSIGNMENT SLR0 $_c
+  }
 }
+
+# ============================================================================
+# OBUF per-bank Pblock（lite: 4 bank × 4MB URAM；xcvu37p-fsvh2892 无 SLR3）
+# ============================================================================
+# wea_reg3 与对应 bank URAM cascade 必须同 SLR；obuf.v reg3 已 DONT_TOUCH。
+# gen_banks[0] 与 URAM cascade (SLR1) 同域，避免 reg2→URAM 跨 SLR。
+# ============================================================================
+
+set _obuf_b0 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[0].*}]
+if {[llength $_obuf_b0]} {
+  create_pblock pblock_obuf_bank0
+  add_cells_to_pblock [get_pblocks pblock_obuf_bank0] $_obuf_b0
+  resize_pblock [get_pblocks pblock_obuf_bank0] -add {SLR1}
+  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank0]
+}
+
+set _obuf_b1 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[1].*}]
+if {[llength $_obuf_b1]} {
+  create_pblock pblock_obuf_bank1
+  add_cells_to_pblock [get_pblocks pblock_obuf_bank1] $_obuf_b1
+  resize_pblock [get_pblocks pblock_obuf_bank1] -add {SLR2}
+  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank1]
+}
+set _obuf_b2 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[2].*}]
+if {[llength $_obuf_b2]} {
+  create_pblock pblock_obuf_bank2
+  add_cells_to_pblock [get_pblocks pblock_obuf_bank2] $_obuf_b2
+  resize_pblock [get_pblocks pblock_obuf_bank2] -add {SLR2}
+  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank2]
+}
+
+set _obuf_b3 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[3].*}]
+if {[llength $_obuf_b3]} {
+  create_pblock pblock_obuf_bank3
+  add_cells_to_pblock [get_pblocks pblock_obuf_bank3] $_obuf_b3
+  resize_pblock [get_pblocks pblock_obuf_bank3] -add {SLR2}
+  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank3]
+}
+
+# ============================================================================
+# OBUF / IBUF 延迟策略（lite @ 250MHz）
+# obuf.v v4：reg3 写侧 + memrega/mem_rstage DONT_TOUCH 读侧；MCP 留 4-cycle 余量。
+# ============================================================================
+set _buf_mcp_setup 4
+
+set _obuf_lat_src {}
+foreach _obuf_lat_filt {
+  {NAME =~ *u_obuf*gen_banks*wea_reg3*}
+  {NAME =~ *u_obuf*gen_banks*web_reg3*}
+  {NAME =~ *u_obuf*gen_banks*mem_ena_reg3*}
+  {NAME =~ *u_obuf*gen_banks*mem_enb_reg3*}
+  {NAME =~ *u_obuf*gen_banks*dina_reg3*}
+  {NAME =~ *u_obuf*gen_banks*dinb_reg3*}
+  {NAME =~ *u_obuf*gen_banks*addra_reg3*}
+  {NAME =~ *u_obuf*gen_banks*addrb_reg3*}
+  {NAME =~ *u_obuf*gen_banks*wea_reg2*}
+  {NAME =~ *u_obuf*gen_banks*web_reg2*}
+  {NAME =~ *u_obuf/wea_reg*}
+  {NAME =~ *u_obuf/web_reg*}
+  {NAME =~ *u_obuf/mem_ena_reg}
+  {NAME =~ *u_obuf/mem_enb_reg}
+  {NAME =~ *u_obuf/dina_reg}
+  {NAME =~ *u_obuf/dinb_reg}
+  {NAME =~ *u_obuf/addra_reg}
+  {NAME =~ *u_obuf/addrb_reg}
+} {
+  set _c [get_cells -quiet -hierarchical -filter $_obuf_lat_filt]
+  if {[llength $_c]} { set _obuf_lat_src [concat $_obuf_lat_src $_c] }
+}
+set _obuf_uram_all [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}]
+if {[llength $_obuf_lat_src] && [llength $_obuf_uram_all]} {
+  set_multicycle_path -setup $_buf_mcp_setup -from $_obuf_lat_src -to $_obuf_uram_all
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_obuf_lat_src -to $_obuf_uram_all
+  puts "INFO: OBUF latency MCP $_buf_mcp_setup-setup: [llength $_obuf_lat_src] src -> [llength $_obuf_uram_all] uram"
+}
+
+set _ibuf_lat_src {}
+foreach _ibuf_lat_filt {
+  {NAME =~ *u_ibuf*gen_banks*wea_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*web_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*mem_ena_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*mem_enb_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*dina_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*dinb_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*addra_reg2*}
+  {NAME =~ *u_ibuf*gen_banks*addrb_reg2*}
+  {NAME =~ *u_ibuf/wea_reg*}
+  {NAME =~ *u_ibuf/web_reg*}
+} {
+  set _c [get_cells -quiet -hierarchical -filter $_ibuf_lat_filt]
+  if {[llength $_c]} { set _ibuf_lat_src [concat $_ibuf_lat_src $_c] }
+}
+set _ibuf_uram_all [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}]
+if {[llength $_ibuf_lat_src] && [llength $_ibuf_uram_all]} {
+  set_multicycle_path -setup $_buf_mcp_setup -from $_ibuf_lat_src -to $_ibuf_uram_all
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_ibuf_lat_src -to $_ibuf_uram_all
+  puts "INFO: IBUF latency MCP $_buf_mcp_setup-setup: [llength $_ibuf_lat_src] src -> [llength $_ibuf_uram_all] uram"
+}
+
+# URAM cascade 读数据路径（URAM288 不能作 -from 起点，用 -through）
+# Port A/B 对称：rega+regb；memrega 被吸收时用 rstage 寄存器或 D 引脚兜底
+set _obuf_uram_thru [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}]
+set _obuf_memreg    [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*memreg*_reg*}]
+set _obuf_rstage    [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_rstage_reg*_reg*}]
+set _obuf_pipe_dst  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_reg*_reg*}]
+set _obuf_rstage_pin [get_pins -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_rstage_reg*_reg*/D}]
+if {[llength $_obuf_uram_thru] && [llength $_obuf_memreg]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram_thru -to $_obuf_memreg
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram_thru -to $_obuf_memreg
+  puts "INFO: OBUF URAM->memreg MCP $_buf_mcp_setup-setup: [llength $_obuf_uram_thru] uram -> [llength $_obuf_memreg] memreg"
+}
+if {[llength $_obuf_uram_thru] && [llength $_obuf_rstage]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram_thru -to $_obuf_rstage
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram_thru -to $_obuf_rstage
+  puts "INFO: OBUF URAM->mem_rstage MCP $_buf_mcp_setup-setup: [llength $_obuf_uram_thru] uram -> [llength $_obuf_rstage] rstage"
+}
+if {[llength $_obuf_uram_thru] && [llength $_obuf_rstage_pin]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram_thru -to $_obuf_rstage_pin
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram_thru -to $_obuf_rstage_pin
+  puts "INFO: OBUF URAM->mem_rstage(pin) MCP $_buf_mcp_setup-setup: [llength $_obuf_rstage_pin] pins"
+}
+if {[llength $_obuf_memreg] && [llength $_obuf_rstage]} {
+  set_multicycle_path -setup 2 -from $_obuf_memreg -to $_obuf_rstage
+  set_multicycle_path -hold 1 -from $_obuf_memreg -to $_obuf_rstage
+}
+if {[llength $_obuf_rstage] && [llength $_obuf_pipe_dst]} {
+  set_multicycle_path -setup 1 -from $_obuf_rstage -to $_obuf_pipe_dst
+  set_multicycle_path -hold 0 -from $_obuf_rstage -to $_obuf_pipe_dst
+}
+if {[llength $_obuf_uram_thru] && [llength $_obuf_pipe_dst]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram_thru -to $_obuf_pipe_dst
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram_thru -to $_obuf_pipe_dst
+  puts "INFO: OBUF URAM cascade MCP $_buf_mcp_setup-setup: through [llength $_obuf_uram_thru] uram -> [llength $_obuf_pipe_dst] pipe"
+}
+
+set _ibuf_uram_thru [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}]
+set _ibuf_memreg    [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*memreg*_reg*}]
+set _ibuf_rstage    [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_rstage_reg*_reg*}]
+set _ibuf_pipe_dst  [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_reg*_reg*}]
+set _ibuf_rstage_pin [get_pins -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_rstage_reg*_reg*/D}]
+if {[llength $_ibuf_uram_thru] && [llength $_ibuf_memreg]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram_thru -to $_ibuf_memreg
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram_thru -to $_ibuf_memreg
+  puts "INFO: IBUF URAM->memreg MCP $_buf_mcp_setup-setup: [llength $_ibuf_uram_thru] uram -> [llength $_ibuf_memreg] memreg"
+}
+if {[llength $_ibuf_uram_thru] && [llength $_ibuf_rstage]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram_thru -to $_ibuf_rstage
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram_thru -to $_ibuf_rstage
+  puts "INFO: IBUF URAM->mem_rstage MCP $_buf_mcp_setup-setup: [llength $_ibuf_uram_thru] uram -> [llength $_ibuf_rstage] rstage"
+}
+if {[llength $_ibuf_uram_thru] && [llength $_ibuf_rstage_pin]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram_thru -to $_ibuf_rstage_pin
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram_thru -to $_ibuf_rstage_pin
+  puts "INFO: IBUF URAM->mem_rstage(pin) MCP $_buf_mcp_setup-setup: [llength $_ibuf_rstage_pin] pins"
+}
+if {[llength $_ibuf_memreg] && [llength $_ibuf_rstage]} {
+  set_multicycle_path -setup 2 -from $_ibuf_memreg -to $_ibuf_rstage
+  set_multicycle_path -hold 1 -from $_ibuf_memreg -to $_ibuf_rstage
+}
+if {[llength $_ibuf_rstage] && [llength $_ibuf_pipe_dst]} {
+  set_multicycle_path -setup 1 -from $_ibuf_rstage -to $_ibuf_pipe_dst
+  set_multicycle_path -hold 0 -from $_ibuf_rstage -to $_ibuf_pipe_dst
+}
+if {[llength $_ibuf_uram_thru] && [llength $_ibuf_pipe_dst]} {
+  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram_thru -to $_ibuf_pipe_dst
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram_thru -to $_ibuf_pipe_dst
+  puts "INFO: IBUF URAM cascade MCP $_buf_mcp_setup-setup: through [llength $_ibuf_uram_thru] uram -> [llength $_ibuf_pipe_dst] pipe"
+}
+
+# OBUF bank 内 reg3 → u_bank 组合译码（reg3 已贴 URAM，MCP 仅兜底）
+set _obuf_bank_reg3 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*gen_banks*reg3*}]
+set _obuf_bank_logic [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*gen_banks*u_bank/*}]
+if {[llength $_obuf_bank_reg3] && [llength $_obuf_bank_logic]} {
+  set_multicycle_path -setup $_buf_mcp_setup -from $_obuf_bank_reg3 -to $_obuf_bank_logic
+  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_obuf_bank_reg3 -to $_obuf_bank_logic
+}
+
+# 保留旧 reg2 MCP 会被 reg3 覆盖（同路径取更宽松者由工具合并）

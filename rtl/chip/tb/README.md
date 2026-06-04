@@ -11,11 +11,20 @@ cd rtl/tb/lite_bd/module_tb
 make sim MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 ```
 
-或者跑 DCIM 极限回归：
+改 RTL 后快速冒烟（约 14 次仿真，unit + pipeline 基本组合，全量 golden 逐 word 比对）：
 
 ```bash
 cd rtl/tb/lite_bd/module_tb
-make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme QUANT=all STOP_ON_FAIL=0 LOG=1
+make compile    # 仅改 RTL 时
+make sim-smoke
+make sim-results
+```
+
+全量回归（unit + pipeline）：
+
+```bash
+make sim-all
+# 仅 unit：make sim-unit  仅算子级：make sim-pipeline
 ```
 
 原因：`module_tb` 跑的是完整 lite BD 路径，能覆盖：

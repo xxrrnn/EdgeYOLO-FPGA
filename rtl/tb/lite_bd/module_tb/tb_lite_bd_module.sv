@@ -195,14 +195,41 @@ module tb_lite_bd_module;
         end
     endfunction
 
+    task automatic backdoor_read_obuf_word(input int unsigned word_addr, output [127:0] word128);
+        int unsigned bank_sel, bank_addr;
+        begin
+            bank_sel  = word_addr[`DCIM_OBUF_ADDR_WIDTH-1 -: `DCIM_OBUF_BANK_BITS];
+            bank_addr = word_addr[`DCIM_OBUF_BANK_ADDR_WIDTH-1:0];
+            case (bank_sel)
+                0: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[0].u_bank.mem[bank_addr];
+                1: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[1].u_bank.mem[bank_addr];
+                2: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[2].u_bank.mem[bank_addr];
+                3: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[3].u_bank.mem[bank_addr];
+                // gen_banks[4..] 仅当 DCIM_OBUF_NUM_BANKS>4 时存在；lite 当前为 4 bank
+                default: begin
+                    $display("FATAL: OBUF backdoor read bank out of range word_addr=0x%0h bank=%0d",
+                             word_addr, bank_sel);
+                    $finish(1);
+                end
+            endcase
+        end
+    endtask
+
     task automatic obuf_read_word128(input [23:0] obuf_byte_off, output [127:0] word128);
+        int unsigned word_addr;
         reg [63:0] addr;
         reg [255:0] rdat;
         begin
-            addr = E2E_OBUF_BASE + obuf_byte_off;
-            repeat (OBUF_RD_WAIT) @(posedge aclk);
-            host.axi_read256({addr[63:5], 5'b0}, rdat);
-            word128 = addr[4] ? rdat[255:128] : rdat[127:0];
+            if (preload_mode == "backdoor") begin
+                // dst_obuf 为 OBUF 区内字节偏移（与 golden checks.txt 一致）
+                word_addr = int'(obuf_byte_off >> 4);
+                backdoor_read_obuf_word(word_addr, word128);
+            end else begin
+                addr = E2E_OBUF_BASE + obuf_byte_off;
+                repeat (OBUF_RD_WAIT) @(posedge aclk);
+                host.axi_read256({addr[63:5], 5'b0}, rdat);
+                word128 = addr[4] ? rdat[255:128] : rdat[127:0];
+            end
         end
     endtask
 
@@ -277,11 +304,13 @@ module tb_lite_bd_module;
     task automatic backdoor_write_ibuf_word(input int unsigned word_addr, input [127:0] word128);
         int unsigned bank_sel, bank_addr;
         begin
-            bank_sel  = word_addr >> (`DCIM_IBUF_ADDR_WIDTH - 1);
-            bank_addr = word_addr & ((1 << (`DCIM_IBUF_ADDR_WIDTH - 1)) - 1);
+            bank_sel  = word_addr[`DCIM_IBUF_ADDR_WIDTH-1 -: `DCIM_IBUF_BANK_BITS];
+            bank_addr = word_addr[`DCIM_IBUF_BANK_ADDR_WIDTH-1:0];
             case (bank_sel)
                 0: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
                 1: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
+                2: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
+                3: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
                 default: begin
                     $display("FATAL: IBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
                     $finish(1);
@@ -293,11 +322,13 @@ module tb_lite_bd_module;
     task automatic backdoor_write_obuf_word(input int unsigned word_addr, input [127:0] word128);
         int unsigned bank_sel, bank_addr;
         begin
-            bank_sel  = word_addr >> (`DCIM_OBUF_ADDR_WIDTH - 1);
-            bank_addr = word_addr & ((1 << (`DCIM_OBUF_ADDR_WIDTH - 1)) - 1);
+            bank_sel  = word_addr[`DCIM_OBUF_ADDR_WIDTH-1 -: `DCIM_OBUF_BANK_BITS];
+            bank_addr = word_addr[`DCIM_OBUF_BANK_ADDR_WIDTH-1:0];
             case (bank_sel)
                 0: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
                 1: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
+                2: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
+                3: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_obuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
                 default: begin
                     $display("FATAL: OBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
                     $finish(1);

@@ -175,12 +175,23 @@ generate_run_dir() {
   mode_slug="$(case_mode_slug "$MODULE_CASE" "$MODULE_VARIANT" "$MODULE_QUANT")"
   echo "=== Generate module golden module=$MODULE_CASE case=$MODULE_VARIANT mode=$mode_slug ==="
   extra_args=()
-  if [[ "$MODULE_CASE" != "dcim_matmul" && -n "$MODULE_QUANT" ]]; then
+  if [[ "$MODULE_CASE" == "dcim_matmul" ]]; then
+    if [[ "$MODULE_VARIANT" == *int16* ]]; then
+      extra_args+=(--quant int16)
+    else
+      extra_args+=(--quant int8)
+    fi
+  elif [[ -n "$MODULE_QUANT" ]]; then
     extra_args+=(--quant "$MODULE_QUANT")
   fi
   [[ -n "$MODULE_DIM"   ]] && extra_args+=(--dim "$MODULE_DIM")
   python3 "$GOLDEN_PY" --module "$MODULE_CASE" --case "$MODULE_VARIANT" \
     --verify-words "$MODULE_VERIFY_WORDS" --out-dir "$RUN_DIR" ${extra_args[@]+"${extra_args[@]}"}
+  if [[ -f "$RUN_DIR/skipped.txt" ]]; then
+    cat "$RUN_DIR/skipped.txt"
+    echo "SKIP: quant/case mismatch (not a simulation failure)"
+    exit 0
+  fi
 }
 
 ensure_simv() {

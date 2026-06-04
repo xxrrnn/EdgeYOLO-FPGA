@@ -13,40 +13,54 @@ set exportRoot [file normalize "$localDir/sim/lite_bd_export"]
 set exportDir  [file normalize "$exportRoot/vcs"]
 file mkdir $exportRoot
 
-if {![file exists $projPath/lite.xpr]} {
-    error "Project not found: $projPath/lite.xpr — run 0_build.tcl and 1_bd.tcl first."
-}
-
-open_project $projPath/lite.xpr
+source [file normalize "$scriptsDir/common/chip_lite_bd.tcl"]
+chip_lite_ensure_project_open
 
 set bdFile [file normalize "$bdDir/$bdName/$bdName.bd"]
-if {![file exists $bdFile]} {
-    error "BD not found: $bdFile"
-}
+chip_lite_open_bd_design $bdFile $bdName
 
 # Apply DCIM module_ref parameters before exporting.  Vivado freezes module_ref
 # parameters into lite_dcim_array_0_0.v, so changing chip_defines.vh alone is not enough.
-open_bd_design $bdFile
-set dcimCell [get_bd_cells -quiet dcim_array_0]
-if {[llength $dcimCell] == 0} {
-    set dcimCell [get_bd_cells -quiet -filter {VLNV =~ "*DCIM_Array_bd*"}]
-}
+set dcimCell [chip_lite_get_bd_cell dcim_array_0 {*DCIM_Array_bd*}]
 if {[llength $dcimCell] == 0} {
     puts "ERROR: available BD cells: [get_bd_cells -quiet]"
     error "BD cell dcim_array_0 / DCIM_Array_bd not found"
 }
 set_property -dict [list \
-    CONFIG.NUM_GROUPS {1} \
-    CONFIG.TILES_PER_GROUP {4} \
     CONFIG.NUM_TILES {4} \
 ] $dcimCell
-save_bd_design
 
-# Ensure functional sim netlist for top BD is regenerated after parameter changes.
+chip_defines_load $localDir
+apply_dcim_axi_bram_read_latency
+save_bd_design
+set exportStamp [file normalize "$exportRoot/.export_stamp"]
+close [open $exportStamp w]
+
+# Regenerate module_ref wrappers via parent BD only (nested XCI cannot generate_target alone).
 set bdSimV [file normalize "$bdDir/$bdName/sim/$bdName.v"]
-puts "INFO: regenerate simulation target for $bdName"
-generate_target {simulation} [get_files $bdFile] -force
+if {![file exists $bdSimV]} {
+    puts "INFO: regenerate simulation target for $bdName"
+    if {[catch {generate_target {simulation} [get_files $bdFile] -force} err]} {
+        puts "WARNING: generate_target simulation: $err"
+        puts "INFO: continue — 1_bd.tcl generate_target {all} may have already produced IP sim models"
+    }
+} else {
+    puts "INFO: reuse existing BD sim netlist $bdSimV"
+}
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
+
+# Vivado does not always copy module_ref sim netlists into ip_user_files; sync for make check-export.
+foreach ipTop $modRefIpTops {
+    set src [file normalize "$bdDir/$bdName/ip/$ipTop/sim/${ipTop}.v"]
+    if {![file exists $src]} {
+        error "module_ref sim wrapper missing after generate_target: $src"
+    }
+    set dstDir [file normalize "$projPath/${projName}.ip_user_files/bd/$bdName/ip/$ipTop/sim"]
+    file mkdir $dstDir
+    set dst [file join $dstDir ${ipTop}.v]
+    file copy -force $src $dst
+    puts "INFO: synced $ipTop sim wrapper -> $dst"
+}
 
 puts "INFO: export_simulation -> $exportDir"
 if {[file exists $exportDir]} {

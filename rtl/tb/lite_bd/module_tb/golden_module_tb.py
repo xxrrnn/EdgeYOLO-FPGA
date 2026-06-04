@@ -953,11 +953,13 @@ def int16_hwc_words(arr: np.ndarray) -> List[str]:
     return bytes_to_128_words(blob)
 
 
-def im2col(feat: np.ndarray, meta: ConvMeta) -> np.ndarray:
-    """INT8 im2col：每行 acc_depth×16 字节"""
+def im2col(feat: np.ndarray, meta: ConvMeta, acc_override: int = None) -> np.ndarray:
+    """INT8 im2col：每行 acc_depth×DCIM_CH_IN 字节。
+    acc_override: im2col_in_ch > meta.in_ch 时用 ceil(kH*kW*im2col_in_ch/DCIM_CH_IN)。"""
     h, w, c = feat.shape
     oh, ow = out_hw(h, w, meta)
-    cols = meta.acc_depth * DCIM_CH_IN
+    acc = acc_override if acc_override is not None else meta.acc_depth
+    cols = acc * DCIM_CH_IN
     out = np.zeros((oh * ow, cols), dtype=np.int8)
     for oy in range(oh):
         for ox in range(ow):
@@ -1633,17 +1635,27 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
 
 
 def int16_accum_to_words(arr_int16: np.ndarray, c: int) -> List[str]:
-    """将 INT16 accumulator 数组打包为 128-bit OBUF words（HWC 排列，每 word 8 个 INT16）。
+    """INT16 accumulator → OBUF words for dqa_relu_unit int16_mode.
+
+    RTL (FP_CORE_NUM=4) loads one 128b word per channel-quad and takes four INT16 lanes
+    from gb_doutb[i*16 +: 16] (i=0..3).  Upper 64b of the word are unused.
+    Address stride is c/4 words per pixel — NOT 8×int16 per word like QA output packing.
     arr_int16: shape (h*w, c), dtype int16
-    INT16 模式 DQA 从 OBUF 读 INT16，布局与 int8_hwc_words 同构，但步长为 2B。
-    对齐到 8 个 INT16 / word（= 128-bit）。
     """
     n, cols = arr_int16.shape
     assert cols == c
-    align8 = ((c + 7) // 8) * 8
-    padded = np.zeros((n, align8), dtype=np.int16)
+    lanes = 4  # matches FP_CORE_NUM / dqa_relu_unit int16 lane map
+    align_c = ((c + lanes - 1) // lanes) * lanes
+    padded = np.zeros((n, align_c), dtype=np.int16)
     padded[:, :c] = arr_int16
-    return bytes_to_128_words(padded.tobytes())
+    blob = bytearray()
+    for row in range(n):
+        for ch_base in range(0, align_c, lanes):
+            word = bytearray(OBUF_WORD_BYTES)
+            for i in range(lanes):
+                struct.pack_into('<h', word, i * 2, int(padded[row, ch_base + i]))
+            blob.extend(word)
+    return bytes_to_128_words(bytes(blob))
 
 
 def make_qa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
@@ -1850,9 +1862,11 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
             bias_ext = np.resize(bias, num_logical_oc)
             accum = (cols.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
         else:
-            cols = im2col(current_int8.reshape(cur_h, cur_w, meta.in_ch).astype(np.int8), meta)
+            # im2col_in_ch may exceed meta.in_ch when prev layer DCIM eff_ch pads OBUF (e.g. 16→32).
+            feat_i = current_int8.reshape(cur_h, cur_w, im2col_in_ch).astype(np.int8)
+            cols = im2col(feat_i, meta, acc_override=acc_eff_i)
             wflat = weights.reshape(meta.out_ch, -1).astype(np.int32)
-            k_size = meta.acc_depth * DCIM_CH_IN
+            k_size = acc_eff_i * DCIM_CH_IN
             if wflat.shape[1] < k_size:
                 wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
             accum = cols.astype(np.int32) @ wflat.T
@@ -2154,17 +2168,32 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
         f.write('runtime_files: inst.hex preload.txt checks.txt\n')
 
 
+def case_native_int16(spec: dict) -> bool:
+    """Case 是否定义为 INT16 数据路径（与 --quant 无关，由 spec/命名决定）。"""
+    if spec.get('int16', False):
+        return True
+    name = spec.get('name', '')
+    return 'accum16' in name or 'int16' in name
+
+
+def quant_compatible(module: str, spec: dict, quant: str) -> bool:
+    """--quant 是否与该 case 的固有精度匹配（避免 dqa_c16_small+qint16 这类误跑）。"""
+    # dcim_matmul：INT8/INT16 由 case 名/spec 决定；run_module_sim 不传 --quant，此处勿用默认 int8 筛掉 int16 case
+    if module == 'dcim_matmul':
+        return True
+    native = case_native_int16(spec)
+    if quant == 'int16':
+        return native
+    return not native
+
+
 def _apply_dim_overrides(spec: dict, args: argparse.Namespace, module: str) -> dict:
     """Apply --quant and --dim overrides to a case spec (returns modified copy)."""
     spec = dict(spec)
 
-    # dcim_matmul 的精度由 case 名/spec 决定，避免出现 extreme_int16..._qint8 这类矛盾命名。
+    # dcim_matmul：精度由 case 名/spec 决定；其它模块：int16 由 case 定义，--quant 只用于筛选跑哪类 case。
     if module != 'dcim_matmul':
-        if args.quant == 'int16':
-            spec['int16'] = True
-        elif args.quant == 'int8':
-            spec.pop('int16', None)
-            spec['int16'] = False
+        spec['int16'] = case_native_int16(spec)
 
     # dim override: format "C=N" or "H=N,W=N,C=N" or "HW=HxW"
     if args.dim:
@@ -2235,11 +2264,22 @@ def generate(args: argparse.Namespace) -> None:
 
     # apply --quant and --dim overrides
     spec = _apply_dim_overrides(spec, args, module)
+    effective_module = spec.get('module', module)
 
     out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
+    skip_path = os.path.join(out_dir, 'skipped.txt')
+    if os.path.exists(skip_path):
+        os.remove(skip_path)
+
+    if not quant_compatible(effective_module, spec, args.quant):
+        with open(skip_path, 'w') as f:
+            f.write(f'quant={args.quant} incompatible with case={spec["name"]} '
+                    f'(native_int16={case_native_int16(spec)})\n')
+        print(f'SKIP: case {spec["name"]!r} does not support --quant {args.quant}')
+        return
+
     rng = np.random.default_rng(args.seed)
-    effective_module = spec.get('module', module)
     if effective_module == 'dcim_matmul':
         meta = make_dcim_case(out_dir, net, spec, rng, im2col_shapes)
     elif effective_module == 'im2col':
@@ -2291,7 +2331,7 @@ def main() -> int:
     p.add_argument('--network-json', default=NETWORK_JSON)
     p.add_argument('--out-dir', default=os.path.join(os.path.dirname(__file__), 'build'))
     p.add_argument('--quant', choices=['int8', 'int16'], default='int8',
-                   help='int8（默认）或 int16；覆盖 case spec 中的 int16 标志')
+                   help='筛选精度：int8=INT32 累加器等；int16=accum16/int16 命名或 spec 用例；不匹配则写 skipped.txt')
     p.add_argument('--dim', default='',
                    help='维度覆盖，格式：C=N 或 H=N,W=N,C=N 或 HW=HxW,C=N；不指定则用 case 默认值')
     args = p.parse_args()

@@ -171,7 +171,7 @@ module ibuf_bank (
 (* ram_style = "ultra" *)
 reg [`DCIM_BUF_DATA_WIDTH-1:0] mem [(1<<`DCIM_IBUF_BANK_ADDR_WIDTH)-1:0];
 
-// memrega/memregb：URAM 读输出边界，不可 DONT_TOUCH（Synth 8-2914）
+// Port A/B 读：单拍 mem[addr]→memrega + mem_rstage/NBPIPE（memrega 勿 DONT_TOUCH，见 obuf_bank）
 reg [`DCIM_BUF_DATA_WIDTH-1:0] memrega;
 (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_rstage_rega;
 (* shreg_extract = "no", DONT_TOUCH = "yes" *) reg [`DCIM_BUF_DATA_WIDTH-1:0] mem_pipe_rega [`DCIM_IBUF_NBPIPE-1:0];
