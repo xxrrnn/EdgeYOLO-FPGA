@@ -140,10 +140,10 @@ report_utilization -file [file normalize "$ImplOutputDir/post_opt_util.rpt"]
 # ==============================================================================
 puts "\n========== Step 3: Place Design =========="
 
-# 单线程 place 避免 Vivado 2024.2 多线程 ILR crash
+# 单线程 place 避免 Vivado 2024.2 多线程 ILR crash（已确认 bug，仅此步骤受影响）
 set_param general.maxThreads 1
 place_design -directive $placeDirective
-set_param general.maxThreads 8
+set_param general.maxThreads 32   ;# 恢复多线程供后续步骤使用
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
@@ -166,7 +166,11 @@ report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing
 # ==============================================================================
 puts "\n========== Step 5: Route Design =========="
 
+# route_design 是最吃多核的步骤，开到 Vivado 上限 64 线程
+set_param general.maxThreads 64
 route_design -directive $routeDirective
+set_param general.maxThreads 32
+
 write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]

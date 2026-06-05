@@ -55,7 +55,7 @@ if {$resumeFrom ne ""} {
         # place → phys_opt → route → bit
         set_param general.maxThreads 1
         place_design -directive $placeDirective
-        set_param general.maxThreads 8
+        set_param general.maxThreads 32   ;# 恢复，place 是唯一需要单线程的步骤
         write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
         report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
     }
@@ -64,7 +64,9 @@ if {$resumeFrom ne ""} {
     phys_opt_design -directive $physOptDirective
     write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
 
+    set_param general.maxThreads 64
     route_design -directive $routeDirective
+    set_param general.maxThreads 32
     write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
     report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
 

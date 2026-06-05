@@ -195,7 +195,7 @@ foreach batch [list $smcRuns $otherRuns] {
         }
     }
 
-    launch_runs $batch -jobs 8
+    launch_runs $batch -jobs 32   ;# 每 job 是独立 Vivado 进程，32 并发在 128 核机器上安全
     foreach r $batch {
         set rname [get_property NAME $r]
         wait_on_run $r

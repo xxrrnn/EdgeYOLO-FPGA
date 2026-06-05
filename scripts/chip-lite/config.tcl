@@ -54,8 +54,10 @@ set wns_warn_place   -2.0
 # (hardcoded in proc, threshold = 0)
 
 # --- 并发线程 ---
-set_param general.maxThreads 8
-# place_design 单线程避免 Vivado 2024.2 ILR 多线程 SIGSEGV
+# Vivado 上限 64 线程；服务器 128 核，以下设置在安全范围内。
+# 注意：place_design 必须单线程（Vivado 2024.2 ILR 多线程 SIGSEGV），
+#       见 3_synth.tcl / run.tcl 中专门的 maxThreads 1 包围。
+set_param general.maxThreads 32
 catch {set_param place.ILREnabled false}
 
 puts "INFO: config.tcl loaded — project: $projName, part: $part"
