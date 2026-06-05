@@ -198,6 +198,36 @@ proc vivado_launch_ip_synth_runs {runs ipRoot bdFile bdName projPath maxJobs} {
     reset_run $runs
     vivado_ensure_ooc_xdc_stubs $ipRoot
     launch_runs $runs -jobs $maxJobs
+    # 在 launch_runs 之后立即 patch DCIM OOC tcl，注入 -max_dsp 8700。
+    # Vivado OOC 子进程刚启动，主进程已返回但子进程尚未执行 synth_design。
+    # 等待 tcl 文件出现（最多 30s），然后 patch。防止 DSP 超出设备上限 9024。
+    foreach r $runs {
+        set rname [get_property NAME $r]
+        if {![string match "*dcim_array*" $rname]} { continue }
+        set oocTcl [file normalize "$projPath/${bdName}.runs/${rname}/${rname}.tcl"]
+        set waited 0
+        while {![file exists $oocTcl] && $waited < 30} {
+            after 1000
+            incr waited
+        }
+        if {![file exists $oocTcl]} {
+            puts "WARNING: OOC tcl not found for $rname after ${waited}s, skip -max_dsp patch"
+            continue
+        }
+        catch {
+            set fh [open $oocTcl r]; set src [read $fh]; close $fh
+            if {[string match "*synth_design *" $src] && ![string match "*-max_dsp*" $src]} {
+                regsub -- {(synth_design[^\n]+)} $src {\1 -max_dsp 8700} src
+                set fh [open $oocTcl w]; puts -nonewline $fh $src; close $fh
+                puts "INFO: Patched OOC tcl $rname: synth_design ... -max_dsp 8700"
+            } else {
+                puts "INFO: OOC tcl $rname already patched or synth_design line not found"
+            }
+        } errmsg
+        if {$errmsg ne ""} {
+            puts "WARNING: Could not patch $rname: $errmsg"
+        }
+    }
 }
 
 proc vivado_run_ip_synth_batch {runs ipRoot bdFile bdName projPath {maxJobs 8}} {

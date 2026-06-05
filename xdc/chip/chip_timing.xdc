@@ -8,9 +8,10 @@
 # DSP 资源约束
 # ============================================================================
 # multiplier.v 已移除 (* use_dsp = "no" *)，Vivado 自动将 8x8 乘法推断为 DSP48E2。
-# - xcvu37p 有 9024 DSP；顶层 synth_design -max_dsp 8800 防止超量（留 224 余量给 VPU/其他）。
+# - xcvu37p 有 9024 DSP；DCIM OOC synth 设 -max_dsp 8700（见 vivado_bd_ooc.tcl），
+#   顶层 synth_design -max_dsp 8800，两道防线确保 DCIM(8700)+VPU(57)+other < 9024。
 # - 设计总 16384 个 4-bit 乘法器（4 Tile × 16 col × 4 subcol × 64 ch），
-#   Vivado 会尽量用满 ~8800 个 DSP，其余回落到 LUT，不产生综合 ERROR。
+#   Vivado 会尽量用满 ~8700 个 DSP，其余回落到 LUT，不产生综合 ERROR。
 # - 估算效果：每 Tile 节省 ~40-60K LUT，两对 Tile 降至 ~370-380K / SLR < 432K。
 # 注：VU37P 有 2.7M LUT，额外 ~18K LUT 对利用率影响极小。
 
