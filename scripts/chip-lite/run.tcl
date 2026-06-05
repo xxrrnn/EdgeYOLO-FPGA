@@ -43,11 +43,11 @@ if {$resumeFrom ne ""} {
     puts "INFO: RESUME_FROM=$resumeFrom — loading $dcp"
     open_checkpoint $dcp
 
-    # 重新加载 XDC
+    # 重新加载 chip_timing.xdc（含 Tcl 控制流，必须 -unmanaged）
+    # chip.xdc 已在 project fileset，open_checkpoint 后不需重复加载。
     set pbs [get_pblocks -quiet]
     if {[llength $pbs]} { delete_pblocks $pbs }
     read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
-    read_xdc -unmanaged [file normalize "$xdcDir/chip/chip.xdc"]
 
     file mkdir $ImplOutputDir
 

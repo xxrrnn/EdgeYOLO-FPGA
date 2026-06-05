@@ -19,13 +19,14 @@ file mkdir $ImplOutputDir
 # 辅助函数
 # ==============================================================================
 
-# 重新加载 XDC（删除旧 pblock 避免重复定义）
+# 重新加载 chip_timing.xdc（-unmanaged 支持 if/foreach/set 等 Tcl 控制流）
+# chip.xdc（纯 pin/IO 约束）已在 fileset，由 Vivado 自动加载，不在此重复加载。
+# 每次调用前先删除旧 pblock，避免重复定义报错。
 proc reload_xdc {} {
     global xdcDir
     set pbs [get_pblocks -quiet]
     if {[llength $pbs]} { delete_pblocks $pbs }
     read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
-    read_xdc -unmanaged [file normalize "$xdcDir/chip/chip.xdc"]
 }
 
 # 获取用户主时钟（250MHz XDMA/AXI 域）
@@ -102,8 +103,9 @@ if {[llength [get_files -quiet $wrapperFile]] == 0} { add_files -norecurse $wrap
 set_property top $topName [current_fileset]
 update_compile_order -fileset sources_1
 
-# 确保 XDC 在 fileset
+# 确保 chip.xdc 已在 fileset（chip_timing.xdc 只走 reload_xdc 的 -unmanaged 路径）
 foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
+    if {[string match "*chip_timing*" $xdcFile]} { continue }
     if {[llength [get_files -quiet $xdcFile]] == 0} {
         add_files -fileset constrs_1 $xdcFile
     }

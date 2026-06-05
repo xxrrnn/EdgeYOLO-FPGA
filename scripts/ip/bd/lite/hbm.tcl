@@ -113,25 +113,28 @@ set_property -dict [list \
 ] [get_bd_cells dcim_obuf_smc]
 
 # 1 IBUF controller (lite: 1 group, 2MB, 128-bit)
-# READ_LATENCY = 6: ibuf.v IN_REG1(1)+IN_REG2_bank(1)+memrega(1)+NBPIPE(2)+douta(1) = 6
-# chip_defines.vh: DCIM_IBUF_RD_LATENCY 注释说实际延迟6，见 chip_defines.vh
+# READ_LATENCY ← chip_defines.vh（config.tcl 已 chip_defines_load）
+if {![info exists ::DCIM_IBUF_AXI_BRAM_READ_LATENCY]} {
+    error "DCIM_IBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
+}
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 dcim_ibuf_ctrl_0
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
   CONFIG.SINGLE_PORT_BRAM {1} \
   CONFIG.ECC_TYPE {0} \
-  CONFIG.READ_LATENCY {6} \
+  CONFIG.READ_LATENCY $::DCIM_IBUF_AXI_BRAM_READ_LATENCY \
 ] [get_bd_cells dcim_ibuf_ctrl_0]
 
 # 1 OBUF controller (lite: 1 group, 16MB, 128-bit)
-# READ_LATENCY = 7: obuf.v IN_REG1(1)+IN_REG2(1)+IN_REG3_bank(1)+memrega(1)+NBPIPE(2)+douta(1) = 7
-# chip_defines.vh: OBUF 读延迟注释 = 7
+if {![info exists ::DCIM_OBUF_AXI_BRAM_READ_LATENCY]} {
+    error "DCIM_OBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
+}
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 dcim_obuf_ctrl_0
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
   CONFIG.SINGLE_PORT_BRAM {1} \
   CONFIG.ECC_TYPE {0} \
-  CONFIG.READ_LATENCY {7} \
+  CONFIG.READ_LATENCY $::DCIM_OBUF_AXI_BRAM_READ_LATENCY \
 ] [get_bd_cells dcim_obuf_ctrl_0]
 
 # ==============================================================================

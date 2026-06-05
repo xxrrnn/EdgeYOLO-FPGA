@@ -28,7 +28,11 @@ create_project $projName $projPath -part $part
 set_property board_part $boardPart [current_project]
 
 # --- 添加 XDC ---
+# chip.xdc（纯 pin/IO 约束，无 Tcl 控制流）→ 放入 fileset，synth_design 可直接读。
+# chip_timing.xdc（含 if/foreach/set 等控制流）→ 只通过 reload_xdc 以 -unmanaged 加载，
+#   不加入 fileset，避免 Vivado managed-mode 解析报 CRITICAL WARNING [Designutils 20-1307]。
 foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
+    if {[string match "*chip_timing*" $xdcFile]} { continue }
     add_files -fileset constrs_1 $xdcFile
 }
 
