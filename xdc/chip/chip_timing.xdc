@@ -7,8 +7,11 @@
 # ============================================================================
 # DSP 资源约束
 # ============================================================================
-# multiplier.v 已设置 (* use_dsp = "no" *)，4-bit 乘法全部用 LUT 实现。
-# xcvu37p 有 9024 个 DSP，LUT 方式 DSP 降至约 49（仅 VPU FP MAC），完全不超标。
+# multiplier.v 已移除 (* use_dsp = "no" *)，Vivado 自动将 8x8 乘法推断为 DSP48E2。
+# - xcvu37p 有 9024 DSP；顶层 synth_design -max_dsp 8800 防止超量（留 224 余量给 VPU/其他）。
+# - 设计总 16384 个 4-bit 乘法器（4 Tile × 16 col × 4 subcol × 64 ch），
+#   Vivado 会尽量用满 ~8800 个 DSP，其余回落到 LUT，不产生综合 ERROR。
+# - 估算效果：每 Tile 节省 ~40-60K LUT，两对 Tile 降至 ~370-380K / SLR < 432K。
 # 注：VU37P 有 2.7M LUT，额外 ~18K LUT 对利用率影响极小。
 
 # ============================================================================
@@ -274,20 +277,24 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 # ============================================================================
 # SLR Pblock 约束 (lite: 4 Tile Array, 4 OBUF bank, 器件仅 SLR0~2)
 # ============================================================================
-# 放置失败根因（2026-06）：
-#   1) Place 30-640: pblock_dcim_compute 分配 889K LUT，SLR1+SLR2 只有 864K → 溢出
-#   2) Place 30-99: SLR1↔SLR2 穿越 100,554 nets，可用 SLL 仅 23,040 → SLL 切割违例
+# 放置失败历史与修复（2026-06）：
+#   Round 1: pblock_dcim_compute (SLR1+SLR2, 889K LUT) → Place 30-640 LUT overflow
+#             + Place 30-99 SLL cut violation (100K nets vs 23K available)
+#   Round 2: pblock_tile_01 (SLR1 only) + pblock_tile_23 (SLR2 only)
+#             → Place 30-487 CLB packing failure: 445K LUT > 432K SLR1 上限 3%
+#             + Control set 4399 个导致 CLB 打包效率下降
 #
-# 修复策略（每对 Tile 独立 soft pblock，OBUF bank 与 Tile 同 SLR）：
-#   - Tile 0/1 → SLR1（各 ~224K LUT，合计 ~448K ≤ 432K IS_SOFT 允许少量溢出至邻 SLR）
-#   - Tile 2/3 → SLR2（同上）
-#   - OBUF bank0/1 → SLR1；bank2/3 → SLR2（与 Tile 数据通路同 SLR，消除 SLL）
-#   - 仲裁器 ibuf_arb/obuf_arb: USER_SLR SLR1（居中，连接两侧 Tile）
-#   - IBUF → SLR0（近 XDMA，2MB，64 URAM）
-#   - VPU/CDMA/SMC → SLR0（IS_SOFT，近 OBUF Port A 读写）
+# Round 3 双重防护（当前）：
+#   A. DSP 替代 LUT 乘法（multiplier.v 移除 use_dsp=no）：
+#      - 8x8 乘法推断 DSP48E2；-max_dsp 8800 限总用量（设备 9024，余量给 VPU FP）
+#      - 预计每 Tile 节省 ~40-60K LUT → 两 Tile/SLR 降至 ~370-380K << 432K
+#   B. pblock 扩溢出 SLR（保险层，防 Vivado LUT 估算偏差）：
+#      - pblock_tile_01: SLR1（主）+ SLR0（溢出）→ 2 SLR = 864K LUT 容量
+#      - pblock_tile_23: SLR2（主）+ SLR1（溢出）→ 2 SLR = 864K LUT 容量
 #
-# 注意：IS_SOFT=TRUE 允许 Vivado 在 pblock 满时溢出到相邻 SLR，
-#       只要主要逻辑仍在目标 SLR 内，SLL 穿越即可大幅减少。
+# SLL 保护（Round 2 策略保留）：
+#   - OBUF bank0/1 → SLR1；bank2/3 → SLR2（Tile 数据通路同 SLR，消除大量 SLL）
+#   - 历史 SLL: 100K → 0（已解决）
 # ============================================================================
 
 # Tile 0 + Tile 1 → SLR1
@@ -303,8 +310,9 @@ if {[llength $_tile01_cells]} {
   create_pblock pblock_tile_01
   add_cells_to_pblock [get_pblocks pblock_tile_01] $_tile01_cells
   resize_pblock [get_pblocks pblock_tile_01] -add {SLR1}
+  resize_pblock [get_pblocks pblock_tile_01] -add {SLR0}
   set_property IS_SOFT TRUE [get_pblocks pblock_tile_01]
-  puts "INFO: pblock_tile_01 -> SLR1: [llength $_tile01_cells] cells"
+  puts "INFO: pblock_tile_01 -> SLR1+SLR0(overflow): [llength $_tile01_cells] cells"
 }
 
 # Tile 2 + Tile 3 → SLR2
@@ -320,8 +328,9 @@ if {[llength $_tile23_cells]} {
   create_pblock pblock_tile_23
   add_cells_to_pblock [get_pblocks pblock_tile_23] $_tile23_cells
   resize_pblock [get_pblocks pblock_tile_23] -add {SLR2}
+  resize_pblock [get_pblocks pblock_tile_23] -add {SLR1}
   set_property IS_SOFT TRUE [get_pblocks pblock_tile_23]
-  puts "INFO: pblock_tile_23 -> SLR2: [llength $_tile23_cells] cells"
+  puts "INFO: pblock_tile_23 -> SLR2+SLR1(overflow): [llength $_tile23_cells] cells"
 }
 
 # 仲裁器放 SLR1（居中，面向两侧 Tile 数据通路）
