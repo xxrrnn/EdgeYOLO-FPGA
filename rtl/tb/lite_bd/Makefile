@@ -28,7 +28,7 @@
 #      RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
 #    仅 export 仿真网表（module_tb / E2E 仿真前提）：
 #      make export
-#      # 等价：vivado -mode batch -source scripts/chip-lite/4_export_sim.tcl
+#      # 等价：vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 #
 # 【何时 make export】
 #   增删 Vivado IP、改 BD 拓扑、AXI 地址映射、DCIM module_ref 参数 → 需要 export
@@ -40,7 +40,7 @@ SIM_DIR   := $(abspath sim)
 BUILD_DIR := $(SIM_DIR)/build_bd_sim
 SIM_LOG   := $(BUILD_DIR)/sim.log
 FSDB      := $(BUILD_DIR)/tb_lite_bd_e2e.fsdb
-EXPORT_TCL := $(REPO_ROOT)/scripts/chip-lite/4_export_sim.tcl
+EXPORT_TCL := $(REPO_ROOT)/scripts/chip-lite/export_sim.tcl
 CHIP_LITE_RUN_TCL := $(REPO_ROOT)/scripts/chip-lite/run.tcl
 
 # E2E 仿真变量

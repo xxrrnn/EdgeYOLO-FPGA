@@ -203,6 +203,40 @@ MODULE_CASES = {
         {'name': 'qa_c256_pressure', 'module': 'qa', 'layer': 'model.9.cv2.conv', 'hwc': (2, 4, 256)},
         {'name': 'concat_c128_c128_to256', 'module': 'concat_by_cdma', 'hw': (10, 10), 'channels': [128, 128]},
     ],
+    # ---------------------------------------------------------------------------
+    # cdma_memtest：专项验证 IBUF / OBUF controller 读写延迟配置
+    #   每个 case 包含：
+    #     Step-1  OBUF→IBUF  （验 OBUF 读延迟 + IBUF 写）
+    #     Step-2  IBUF→OBUF  （验 IBUF 读延迟 + OBUF 写）
+    #     Step-3  OBUF→OBUF  （片内同一 ctrl 不同槽搬运，baseline）
+    #   最终 expected 读出 OBUF DST 槽与原始数据比对。
+    #   no_layer=True 跳过 npz 依赖；不需要 WB；仅发 CDMA_COPY+WAIT_CDMA 指令。
+    # ---------------------------------------------------------------------------
+    'cdma_memtest': [
+        {'name': 'cdma_obuf_ibuf_obuf_c128',
+         'desc': 'OBUF→IBUF→OBUF roundtrip, 128-channel block (2KB), '
+                 'verifies ibuf/obuf controller pipeline delay configs',
+         'nbytes': 2048,   # 128 words × 16B = 2KB；覆盖 URAM 多-bank 寻址
+         'obuf_src': 0x000000, 'ibuf_mid': 0x000000, 'obuf_dst': 0x200000},
+        {'name': 'cdma_obuf_ibuf_obuf_1k',
+         'desc': 'OBUF→IBUF→OBUF roundtrip, 1K words (16KB), '
+                 'intermediate size to detect mid-burst truncation',
+         'nbytes': 16384,  # 1024 words × 16B = 16KB
+         'obuf_src': 0x000000, 'ibuf_mid': 0x000000, 'obuf_dst': 0x200000,
+         'chunked': True},
+        {'name': 'cdma_ibuf_read_4k',
+         'desc': 'IBUF backdoor preload → CDMA IBUF→OBUF, 4K words (64KB), '
+                 'isolates IBUF read latency from OBUF write path',
+         'nbytes': 65536,  # 4096 words × 16B = 64KB；穿越 CDMA sub-burst 边界
+         'ibuf_preload': True, 'ibuf_mid': 0x000000, 'obuf_dst': 0x200000,
+         'chunked': True},
+        {'name': 'cdma_obuf_ibuf_obuf_large',
+         'desc': 'OBUF→IBUF→OBUF roundtrip, 64KB block, '
+                 'stresses ibuf/obuf multi-bank latency boundary',
+         'nbytes': 65536,  # 4K words × 16B = 64KB；穿越 bank 边界
+         'obuf_src': 0x000000, 'ibuf_mid': 0x000000, 'obuf_dst': 0x200000,
+         'chunked': True},
+    ],
     'mini_network': [
         {'name': 'mini_2conv_c16',
          'desc': '2-layer Conv1x1 16→16 back-to-back, tests multi-layer OBUF management.'
@@ -1165,6 +1199,28 @@ def cdma_copy(src: int, dst: int, nbytes: int) -> List[int]:
     return [header(OP_CDMA_COPY, 0, 20), sm, sl, dm, dl, nbytes & 0xFFFFFFFF, header(OP_WAIT_CDMA, 0, 0)]
 
 
+# AXI BRAM Controller fmodel 行为模型在 READ_LATENCY 较大时，单次大 burst 内部
+# outstanding 缓冲区会溢出（仿真模型限制，硬件无此问题）。
+# 拆分阈值：474 words × 16B = 7584B，保守取 400 words（6400B）以留裕量。
+_CDMA_FMODEL_CHUNK_WORDS = 400
+
+def cdma_copy_chunked(src: int, dst: int, nbytes: int) -> List[int]:
+    """将大 CDMA 传输拆成多条 ≤ _CDMA_FMODEL_CHUNK_WORDS×16B 的指令序列。
+
+    每条指令后都附 WAIT_CDMA，确保顺序执行。拆分仅影响指令流，
+    硬件行为与单条大指令完全等效（CDMA 按指令顺序执行，地址连续）。
+    """
+    assert nbytes % OBUF_WORD_BYTES == 0
+    chunk_bytes = _CDMA_FMODEL_CHUNK_WORDS * OBUF_WORD_BYTES  # 6400 B
+    insts: List[int] = []
+    offset = 0
+    while offset < nbytes:
+        size = min(chunk_bytes, nbytes - offset)
+        insts += cdma_copy(src + offset, dst + offset, size)
+        offset += size
+    return insts
+
+
 def vpu_exec(unit: int, src: int, src2: int, c: int, h: int, w: int, bias: int, scale: int, dst: int,
              addr_break: int = 0, addr_s: int = 0, addr_t: int = 0, flags: int = 0) -> List[int]:
     body = [unit, src, src2, c, h, w, bias, scale, dst, addr_break, addr_s, addr_t]
@@ -1564,6 +1620,81 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST, 'words': len(exp_words),
             'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
             'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{meta.out_ch}(eff={eff_ch}) acc={meta.acc_depth} tiles={meta.num_tiles}'}
+
+
+def make_cdma_memtest_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
+    """CDMA 延迟配置验证：支持两种模式。
+
+    模式 A（ibuf_preload=False，默认）：OBUF→IBUF→OBUF roundtrip
+      1. CDMA_COPY  OBUF_src → IBUF_mid  (nbytes)   -- 验 OBUF 读延迟 + IBUF 写
+      2. CDMA_COPY  IBUF_mid → OBUF_dst  (nbytes)   -- 验 IBUF 读延迟 + OBUF 写
+
+    模式 B（ibuf_preload=True）：IBUF backdoor preload → CDMA IBUF→OBUF
+      backdoor 写 IBUF_mid，只做 Step-2：IBUF→OBUF
+      隔离 IBUF 读延迟，排除 OBUF→IBUF 写路径干扰
+
+    Expected：OBUF_dst 内容 == src 原始随机数据。
+    无需 WB；layer='cdma_memtest' 跳过 npz 指纹。
+    """
+    nbytes      = spec['nbytes']
+    obuf_src    = spec.get('obuf_src', 0)   # OBUF 内字节偏移（模式 A 用）
+    ibuf_mid    = spec['ibuf_mid']           # IBUF 内字节偏移
+    obuf_dst    = spec['obuf_dst']           # OBUF 内字节偏移（结果读回处）
+    ibuf_preload = spec.get('ibuf_preload', False)  # True=只测 IBUF 读，backdoor 写 IBUF
+    # chunked=True：把大 CDMA 拆成多条小指令，绕开 AXI BRAM fmodel 474-word 仿真限制
+    chunked      = spec.get('chunked', False)
+    _copy = cdma_copy_chunked if chunked else cdma_copy
+
+    assert nbytes % OBUF_WORD_BYTES == 0, 'nbytes must be 128-bit aligned'
+    nwords = nbytes // OBUF_WORD_BYTES
+    assert obuf_dst + nbytes <= 0x100_0000, 'OBUF dst overflow'
+    assert ibuf_mid + nbytes <= 0x20_0000, 'IBUF overflow (2MB)'
+    if not ibuf_preload:
+        assert obuf_src + nbytes <= 0x100_0000, 'OBUF src overflow'
+        assert obuf_src + nbytes <= obuf_dst or obuf_dst + nbytes <= obuf_src, \
+            'OBUF src/dst must not overlap'
+
+    # 生成随机数据（INT8 字节，打包成 128-bit words）
+    raw = rng.integers(0, 256, size=nbytes, dtype=np.uint8).tobytes()
+    src_words = bytes_to_128_words(raw)
+    exp_words = src_words  # roundtrip 应精确还原
+
+    write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
+    write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
+
+    ibuf_phys = IBUF_PHY_BASE + ibuf_mid
+    dst_phys  = OBUF_PHY_BASE + obuf_dst
+
+    if ibuf_preload:
+        # 模式 B：backdoor 直接写 IBUF，只做 IBUF→OBUF
+        fast_inst  = _copy(ibuf_phys, dst_phys, nbytes)   # IBUF→OBUF only
+        fast_inst += [header(OP_END, 0, 0)]
+        make_fast_svh([('src0.hex', IBUF_PHY_BASE + ibuf_mid)], out_dir)
+        shape_str = (f'IBUF_preload[0x{ibuf_mid:06x}]→OBUF[0x{obuf_dst:06x}]'
+                     f' nbytes={nbytes} ({nwords} words)'
+                     + (' [chunked]' if chunked else ''))
+    else:
+        # 模式 A：OBUF→IBUF→OBUF roundtrip
+        src_phys  = OBUF_PHY_BASE + obuf_src
+        fast_inst  = _copy(src_phys, ibuf_phys, nbytes)   # Step-1: OBUF→IBUF
+        fast_inst += _copy(ibuf_phys, dst_phys,  nbytes)  # Step-2: IBUF→OBUF
+        fast_inst += [header(OP_END, 0, 0)]
+        make_fast_svh([('src0.hex', OBUF_PHY_BASE + obuf_src)], out_dir)
+        shape_str = (f'OBUF[0x{obuf_src:06x}]→IBUF[0x{ibuf_mid:06x}]→OBUF[0x{obuf_dst:06x}]'
+                     f' nbytes={nbytes} ({nwords} words)'
+                     + (' [chunked]' if chunked else ''))
+
+    return {
+        'module': 'cdma_memtest',
+        'name': spec['name'],
+        'layer': 'cdma_memtest',
+        'dst': obuf_dst,
+        'words': nwords,
+        'fast_inst': fast_inst,
+        'hbm': hbm_blob([]),
+        'wb': bytes(WB_SIZE_BYTES),
+        'shape': shape_str,
+    }
 
 
 def make_concat_by_cdma_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
@@ -2161,7 +2292,7 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
         if meta['module'] == 'dcim_matmul':
             for k in ('matmul_m', 'matmul_k', 'matmul_n', 'acc_depth', 'in_hw', 'in_hw_note', 'network_in_hw'):
                 f.write(f'{k}: {meta[k]}\n')
-        if meta.get('layer') not in ('cdma_concat', ''):
+        if meta.get('layer') not in ('cdma_concat', 'cdma_memtest', ''):
             f.write(f'weight_npz_sha256_16: {meta.get("npz_sha256_16", "unknown")}\n')
             f.write('golden_numeric_semantics: network.json + parsed/weights npz; DQA_RELU=max(accum*scale+bias,0); QA=round(x/act_scale) clamp int8\n')
         f.write(f'check_words: {check_words}\n')
@@ -2181,6 +2312,9 @@ def quant_compatible(module: str, spec: dict, quant: str) -> bool:
     # dcim_matmul：INT8/INT16 由 case 名/spec 决定；run_module_sim 不传 --quant，此处勿用默认 int8 筛掉 int16 case
     if module == 'dcim_matmul':
         return True
+    # cdma_memtest 与精度无关，--quant int8 即可
+    if module == 'cdma_memtest':
+        return quant == 'int8'
     native = case_native_int16(spec)
     if quant == 'int16':
         return native
@@ -2288,6 +2422,8 @@ def generate(args: argparse.Namespace) -> None:
         meta = make_conv_pipeline_case(out_dir, net, spec, rng)
     elif effective_module == 'concat_by_cdma':
         meta = make_concat_by_cdma_case(out_dir, spec, rng)
+    elif effective_module == 'cdma_memtest':
+        meta = make_cdma_memtest_case(out_dir, spec, rng)
     elif effective_module == 'dqa':
         meta = make_dqa_case(out_dir, net, spec, rng)
     elif effective_module == 'qa':
@@ -2305,7 +2441,7 @@ def generate(args: argparse.Namespace) -> None:
     else:
         raise AssertionError(effective_module)
 
-    if meta['layer'] != 'cdma_concat':
+    if meta['layer'] != 'cdma_concat' and meta['layer'] != 'cdma_memtest':
         if effective_module == 'resnet_partial':
             meta['npz_sha256_16'] = layer_fingerprint(
                 conv_meta(net, meta['layer'], weight_dir=RESNET18_WEIGHT_DIR))

@@ -26,7 +26,7 @@ DUMP_FSDB="${DUMP_FSDB:-$BUILD_DIR/tb_lite_bd_e2e.fsdb}"
 
 if [[ "$RUN_EXPORT" == "1" ]]; then
   echo "=== Vivado export_simulation (lite BD) ==="
-  vivado -mode batch -source "$REPO_ROOT/scripts/chip-lite/4_export_sim.tcl" \
+  vivado -mode batch -source "$REPO_ROOT/scripts/chip-lite/export_sim.tcl" \
     2>&1 | tee "$REPO_ROOT/sim/lite_bd_export/export.log"
 fi
 
@@ -50,7 +50,7 @@ python3 "$GOLDEN_PY" --case "$BD_CASE" --scale "$BD_SCALE" \
   --verify-words "$BD_VERIFY_WORDS" "$GOLDEN_BD_ARG" --out-dir "$DATA_DIR"
 
 [[ -f "$EXPORT_VCS_DIR/lite.sh" ]] || {
-  echo "ERROR: missing export scripts at $EXPORT_VCS_DIR — run 4_export_sim.tcl first" >&2
+  echo "ERROR: missing export scripts at $EXPORT_VCS_DIR — run export_sim.tcl first" >&2
   exit 1
 }
 

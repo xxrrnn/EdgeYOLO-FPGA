@@ -96,6 +96,8 @@ BATCH_SUITE_mp_all          := mp_sppf_128_10 mp_resnet_stem mp_gap_7x7_c512
 BATCH_SUITE_us_all          := us_128_10_to20 us_64_20_to40
 BATCH_SUITE_add_all         := add_residual_16 add_residual_32 add_pan_64
 BATCH_SUITE_concat_all      := concat_2src_c64_c64_hw8x8 concat_2src_c128_c128_hw10x10 concat_4src_sppf_c128_hw10x10
+BATCH_SUITE_cdma_memtest_all   := cdma_obuf_ibuf_obuf_c128 cdma_obuf_ibuf_obuf_1k cdma_ibuf_read_4k cdma_obuf_ibuf_obuf_large
+BATCH_SUITE_cdma_memtest_smoke := cdma_obuf_ibuf_obuf_c128 cdma_ibuf_read_4k
 
 # --- pipeline：单层 conv 算子 / 多层 mini 网络（批量建议 QUANT=all）---
 BATCH_SUITE_conv_pipe_all   := pipe_conv3_s2_c32_to64 pipe_conv1_c512_to64_tilepass
@@ -108,6 +110,7 @@ BATCH_SUITE_mini_network_all := mini_2conv_c16 mini_3conv_residual_c32
 #   pipeline: 1x1 + stride-2 conv3（全链路 im2col→CDMA→DCIM→DQA→QA）
 #   mini: 2层 + 3层 residual（多层 OBUF + ADD 路径）
 #   concat: 仅 8x8 c64（避免百次级 CDMA 仿真时间）
+#   cdma_memtest: OBUF→IBUF→OBUF roundtrip（验 ibuf/obuf controller 延迟配置，无 VPU/DCIM 参与）
 BATCH_SUITE_dcim_smoke      := dcim_tiny_1x1 conv3_s2_c32_to64 int16_tiny_1x1
 BATCH_SUITE_qa_smoke        := qa_c16_signed
 BATCH_SUITE_dqa_smoke       := dqa_c32_mid dqa_accum16_c32
@@ -133,7 +136,7 @@ BATCH_SUITE_mini_network_smoke := mini_2conv_c16 mini_3conv_residual_c32
 export:
 	@echo "[export] Vivado export_simulation（不跑 VCS）"
 	cd $(REPO_ROOT) && vivado -mode batch \
-		-source $(REPO_ROOT)/scripts/chip-lite/4_export_sim.tcl
+		-source $(REPO_ROOT)/scripts/chip-lite/export_sim.tcl
 
 # compile：只编 simv，不跑用例；export 比 simv 新时会自动 clean-compile
 compile: check-export
@@ -148,7 +151,7 @@ compile: check-export
 check-export:
 	@test -f "$(EXPORT_VCS_DIR)/lite.sh" || { \
 		echo "ERROR: 缺少 export（无 $(EXPORT_VCS_DIR)/lite.sh）"; \
-		echo "  → cd $(REPO_ROOT) && vivado -mode batch -source scripts/chip-lite/4_export_sim.tcl"; \
+		echo "  → cd $(REPO_ROOT) && vivado -mode batch -source scripts/chip-lite/export_sim.tcl"; \
 		exit 1; }
 	@test -f "$(DCIM_MODREF_SIM)" || test -f "$(DCIM_MODREF_SIM_ALT)" || { \
 		echo "ERROR: 缺少 lite_dcim_array_0_0 仿真 wrapper"; \
@@ -175,10 +178,12 @@ sim-unit: check-export
 	$(MAKE) sim-batch MODULE_CASE=mp  BATCH_SUITE=mp_all  QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
 	$(MAKE) sim-batch MODULE_CASE=us  BATCH_SUITE=us_all  QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
 	$(MAKE) sim-batch MODULE_CASE=add BATCH_SUITE=add_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "========== [unit] concat_by_cdma =========="
-	$(MAKE) sim-batch MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "========== [unit] DCIM extreme（高 acc_depth / 大通道）=========="
 	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit] cdma_memtest（OBUF↔IBUF controller 延迟）=========="
+	$(MAKE) sim-batch MODULE_CASE=cdma_memtest BATCH_SUITE=cdma_memtest_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit] concat_by_cdma（逐像素 CDMA 拼接，最慢放最后）=========="
+	$(MAKE) sim-batch MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "=== sim-unit DONE — make sim-results 查看汇总 ==="
 
 # sim-pipeline：算子级链路（im2col→CDMA→DCIM→DQA→QA 等组合）
@@ -212,7 +217,9 @@ sim-unit-smoke: check-export
 	$(MAKE) sim-batch MODULE_CASE=add BATCH_SUITE=add_smoke QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "========== [smoke/unit] concat（仅 8x8 c64，避免大 CDMA）=========="
 	$(MAKE) sim-batch MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_smoke QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "=== sim-unit-smoke DONE（约 12 个 variant 运行）==="
+	@echo "========== [smoke/unit] cdma_memtest（OBUF→IBUF→OBUF roundtrip）=========="
+	$(MAKE) sim-batch MODULE_CASE=cdma_memtest BATCH_SUITE=cdma_memtest_smoke QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== sim-unit-smoke DONE（约 13 个 variant 运行）==="
 
 sim-pipeline-smoke: check-export
 	@echo "========== [smoke/pipeline] conv 1x1 小图（im2col+CDMA+DCIM+DQA+QA）=========="
