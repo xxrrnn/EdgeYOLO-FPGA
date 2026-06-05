@@ -126,6 +126,17 @@ set _dsp_cells [get_cells -quiet -hierarchical -filter {REF_NAME == DSP48E2 && N
 if {[llength $_dsp_cells]} {
   set_property USE_DSP_AREG 2 $_dsp_cells
   set_property USE_DSP_BREG 2 $_dsp_cells
+  puts "INFO: USE_DSP_AREG/BREG=2 applied to [llength $_dsp_cells] DSP48E2 cells in u_maArray"
+  # DSP 推断后 prod_full 被映射为 DSP 原语，补充基于 DSP P 输出的 MCP
+  # Vivado 对 (* use_dsp="yes" *) wire 推断 DSP 时：DSP 实例名带 prod_full 前缀
+  # 同时用 REF_NAME+层次路径作为 fallback，确保约束命中
+  set _dsp_p_pins [get_pins -quiet -of_objects $_dsp_cells -filter {NAME =~ */P[*] && DIRECTION == OUT}]
+  set _pp_d [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/product_pipe_reg*/D}]
+  if {[llength $_dsp_p_pins] && [llength $_pp_d]} {
+    set_multicycle_path -setup 2 -from $_dsp_p_pins -to $_pp_d
+    set_multicycle_path -hold 1  -from $_dsp_p_pins -to $_pp_d
+    puts "INFO: DSP P→product_pipe MCP(2) applied: [llength $_dsp_p_pins] src, [llength $_pp_d] dst"
+  }
 }
 
 set _cnt_cells_all [get_cells -quiet -hierarchical -filter {NAME =~ */u_maArray/u_counter_cfg/*}]
@@ -194,6 +205,12 @@ if {[llength $_hbm_rst_from] && [llength $_hbm_rst_to]} {
 # ============================================================================
 # DCIM maArray 多周期路径约束
 # ============================================================================
+# 注意：use_dsp="yes" 生效后，prod_full 被推断为 DSP48E2 原语。
+# - 旧路径 prod_full*/P[*] → 变成 DSP 实例内部的 P 输出，filter 可能不匹配
+# - 新路径：通过 _dsp_cells (REF_NAME==DSP48E2) 的 P 输出 pin 匹配
+# - 两条路径均用 if guard，缺失不报错
+
+# 路径1：multiplier P 输出 → product_pipe_reg D（LUT方式旧约束，DSP方式由上面 _dsp_cells 块覆盖）
 set _mcp_dsp_p [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/MultiplierChannels*/u_multiplier/prod_full*/P[*]}]
 set _mcp_pp_d  [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/product_pipe_reg*/D}]
 if {[llength $_mcp_dsp_p] && [llength $_mcp_pp_d]} {
@@ -260,7 +277,7 @@ if {[llength $_mcp_ob_addr_from] && [llength $_mcp_ob_data_to]} {
   set_multicycle_path -hold 1  -from $_mcp_ob_addr_from -to $_mcp_ob_data_to
 }
 
-# maArray 流水寄存器 MCP
+# maArray 流水寄存器 MCP（LUT方式；DSP方式由 _dsp_cells 块的 P-pin MCP 覆盖）
 set _mcp_ma_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/MultiplierChannels*/u_multiplier/prod_full*/P[*]}]
 set _mcp_ma_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/gen_ma_pipe.r_ma_pipe*/D}]
 if {[llength $_mcp_ma_from] && [llength $_mcp_ma_to]} {
