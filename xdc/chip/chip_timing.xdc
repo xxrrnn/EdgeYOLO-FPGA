@@ -36,16 +36,17 @@ if {[llength [get_ports -quiet cpu_reset]]} {
   set_false_path -from [get_ports cpu_reset]
 }
 
-# DCIM 异步复位 (CLR/PRE/RST pins) — 覆盖全路径，包括 main_rst → Tile 内部寄存器
-set _dcim_async_rst [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/*CLR || NAME =~ *dcim_array_0/*PRE}]
-if {[llength $_dcim_async_rst]} {
-  set_false_path -to $_dcim_async_rst
+# DCIM 异步复位 false path
+# 用 cell-level 约束替代 pin-level，避免匹配 54 万个 CLR/PRE pin 导致性能问题
+# (CRITICAL WARNING [Vivado 12-4439]: 541554 objects)
+set _dcim_cells [get_cells -quiet -hierarchical -filter {NAME =~ *dcim_array_0*}]
+if {[llength $_dcim_cells]} {
+  set_false_path -to $_dcim_cells
 }
 set _main_rst_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */main_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/C}]
-if {[llength $_main_rst_from] && [llength $_dcim_async_rst]} {
-  set_false_path -from $_main_rst_from -to $_dcim_async_rst
+if {[llength $_main_rst_from] && [llength $_dcim_cells]} {
+  set_false_path -from $_main_rst_from -to $_dcim_cells
 }
 
 # XDMA user_reset → BRAM reset ports
@@ -53,28 +54,46 @@ set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/in
                -to [get_pins -quiet -hierarchical -filter {NAME =~ */*bram*/RSTREG*}]
 set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/inst/pcie4c_ip_i/inst/user_reset_reg/C}] \
                -to [get_pins -quiet -hierarchical -filter {NAME =~ */*bram*/RSTRAM*}]
-set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/*/user_reset*}] \
-               -to [get_pins -quiet -hierarchical -filter {NAME =~ */inst_bram/*}]
+# inst_bram: 只约束寄存器的 D 引脚，排除 AXI 端口等非法 endpoint
+# (WARNING [Constraints 18-401]: s_axi_* ports are not valid endpoints)
+set _fp_instbram_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */inst_bram/* && IS_LEAF && DIRECTION == IN && NAME =~ */D}]
+set _fp_xdma_rst [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/*/user_reset*}]
+if {[llength $_fp_xdma_rst] && [llength $_fp_instbram_to]} {
+  set_false_path -from $_fp_xdma_rst -to $_fp_instbram_to
+}
 
 # PCIe GT DRP hold path
-set_false_path -hold \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/*/gen_cpll_cal*/gtwizard_ultrascale*drp_arb_i/*/C}] \
-  -to [get_pins -quiet -hierarchical -filter {NAME =~ */GTYE4_CHANNEL_PRIM_INST/DRP*}]
+set _fp_drp_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */xdma_0/*/gen_cpll_cal*/gtwizard_ultrascale*drp_arb_i/*/C}]
+set _fp_drp_to   [get_pins -quiet -hierarchical -filter {NAME =~ */GTYE4_CHANNEL_PRIM_INST/DRP*}]
+if {[llength $_fp_drp_from] && [llength $_fp_drp_to]} {
+  set_false_path -hold -from $_fp_drp_from -to $_fp_drp_to
+}
 
 # PCIe PIPE interface hold
-set_false_path -hold \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */phy_pipeline/*/ff_chain_reg*/C}] \
-  -to [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/PIPETX*}]
+set _fp_pipe_from [get_pins -quiet -hierarchical -filter {NAME =~ */phy_pipeline/*/ff_chain_reg*/C}]
+set _fp_pipe_to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/PIPETX*}]
+if {[llength $_fp_pipe_from] && [llength $_fp_pipe_to]} {
+  set_false_path -hold -from $_fp_pipe_from -to $_fp_pipe_to
+}
 
 # PCIe BRAM → PCIE4CE4 hold
-set_false_path -hold \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_0_bram_inst/*/reg_rdata*_reg*/C}] \
-  -to [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/MIRX*}]
+set _fp_bram_rdata_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */pcie_4_0_bram_inst/*/reg_rdata*_reg*/C}]
+set _fp_bram_rdata_to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/MIRX*}]
+if {[llength $_fp_bram_rdata_from] && [llength $_fp_bram_rdata_to]} {
+  set_false_path -hold -from $_fp_bram_rdata_from -to $_fp_bram_rdata_to
+}
 
 # PCIe BRAM read pipeline setup: RAMB36E2 → reg_rdata1_reg
-set_false_path -setup \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_0_bram_inst/*/RAMB36E2*/CLKARDCLK}] \
-  -to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_0_bram_inst/*/FRMRDPIPELINE.reg_rdata*_reg*/D}]
+set _fp_bram_clk_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */pcie_4_0_bram_inst/*/RAMB36E2*/CLKARDCLK}]
+set _fp_bram_clk_to   [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */pcie_4_0_bram_inst/*/FRMRDPIPELINE.reg_rdata*_reg*/D}]
+if {[llength $_fp_bram_clk_from] && [llength $_fp_bram_clk_to]} {
+  set_false_path -setup -from $_fp_bram_clk_from -to $_fp_bram_clk_to
+}
 
 # PCIe seqnum FIFO CDC (write_addr → write_addr_read_clk, async crossing)
 set_false_path \
@@ -90,9 +109,13 @@ set_false_path \
   -to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_0_init_ctrl_inst/reg_phy_rdy*/D}]
 
 # PCIe phy_rate_chain CDC
-set_false_path \
-  -from [get_pins -quiet -hierarchical -filter {NAME =~ */phy_rate_chain_cp/*/ff_chain_reg*/C}] \
-  -to   [get_pins -quiet -hierarchical -filter {NAME =~ */phy_pipeline/phy_rate_chain/*/ff_chain_reg*/D}]
+set _fp_rate_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */phy_rate_chain_cp/*/ff_chain_reg*/C}]
+set _fp_rate_to   [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */phy_pipeline/phy_rate_chain/*/ff_chain_reg*/D}]
+if {[llength $_fp_rate_from] && [llength $_fp_rate_to]} {
+  set_false_path -from $_fp_rate_from -to $_fp_rate_to
+}
 
 # PCIe SAXISCC (AXI stream crossing) hold — 仅 reg 时钟脚，避免匹配 BD 端口
 set _fp_saxis_from [get_pins -quiet -hierarchical \
