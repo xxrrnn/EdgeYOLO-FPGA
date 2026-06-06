@@ -87,9 +87,14 @@ if {$resumeFrom ne ""} {
 
     if {$resumeFrom eq "opt"} {
         # place → phys_opt → route → bit
+        # place_design 会在当前工作目录下生成 cong/ 拥塞热图，cd 到 ImplOutputDir
+        # 使其落在 build 树内而不是仓库根目录。
+        set _savedCwd [pwd]
+        cd $ImplOutputDir
         set_param general.maxThreads 1
         place_design -directive $placeDirective
         set_param general.maxThreads 32   ;# 恢复，place 是唯一需要单线程的步骤
+        cd $_savedCwd
         write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
         report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
     }

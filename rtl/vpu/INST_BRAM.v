@@ -59,7 +59,11 @@ module INST_BRAM #(
 );
 
     // BRAM 存储
-    reg [31:0] mem [0:DEPTH-1];
+    // CASCADE_HEIGHT=4: 限制 RAMB36E2 级联深度为 4 级（默认被综合器推断为 7 级，
+    // 导致 CASDOUT 链路径延迟 3.6ns，超过 250MHz 时钟周期减去 clock skew 后的余量）。
+    // 降至 4 级后，级联延迟从 ~1.47ns 降至 ~0.84ns，剩余地址译码改用 LUT output mux，
+    // 总路径约 3.0ns，可满足 4ns 周期（含 0.35ns skew + 0.10ns uncertainty）。
+    (* CASCADE_HEIGHT = 4 *) reg [31:0] mem [0:DEPTH-1];
     
     // 初始化为 0
     integer i;

@@ -402,43 +402,19 @@ foreach _slr_cell {
 }
 
 # ============================================================================
-# OBUF per-bank Pblock（lite: 4 bank × 4MB URAM = 512 URAM total）
-# bank0/1 → SLR1（与 Tile 0/1 同 SLR，消除 obuf_din/obuf_addr 路径跨 SLR）
-# bank2/3 → SLR2（与 Tile 2/3 同 SLR）
-# wea_reg3 与对应 bank URAM cascade 同 SLR；obuf.v reg3 已 DONT_TOUCH。
+# OBUF per-bank Pblock
 # ============================================================================
-
-set _obuf_b0 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[0].*}]
-if {[llength $_obuf_b0]} {
-  create_pblock pblock_obuf_bank0
-  add_cells_to_pblock [get_pblocks pblock_obuf_bank0] $_obuf_b0
-  resize_pblock [get_pblocks pblock_obuf_bank0] -add {SLR1}
-  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank0]
-}
-
-set _obuf_b1 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[1].*}]
-if {[llength $_obuf_b1]} {
-  create_pblock pblock_obuf_bank1
-  add_cells_to_pblock [get_pblocks pblock_obuf_bank1] $_obuf_b1
-  resize_pblock [get_pblocks pblock_obuf_bank1] -add {SLR1}
-  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank1]
-}
-
-set _obuf_b2 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[2].*}]
-if {[llength $_obuf_b2]} {
-  create_pblock pblock_obuf_bank2
-  add_cells_to_pblock [get_pblocks pblock_obuf_bank2] $_obuf_b2
-  resize_pblock [get_pblocks pblock_obuf_bank2] -add {SLR2}
-  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank2]
-}
-
-set _obuf_b3 [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf/gen_banks[3].*}]
-if {[llength $_obuf_b3]} {
-  create_pblock pblock_obuf_bank3
-  add_cells_to_pblock [get_pblocks pblock_obuf_bank3] $_obuf_b3
-  resize_pblock [get_pblocks pblock_obuf_bank3] -add {SLR2}
-  set_property IS_SOFT TRUE [get_pblocks pblock_obuf_bank3]
-}
+# 已移除 per-bank pblock 约束。原约束将 bank0/1 强制放 SLR1、bank2/3 强制放 SLR2，
+# 导致 SLR1/SLR2 CLB 占用率达 99.8%，router 几乎无空间修复 hold violation 或绕行。
+#
+# 移除后的安全性：
+# 1. URAM288 是固定物理资源，Vivado 必然将其放在 SLR1/SLR2 的 URAM 列，不需要 pblock 约束
+# 2. OBUF 写路径（Tile → reg3 → URAM）已有 MCP 4-cycle 约束（16ns 余量），
+#    即使 reg3 逻辑溢出到相邻 SLR，跨 SLR 延迟（~0.5ns）被余量完全吸收
+# 3. OBUF 读路径（URAM → memreg → rstage → pipe_reg → VPU）同样有 MCP 4-cycle 覆盖
+# 4. Tile pblock（SLR1/SLR2）+ IBUF pblock（SLR0）已保证大方向正确
+#
+# 预期效果：SLR1/SLR2 CLB 占用率从 99.8% 降至 ~93-95%，为 router 释放 hold fix 空间
 
 # ============================================================================
 # OBUF / IBUF 延迟策略（lite @ 250MHz）
