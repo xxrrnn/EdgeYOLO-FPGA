@@ -7,13 +7,11 @@
 # ============================================================================
 # DSP 资源约束
 # ============================================================================
-# multiplier.v 已移除 (* use_dsp = "no" *)，Vivado 自动将 8x8 乘法推断为 DSP48E2。
-# - xcvu37p 有 9024 DSP；DCIM OOC synth 设 -max_dsp 8700（见 vivado_bd_ooc.tcl），
-#   顶层 synth_design -max_dsp 8800，两道防线确保 DCIM(8700)+VPU(57)+other < 9024。
-# - 设计总 16384 个 4-bit 乘法器（4 Tile × 16 col × 4 subcol × 64 ch），
-#   Vivado 会尽量用满 ~8700 个 DSP，其余回落到 LUT，不产生综合 ERROR。
-# - 估算效果：每 Tile 节省 ~40-60K LUT，两对 Tile 降至 ~370-380K / SLR < 432K。
-# 注：VU37P 有 2.7M LUT，额外 ~18K LUT 对利用率影响极小。
+# Per-Tile 部分 DSP 方案：DCIM_DSP_COL_NUM=5，每 Tile 前 5 列用 DSP48E2，后 11 列 LUT。
+# - 每 Tile DSP: 5 col × 4 subcol × 64 ch = 1280 DSP48E2
+# - 4 Tile 总: 5120 + VPU(57) = 5177 DSP（设备 9024，利用率 57%）
+# - 每 SLR 放 2 Tile: 2560 DSP < 3008/SLR（余 15%）
+# - 不再需要 synth_design -max_dsp（RTL 层已精确控制 DSP 用量）。
 
 # ============================================================================
 # 时钟约束
@@ -316,29 +314,16 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 }
 
 # ============================================================================
-# SLR Pblock 约束 (lite: 4 Tile Array, 4 OBUF bank, 器件仅 SLR0~2)
+# SLR Pblock 约束 (lite: 4 Tile × 均衡 DSP+LUT, 器件 SLR0~2)
 # ============================================================================
-# 放置失败历史与修复（2026-06）：
-#   Round 1: pblock_dcim_compute (SLR1+SLR2, 889K LUT) → Place 30-640 LUT overflow
-#             + Place 30-99 SLL cut violation (100K nets vs 23K available)
-#   Round 2: pblock_tile_01 (SLR1 only) + pblock_tile_23 (SLR2 only)
-#             → Place 30-487 CLB packing failure: 445K LUT > 432K SLR1 上限 3%
-#             + Control set 4399 个导致 CLB 打包效率下降
-#
-# Round 3 双重防护（当前）：
-#   A. DSP 替代 LUT 乘法（multiplier.v 移除 use_dsp=no）：
-#      - 8x8 乘法推断 DSP48E2；-max_dsp 8800 限总用量（设备 9024，余量给 VPU FP）
-#      - 预计每 Tile 节省 ~40-60K LUT → 两 Tile/SLR 降至 ~370-380K << 432K
-#   B. pblock 扩溢出 SLR（保险层，防 Vivado LUT 估算偏差）：
-#      - pblock_tile_01: SLR1（主）+ SLR0（溢出）→ 2 SLR = 864K LUT 容量
-#      - pblock_tile_23: SLR2（主）+ SLR1（溢出）→ 2 SLR = 864K LUT 容量
-#
-# SLL 保护（Round 2 策略保留）：
-#   - OBUF bank0/1 → SLR1；bank2/3 → SLR2（Tile 数据通路同 SLR，消除大量 SLL）
-#   - 历史 SLL: 100K → 0（已解决）
+# Round 4: Per-Tile 部分 DSP 方案
+#   每 Tile: DSP_COL_NUM=5 × 4 subcol × 64 ch = 1280 DSP + 2816 LUT-multiplier
+#   2 Tile/SLR = 2560 DSP < 3008（余 15%），LUT ~390K < 434K（余 10%）
+#   Tile pblock 不重叠：SLR1 / SLR2 各放 2 Tile，消除 SLL 竞争。
+#   SLR0 留给 XDMA + VPU + IBUF + AXI interconnect。
 # ============================================================================
 
-# Tile 0 + Tile 1 → SLR1
+# Tile 0 + Tile 1 → SLR1（仅 SLR1，不跨 SLR）
 set _tile01_cells {}
 foreach _t01_filt {
   {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[0].*}
@@ -351,12 +336,11 @@ if {[llength $_tile01_cells]} {
   create_pblock pblock_tile_01
   add_cells_to_pblock [get_pblocks pblock_tile_01] $_tile01_cells
   resize_pblock [get_pblocks pblock_tile_01] -add {SLR1}
-  resize_pblock [get_pblocks pblock_tile_01] -add {SLR0}
   set_property IS_SOFT TRUE [get_pblocks pblock_tile_01]
-  puts "INFO: pblock_tile_01 -> SLR1+SLR0(overflow): [llength $_tile01_cells] cells"
+  puts "INFO: pblock_tile_01 -> SLR1 only: [llength $_tile01_cells] cells"
 }
 
-# Tile 2 + Tile 3 → SLR2
+# Tile 2 + Tile 3 → SLR2（仅 SLR2，不跨 SLR）
 set _tile23_cells {}
 foreach _t23_filt {
   {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[2].*}
@@ -369,9 +353,8 @@ if {[llength $_tile23_cells]} {
   create_pblock pblock_tile_23
   add_cells_to_pblock [get_pblocks pblock_tile_23] $_tile23_cells
   resize_pblock [get_pblocks pblock_tile_23] -add {SLR2}
-  resize_pblock [get_pblocks pblock_tile_23] -add {SLR1}
   set_property IS_SOFT TRUE [get_pblocks pblock_tile_23]
-  puts "INFO: pblock_tile_23 -> SLR2+SLR1(overflow): [llength $_tile23_cells] cells"
+  puts "INFO: pblock_tile_23 -> SLR2 only: [llength $_tile23_cells] cells"
 }
 
 # 仲裁器放 SLR1（居中，面向两侧 Tile 数据通路）

@@ -9,7 +9,8 @@ module maArray#(
 	parameter CH_IN = 16,
 	parameter WD2 = 2*WD1+ $clog2(CH_IN),
 	parameter CH_OUT = 4,
-	parameter MULT_DSP_EN = 1
+	parameter MULT_DSP_EN = 1,
+	parameter DSP_COL_NUM = CH_OUT/4     // 前 DSP_COL_NUM 列用 DSP，其余用 LUT
 )(
 	input clk,
 	input rstn,
@@ -57,7 +58,8 @@ module maArray#(
 	genvar col;
 	generate
 		for(col=0; col<CH_OUT/4; col=col+1) begin:MaColumn
-			maColumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(MULT_DSP_EN)) 
+			localparam COL_DSP_EN = (MULT_DSP_EN && (col < DSP_COL_NUM)) ? 1 : 0;
+			maColumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(COL_DSP_EN)) 
 				u_maColumn(
 					.clk(clk),
 					.rstn(rstn),

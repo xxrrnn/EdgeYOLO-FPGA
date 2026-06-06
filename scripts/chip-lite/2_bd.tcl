@@ -174,7 +174,7 @@ foreach r $allOocRuns {
 }
 
 # 顺序执行 OOC 综合
-# DSP 用量由 RTL 层控制（DCIM_Array.sv 按 tile_id < DCIM_DSP_TILES 下发 USE_DSP），
+# DSP 用量由 RTL 层精确控制（maArray 按 col < DCIM_DSP_COL_NUM 选择 DSP/LUT），
 # 无需 TCL 层 -max_dsp 注入，直接 reset + launch 即可。
 foreach batch [list $smcRuns $otherRuns] {
     if {![llength $batch]} { continue }

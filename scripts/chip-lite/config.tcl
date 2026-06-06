@@ -38,8 +38,11 @@ set physOptDirective    AggressiveExplore
 set routeDirective      AggressiveExplore
 
 # --- DSP 用量说明 ---
-# DCIM DSP 用量由 RTL 层控制：chip_defines.vh `DCIM_DSP_TILES（默认3）。
-# 每 Tile 约 2256 DSP；DSP_TILES=3 时 DCIM ~6768 + VPU ~57 = 6825 < 9024（设备容量）。
+# DCIM DSP 用量由 RTL 层精确控制：
+#   chip_defines.vh: DCIM_DSP_TILES=4（所有 Tile 参与）, DCIM_DSP_COL_NUM=5
+#   每 Tile: 5 col × 4 subcol × 64 ch = 1280 DSP48E2
+#   4 Tile 总: 5120 + VPU(57) = 5177 < 9024（设备容量）
+#   每 SLR: 2 Tile = 2560 < 3008（SLR 容量）
 # 无需 synth_design -max_dsp 或 OOC patch。
 
 # --- 时序门控阈值 ---

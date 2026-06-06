@@ -126,6 +126,17 @@ report_utilization -hierarchical -hierarchical_depth 5 \
 puts "INFO: Synthesis complete. DSP48E2 count:"
 puts "INFO:   [llength [get_cells -hierarchical -filter {REF_NAME == DSP48E2}]] DSP48E2 inferred"
 
+# Per-Tile DSP 均衡性检查
+set _dsp_total [llength [get_cells -hierarchical -filter {REF_NAME == DSP48E2}]]
+puts "INFO: DSP per tile:"
+foreach _tidx {0 1 2 3} {
+    set _tdsp [llength [get_cells -hierarchical -filter "REF_NAME == DSP48E2 && NAME =~ *gen_tiles\[$_tidx\]*"]]
+    puts "INFO:   Tile $_tidx: $_tdsp DSP48E2"
+}
+if {$_dsp_total > 9024} {
+    error "FATAL: Total DSP48E2 ($_dsp_total) exceeds device capacity (9024)!"
+}
+
 # ==============================================================================
 # Step 2: Opt Design
 # ==============================================================================

@@ -4,6 +4,7 @@ module calculate_core#(
 	parameter CH_IN = 16,
 	parameter CH_OUT = 16,
 	parameter MULT_DSP_EN = 1,
+	parameter DSP_COL_NUM = CH_OUT/4,
 	localparam WD2 = 2*WD1 + $clog2(CH_IN)
 )(
 	input clk,
@@ -20,7 +21,7 @@ module calculate_core#(
 	output [CH_OUT*WD2-1: 0]		dn_data
 );
 
-	maArray#(.WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .MULT_DSP_EN(MULT_DSP_EN))
+	maArray#(.WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .MULT_DSP_EN(MULT_DSP_EN), .DSP_COL_NUM(DSP_COL_NUM))
 		u_maArray(
 			.clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .mode(mode),
 			.up_valid(up_valid), .up_ready(up_ready),

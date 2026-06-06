@@ -112,18 +112,23 @@
 // ── 阵列拓扑（Array–Tile，无 Group 层）────────────────────────────────────
 `define DCIM_NUM_TILES          4       // DCIM_Tile 数量；64×64 @250MHz INT8 峰值约 2.048 TOPS
 
-// ── DSP 映射控制 ───────────────────────────────────────────────────────────
-// 每 Tile 有 4096 个 4-bit 乘法器；Vivado 将多个乘法+加法树合并映射到 DSP48E2，
-// 实测每 Tile 消耗 ~3008 DSP（xcvu37p 共 9024 个，VPU 另用 ~57 个）。
+// ── DSP 映射控制（Per-Tile 部分 DSP 方案）─────────────────────────────────
+// 每 Tile 有 16 列 × 4 subcol × 64 ch = 4096 个 4-bit 乘法器。
+// 新方案：所有 4 Tile 均参与 DSP 映射，但每 Tile 只有前 DSP_COL_NUM 列使用 DSP48E2，
+// 其余列用 LUT 实现，从而实现跨 Tile/SLR 的均匀资源分配。
 //
-//   DSP_TILES=0  所有 Tile 用 LUT；DSP ~57（仅 VPU），LUT 最多
-//   DSP_TILES=1  1 Tile 用 DSP；DSP ~3008+57=3065，减少约 ~23K LUT
-//   DSP_TILES=2  2 Tile 用 DSP；DSP ~6016+57=6073，减少约 ~46K LUT  ← 推荐（67%）
-//   DSP_TILES=3  3 Tile 用 DSP；DSP ~9024+57=9081，超出设备容量！❌ 禁用
-//   DSP_TILES=4  4 Tile 用 DSP；DSP ~12032+57，严重超出！❌ 禁用
+// 每 Tile DSP 数 = DSP_COL_NUM × 4(subcol) × 64(ch) = DSP_COL_NUM × 256
+// xcvu37p: 9024 DSP total, ~3008/SLR; 目标 2 Tile/SLR 不超限。
 //
-// 推荐值 2：DSP 利用率 ~67%，有充足裕量；减少 ~46K LUT，帮助 placement 收敛。
-`define DCIM_DSP_TILES          2
+//   DSP_COL_NUM  DSP/Tile  4Tile总DSP  +VPU(57)  2Tile/SLR  SLR安全?
+//   4            1024      4096        4153      2048       ✓ (68%)
+//   5            1280      5120        5177      2560       ✓ (85%)  ← 推荐
+//   6            1536      6144        6201      3072       ✗ (>3008)
+//   7            1792      7168        7225      3584       ✗
+//
+// 推荐值 5：DSP 利用率 57%，每 SLR 85% DSP 安全余量；LUT/Tile ~195K，2Tile/SLR<434K。
+`define DCIM_DSP_TILES          4       // 所有 Tile 均使用 DSP+LUT 混合
+`define DCIM_DSP_COL_NUM        5       // 每 Tile 前 5 列用 DSP，后 11 列用 LUT
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）

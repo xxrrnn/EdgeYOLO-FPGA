@@ -27,6 +27,7 @@ module DCIM_Tile #(
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
     parameter TILE_IDX        = 0,
     parameter MULT_DSP_EN         = 1,   // 1=DSP48E2, 0=LUT；由 DCIM_Array 按 tile_id 下发
+    parameter DSP_COL_NUM         = CH_OUT/4, // 前 DSP_COL_NUM 列用 DSP
 
     localparam SRAM_WD        = CH_IN * CH_OUT * WD1 / CYCLE,
     localparam ADDR_WD        = $clog2(SRAM_DP),
@@ -629,7 +630,8 @@ module DCIM_Tile #(
         .SRAM_DP(SRAM_DP),
         .CYCLE(CYCLE),
         .ACC(ACC),
-        .MULT_DSP_EN(MULT_DSP_EN)
+        .MULT_DSP_EN(MULT_DSP_EN),
+        .DSP_COL_NUM(DSP_COL_NUM)
     ) u_dcim (
         .clk            (clk),
         .rstn           (rst_n),
