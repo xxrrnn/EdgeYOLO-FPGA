@@ -13,8 +13,8 @@ set boardPart  "xilinx.com:vcu128:part0:1.0"
 # 构建 Tag（支持并行跑多个 build，每次结果互不干扰）
 # ------------------------------------------------------------------------------
 # 优先级：
-#   1. 环境变量 BUILD_TAG   → 自定义标签，例如 aggressive / exp1 / 20260606
-#   2. 自动时间戳           → 格式 yyyymmdd_HHMMSS，每次唯一
+#   1. 环境变量 BUILD_TAG   → 自定义标签，例如 aggressive / exp1 / 260606
+#   2. 自动时间戳           → 格式 yymmdd_HHMM，每次唯一
 #
 # 用法示例：
 #   # 自动时间戳（推荐日常使用，无需手动命名）
@@ -39,8 +39,8 @@ if {[info exists ::env(BUILD_TAG)] && [string trim $::env(BUILD_TAG)] ne ""} {
     # 用户指定 tag（去除两端空白）
     set runTag [string trim $::env(BUILD_TAG)]
 } else {
-    # 自动生成时间戳（yyyymmdd_HHMMSS），并行时每次唯一
-    set runTag [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+    # 自动生成时间戳（yymmdd_HHMM），并行时每次唯一
+    set runTag [clock format [clock seconds] -format "%y%m%d_%H%M"]
 }
 
 # --- 路径 ---
