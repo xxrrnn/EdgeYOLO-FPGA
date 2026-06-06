@@ -81,34 +81,29 @@ module INST_BRAM #(
     
     generate
         if (ENABLE_PIPELINE) begin : gen_pipelined_read
-            // 三级流水线读取：
-            // Stage 0: BRAM读取 (mem[addr])
-            // Stage 1: 中间寄存器 (打断CASCADE链路)
-            // Stage 2: 输出寄存器 (与INST_Decoder的流水线配合)
-            reg [31:0] inst_rd_data_s0;
-            reg [31:0] inst_rd_data_s1;
-            
+            // 三级流水打断 BRAM CASCADE 长链（128KB = 8个 RAMB36 级联）：
+            // Stage 0: BRAM 读取 (mem[addr])  → inst_rd_data_s0
+            // Stage 1: 中间寄存器              → inst_rd_data_s1
+            // Stage 2: 输出寄存器              → inst_rd_data
+            //
+            // KEEP="TRUE"（非 DONT_TOUCH）：阻止 Vivado retiming/opt 删除中间级，
+            // 同时允许 placer 自由选址（DONT_TOUCH 会固化位置，迫使 BRAM cascade
+            // 末端输出绕线到固定 FF 坐标，反而拉长 routing 延迟造成时序违规）。
+            (* KEEP = "TRUE" *) reg [31:0] inst_rd_data_s0;
+            (* KEEP = "TRUE" *) reg [31:0] inst_rd_data_s1;
+
             always @(posedge clk) begin
                 if (!rst_n) begin
                     inst_rd_data_s0 <= 32'h0;
                     inst_rd_data_s1 <= 32'h0;
                     inst_rd_data    <= 32'h0;
                 end else begin
-                    inst_rd_data_s0 <= mem[inst_rd_addr];  // Stage 0: BRAM读取
-                    inst_rd_data_s1 <= inst_rd_data_s0;    // Stage 1: 中间流水
-                    inst_rd_data    <= inst_rd_data_s1;    // Stage 2: 输出
+                    inst_rd_data_s0 <= mem[inst_rd_addr];
+                    inst_rd_data_s1 <= inst_rd_data_s0;
+                    inst_rd_data    <= inst_rd_data_s1;
                 end
             end
-            
-            // 添加综合属性，指示工具保持流水线寄存器
-            // 防止优化器删除这些寄存器或重新定时
-            (* DONT_TOUCH = "TRUE" *) reg keep_pipeline_s0 = 1'b0;
-            (* DONT_TOUCH = "TRUE" *) reg keep_pipeline_s1 = 1'b0;
-            always @(posedge clk) begin
-                keep_pipeline_s0 <= |inst_rd_data_s0;
-                keep_pipeline_s1 <= |inst_rd_data_s1;
-            end
-            
+
         end else begin : gen_direct_read
             // 原始单周期读取（向后兼容）
             always @(posedge clk) begin
