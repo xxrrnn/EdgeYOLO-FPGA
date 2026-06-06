@@ -27,8 +27,9 @@
 #      RESUME_FROM=opt   vivado -mode batch -source scripts/chip-lite/run.tcl
 #      RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
 #    仅 export 仿真网表（module_tb / E2E 仿真前提）：
-#      make export
-#      # 等价：vivado -mode batch -source scripts/chip-lite/export_sim.tcl
+#      make export                       # 自动选最新 build
+#      make export BUILD_TAG=20260606_143000   # 指定特定 build
+#      # 等价：BUILD_TAG=<tag> vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 #
 # 【何时 make export】
 #   增删 Vivado IP、改 BD 拓扑、AXI 地址映射、DCIM module_ref 参数 → 需要 export
@@ -42,6 +43,12 @@ SIM_LOG   := $(BUILD_DIR)/sim.log
 FSDB      := $(BUILD_DIR)/tb_lite_bd_e2e.fsdb
 EXPORT_TCL := $(REPO_ROOT)/scripts/chip-lite/export_sim.tcl
 CHIP_LITE_RUN_TCL := $(REPO_ROOT)/scripts/chip-lite/run.tcl
+
+# BUILD_TAG：指定要操作哪个 build（与 run.tcl / export_sim.tcl 共用）
+#   不指定时 export 自动选取 build/lite/ 下最新的已有工程
+#   示例：make export BUILD_TAG=20260606_143000
+#         make export BUILD_TAG=aggressive
+BUILD_TAG ?=
 
 # E2E 仿真变量
 BD_CASE ?= default
@@ -73,8 +80,8 @@ MODULE_MAKE = $(MAKE) -C $(MODULE_TB_DIR)
 # ==============================================================================
 
 export:
-	@echo "[export] Vivado export_simulation → sim/lite_bd_export/"
-	cd $(REPO_ROOT) && VIVADO_HOME=$(VIVADO_HOME) vivado -mode batch -source $(EXPORT_TCL)
+	@echo "[export] Vivado export_simulation → sim/lite_bd_export/ $(if $(BUILD_TAG), (BUILD_TAG=$(BUILD_TAG)))"
+	cd $(REPO_ROOT) && $(if $(BUILD_TAG),BUILD_TAG=$(BUILD_TAG),) vivado -mode batch -source $(EXPORT_TCL)
 
 # ==============================================================================
 # E2E 仿真（tb_lite_bd_e2e.sv + run_bd_sim.sh）

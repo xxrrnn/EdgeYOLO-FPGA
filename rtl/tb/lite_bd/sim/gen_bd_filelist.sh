@@ -6,7 +6,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 BD_DIR="$REPO_ROOT/bd/lite"
 EXPORT_DIR="$REPO_ROOT/sim/lite_bd_export/vcs"
-LITE_GEN="${LITE_GEN:-$REPO_ROOT/build/lite/lite.gen/sources_1/ip}"
+
+# LITE_GEN：FP IP 仿真模型所在目录，位于 build/lite/<tag>/lite.gen/sources_1/ip
+# 解析优先级：
+#   1. 环境变量 LITE_GEN（显式覆盖）
+#   2. 环境变量 BUILD_TAG 指定的 tag（与 run.tcl / export_sim.tcl 保持一致）
+#   3. build/lite/<latest_tag>/lite.gen/...（自动取最新含 lite.xpr 的子目录）
+#   4. 旧路径 build/lite/lite.gen/...（向后兼容）
+if [[ -z "${LITE_GEN:-}" ]]; then
+  BUILD_TAG="${BUILD_TAG:-}"
+  if [[ -n "$BUILD_TAG" ]] && [[ -d "$REPO_ROOT/build/lite/$BUILD_TAG/lite.gen/sources_1/ip" ]]; then
+    LITE_GEN="$REPO_ROOT/build/lite/$BUILD_TAG/lite.gen/sources_1/ip"
+  else
+    # 自动找最新含 lite.xpr 的 build/<tag>
+    _latest=$(ls -dt "$REPO_ROOT"/build/lite/*/lite.xpr 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+    if [[ -n "$_latest" ]] && [[ -d "$_latest/lite.gen/sources_1/ip" ]]; then
+      LITE_GEN="$_latest/lite.gen/sources_1/ip"
+    else
+      # 向后兼容：旧路径 build/lite/lite.gen/...
+      LITE_GEN="$REPO_ROOT/build/lite/lite.gen/sources_1/ip"
+    fi
+  fi
+fi
 VIVADO_HOME="${VIVADO_HOME:-/home/EDAtools/Xilinx/Vivado/2024.2}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }

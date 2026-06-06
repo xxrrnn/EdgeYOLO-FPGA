@@ -6,12 +6,40 @@
 #   vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 #   或通过 make export（在 rtl/tb/lite_bd/module_tb/ 或 rtl/tb/lite_bd/）
 #
+# BUILD_TAG 指定要 export 哪个 build（与 run.tcl 保持一致）：
+#   BUILD_TAG=20260606_143000 vivado -mode batch -source scripts/chip-lite/export_sim.tcl
+#   BUILD_TAG=aggressive      vivado -mode batch -source scripts/chip-lite/export_sim.tcl
+#   不指定 BUILD_TAG 时：自动选取 build/lite/ 下最新的子目录
+#
 # 前提：
-#   build/lite/lite.xpr 已存在（先跑 1_build.tcl + 2_bd.tcl）
+#   build/lite/<tag>/lite.xpr 已存在（先跑 1_build.tcl + 2_bd.tcl）
 #   chip_defines.vh 的 READ_LATENCY 宏已与 BD IP 配置一致
 # ==============================================================================
 
 set thisScriptDir [file dirname [file normalize [info script]]]
+
+# --- 若未指定 BUILD_TAG，自动选取 build/lite/ 下最新的已有工程目录 ---
+# export_sim 不创建新工程，只读取已有的，所以不应生成新时间戳。
+# BUILD_TAG 已设置时直接使用；未设置时找 build/lite/ 下最新含 lite.xpr 的子目录。
+if {![info exists ::env(BUILD_TAG)] || [string trim $::env(BUILD_TAG)] eq ""} {
+    set _buildLiteDir [file normalize "$thisScriptDir/../../build/lite"]
+    set _candidates {}
+    foreach _d [glob -nocomplain -type d "$_buildLiteDir/*"] {
+        if {[file exists [file normalize "$_d/lite.xpr"]]} {
+            lappend _candidates $_d
+        }
+    }
+    if {[llength $_candidates] == 0} {
+        error "No build found in $_buildLiteDir — run scripts/chip-lite/run.tcl first, or set BUILD_TAG."
+    }
+    # 按修改时间降序排列，取最新
+    set _latest [lindex [lsort -decreasing -command {apply {{a b} {
+        expr {[file mtime $a] - [file mtime $b]}
+    }}} $_candidates] 0]
+    set ::env(BUILD_TAG) [file tail $_latest]
+    puts "INFO: export_sim.tcl — BUILD_TAG not set, auto-selected: $::env(BUILD_TAG)"
+}
+
 source [file normalize "$thisScriptDir/config.tcl"]
 
 # --- 导出路径 ---
@@ -20,10 +48,10 @@ set exportDir  [file normalize "$exportRoot/vcs"]
 file mkdir $exportRoot
 
 # --- 打开已有项目 ---
-if {![file exists "$projPath/lite.xpr"]} {
-    error "Project not found: $projPath/lite.xpr — run 1_build.tcl and 2_bd.tcl first."
+if {![file exists "$projPath/${projName}.xpr"]} {
+    error "Project not found: $projPath/${projName}.xpr — run 1_build.tcl and 2_bd.tcl first."
 }
-open_project "$projPath/lite.xpr"
+open_project "$projPath/${projName}.xpr"
 
 # --- BD 文件路径 ---
 set bdFile [file normalize "$bdDir/$bdName/$bdName.bd"]

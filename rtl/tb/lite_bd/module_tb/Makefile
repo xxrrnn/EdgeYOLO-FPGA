@@ -60,8 +60,12 @@ DIM ?=
 MODULE_TB_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 REPO_ROOT     := $(abspath $(MODULE_TB_DIR)/../../../..)
 EXPORT_VCS_DIR := $(REPO_ROOT)/sim/lite_bd_export/vcs/lite/vcs
+# DCIM module_ref 仿真 wrapper：优先 bd/lite/ip（静态源），否则找最新 build tag 下的产物
 DCIM_MODREF_SIM     := $(REPO_ROOT)/bd/lite/ip/lite_dcim_array_0_0/sim/lite_dcim_array_0_0.v
-DCIM_MODREF_SIM_ALT := $(REPO_ROOT)/build/lite/lite.ip_user_files/bd/lite/ip/lite_dcim_array_0_0/sim/lite_dcim_array_0_0.v
+# 若 bd/lite 下无，自动找 build/lite/<latest_tag>/lite.ip_user_files/bd/lite/ip/.../sim/...
+#   shell 展开：取 build/lite/ 下最新含 lite.xpr 的目录，组合成 ALT 路径
+_LATEST_BUILD := $(shell ls -dt $(REPO_ROOT)/build/lite/*/lite.xpr 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+DCIM_MODREF_SIM_ALT := $(if $(_LATEST_BUILD),$(_LATEST_BUILD)/lite.ip_user_files/bd/lite/ip/lite_dcim_array_0_0/sim/lite_dcim_array_0_0.v,)
 SIM_DIR       := $(MODULE_TB_DIR)/sim
 RUN_SCRIPT    := $(SIM_DIR)/run_module_sim.sh
 GOLDEN_PY     := $(MODULE_TB_DIR)/golden_module_tb.py
@@ -133,9 +137,11 @@ BATCH_SUITE_mini_network_smoke := mini_2conv_c16 mini_3conv_residual_c32
 # ==============================================================================
 
 # export：仅 export_simulation → sim/lite_bd_export/（与 make export 在 lite_bd/ 等价）
+# BUILD_TAG 可选：指定要 export 哪个 build（同 run.tcl 的 BUILD_TAG）
+#   不指定时 export_sim.tcl 自动选取最新已有 build。
 export:
-	@echo "[export] Vivado export_simulation（不跑 VCS）"
-	cd $(REPO_ROOT) && vivado -mode batch \
+	@echo "[export] Vivado export_simulation（不跑 VCS）$(if $(BUILD_TAG), BUILD_TAG=$(BUILD_TAG))"
+	cd $(REPO_ROOT) && $(if $(BUILD_TAG),BUILD_TAG=$(BUILD_TAG),) vivado -mode batch \
 		-source $(REPO_ROOT)/scripts/chip-lite/export_sim.tcl
 
 # compile：只编 simv，不跑用例；export 比 simv 新时会自动 clean-compile
