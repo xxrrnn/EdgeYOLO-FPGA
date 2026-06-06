@@ -98,7 +98,10 @@ module DCIM_Array #(
                 .ACC(ACC),
                 .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH),
                 .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
-                .TILE_IDX(i)
+                .TILE_IDX(i),
+                // tile_id < DCIM_DSP_TILES 时使用 DSP48E2，其余用 LUT。
+                // 每 Tile 约 2256 DSP；DSP_TILES=3 共 ~6768+57(VPU)=6825 < 9024。
+                .MULT_DSP_EN(i < `DCIM_DSP_TILES ? 1 : 0)
             ) u_tile (
                 .clk(clk),
                 .rst_n(rst_n),

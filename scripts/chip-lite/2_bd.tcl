@@ -53,6 +53,7 @@ set dcimRtlFiles [list \
     [file normalize "$srcDir/ref/DCIM/src/inc/dff.v"] \
     [file normalize "$srcDir/ref/DCIM/src/inc/pipe_stage.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/multiplier.v"] \
+    [file normalize "$srcDir/ref/DCIM/src/dcim/multiplier_dsp.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/adderTree.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/maArray.v"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim/calculate_core.v"] \
@@ -173,29 +174,13 @@ foreach r $allOocRuns {
 }
 
 # 顺序执行 OOC 综合
+# DSP 用量由 RTL 层控制（DCIM_Array.sv 按 tile_id < DCIM_DSP_TILES 下发 USE_DSP），
+# 无需 TCL 层 -max_dsp 注入，直接 reset + launch 即可。
 foreach batch [list $smcRuns $otherRuns] {
     if {![llength $batch]} { continue }
     puts "INFO: Launching [llength $batch] OOC run(s)..."
     reset_run $batch
-
-    # 对 dcim_array OOC 脚本注入 -max_dsp（reset_run 后 tcl 已在磁盘）
-    foreach r $batch {
-        set rname [get_property NAME $r]
-        if {![string match "*dcim_array*" $rname]} { continue }
-        set oocTcl [file normalize "$projPath/${bdName}.runs/${rname}/${rname}.tcl"]
-        if {![file exists $oocTcl]} {
-            puts "WARNING: OOC tcl not found for $rname — cannot patch -max_dsp"
-            continue
-        }
-        set fh [open $oocTcl r]; set src [read $fh]; close $fh
-        if {[string match "*synth_design *" $src] && ![string match "*-max_dsp*" $src]} {
-            regsub -- {(synth_design[^\n]+)} $src "\\1 -max_dsp $dcimMaxDsp" src
-            set fh [open $oocTcl w]; puts -nonewline $fh $src; close $fh
-            puts "INFO: Patched $rname: synth_design ... -max_dsp $dcimMaxDsp"
-        }
-    }
-
-    launch_runs $batch -jobs 32   ;# 每 job 是独立 Vivado 进程，32 并发在 128 核机器上安全
+    launch_runs $batch -jobs 32   ;# 每 job 独立 Vivado 进程，32 并发安全
     foreach r $batch {
         set rname [get_property NAME $r]
         wait_on_run $r
@@ -221,8 +206,9 @@ foreach ipTop $modRefIpTops {
 
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
-# 确保 XDC 在 fileset 中
+# 确保 chip.xdc 已在 fileset（chip_timing.xdc 只走 reload_xdc 的 -unmanaged 路径）
 foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
+    if {[string match "*chip_timing*" $xdcFile]} { continue }
     if {[llength [get_files -quiet $xdcFile]] == 0} {
         add_files -fileset constrs_1 $xdcFile
     }

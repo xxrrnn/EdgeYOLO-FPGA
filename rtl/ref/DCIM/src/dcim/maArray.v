@@ -8,7 +8,8 @@ module maArray#(
 	parameter WD1 = 4,
 	parameter CH_IN = 16,
 	parameter WD2 = 2*WD1+ $clog2(CH_IN),
-	parameter CH_OUT = 4
+	parameter CH_OUT = 4,
+	parameter MULT_DSP_EN = 1
 )(
 	input clk,
 	input rstn,
@@ -56,7 +57,7 @@ module maArray#(
 	genvar col;
 	generate
 		for(col=0; col<CH_OUT/4; col=col+1) begin:MaColumn
-			maColumn#(.WD1(WD1), .CH_IN(CH_IN)) 
+			maColumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(MULT_DSP_EN)) 
 				u_maColumn(
 					.clk(clk),
 					.rstn(rstn),
@@ -91,7 +92,8 @@ endmodule
 module maColumn#(
 	parameter WD1 = 4,
 	parameter CH_IN = 16,
-	parameter WD2 = 2*WD1 + $clog2(CH_IN)
+	parameter WD2 = 2*WD1 + $clog2(CH_IN),
+	parameter MULT_DSP_EN = 1
 )(
 	input clk,
 	input rstn,
@@ -124,7 +126,7 @@ module maColumn#(
 	genvar subcol;
 	generate
 		for(subcol=0; subcol<4; subcol=subcol+1) begin:MaSubcolumn
-			maSubcolumn#(.WD1(WD1), .CH_IN(CH_IN)) u_maSubcolumn(
+			maSubcolumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(MULT_DSP_EN)) u_maSubcolumn(
 				.clk(clk),
 				.rstn(rstn),
 				.clr(clr),
@@ -144,7 +146,8 @@ endmodule
 module maSubcolumn#(
 	parameter WD1 = 4,
 	parameter CH_IN = 16,
-	parameter WD2 = 2*WD1+$clog2(CH_IN)
+	parameter WD2 = 2*WD1+$clog2(CH_IN),
+	parameter MULT_DSP_EN = 1
 )(
 	input clk,
 	input rstn,
@@ -188,17 +191,32 @@ module maSubcolumn#(
 		end
 	end
 
-	// Input Multiply (DSP48E2)
+	// 乘法器实例化：按 MULT_DSP_EN 选择独立模块，保证 Vivado 不做跨模块 sharing
+	// MULT_DSP_EN=1 → multiplier_dsp（use_dsp="yes"，映射 DSP48E2）
+	// MULT_DSP_EN=0 → multiplier    （use_dsp="no"，保持 LUT 实现）
 	generate
-		for(ch=0; ch<CH_IN; ch=ch+1) begin:MultiplierChannels
-			multiplier#(.WD_IN(WD1))
-				u_multiplier(
-					.a(data1_reg[ch*WD1+: WD1]),
-					.b(data2_reg[ch*WD1+: WD1]),
-					.c(product[ch*2*WD1+: 2*WD1]),
-					.sa(s1_reg),
-					.sb(s2_reg)
-				);
+		if (MULT_DSP_EN) begin : gen_mult_dsp
+			for(ch=0; ch<CH_IN; ch=ch+1) begin:MultiplierChannels
+				multiplier_dsp#(.WD_IN(WD1))
+					u_multiplier(
+						.a(data1_reg[ch*WD1+: WD1]),
+						.b(data2_reg[ch*WD1+: WD1]),
+						.c(product[ch*2*WD1+: 2*WD1]),
+						.sa(s1_reg),
+						.sb(s2_reg)
+					);
+			end
+		end else begin : gen_mult_lut
+			for(ch=0; ch<CH_IN; ch=ch+1) begin:MultiplierChannels
+				multiplier#(.WD_IN(WD1))
+					u_multiplier(
+						.a(data1_reg[ch*WD1+: WD1]),
+						.b(data2_reg[ch*WD1+: WD1]),
+						.c(product[ch*2*WD1+: 2*WD1]),
+						.sa(s1_reg),
+						.sb(s2_reg)
+					);
+			end
 		end
 	endgenerate
 

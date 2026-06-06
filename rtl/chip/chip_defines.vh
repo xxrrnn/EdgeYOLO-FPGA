@@ -112,6 +112,19 @@
 // ── 阵列拓扑（Array–Tile，无 Group 层）────────────────────────────────────
 `define DCIM_NUM_TILES          4       // DCIM_Tile 数量；64×64 @250MHz INT8 峰值约 2.048 TOPS
 
+// ── DSP 映射控制 ───────────────────────────────────────────────────────────
+// 每 Tile 有 4096 个 4-bit 乘法器；Vivado 将多个乘法+加法树合并映射到 DSP48E2，
+// 实测每 Tile 消耗 ~3008 DSP（xcvu37p 共 9024 个，VPU 另用 ~57 个）。
+//
+//   DSP_TILES=0  所有 Tile 用 LUT；DSP ~57（仅 VPU），LUT 最多
+//   DSP_TILES=1  1 Tile 用 DSP；DSP ~3008+57=3065，减少约 ~23K LUT
+//   DSP_TILES=2  2 Tile 用 DSP；DSP ~6016+57=6073，减少约 ~46K LUT  ← 推荐（67%）
+//   DSP_TILES=3  3 Tile 用 DSP；DSP ~9024+57=9081，超出设备容量！❌ 禁用
+//   DSP_TILES=4  4 Tile 用 DSP；DSP ~12032+57，严重超出！❌ 禁用
+//
+// 推荐值 2：DSP 利用率 ~67%，有充足裕量；减少 ~46K LUT，帮助 placement 收敛。
+`define DCIM_DSP_TILES          2
+
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
 `define DCIM_CH_IN              64      // 每 Tile 每 acc step 输入通道数

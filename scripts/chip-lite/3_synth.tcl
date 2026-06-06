@@ -114,7 +114,7 @@ foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
 synth_design -top $topName -part $part -directive $synDirective \
-    -max_dsp $topMaxDsp -resource_sharing auto
+    -resource_sharing auto
 
 write_checkpoint -force [file normalize "$SynOutputDir/post_synth.dcp"]
 reload_xdc

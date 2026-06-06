@@ -13,6 +13,7 @@ module dcim #(
     parameter SRAM_DP = 128,
     parameter CYCLE = 8,
     parameter ACC = 16,
+    parameter MULT_DSP_EN = 1,      // 1=DSP48E2, 0=LUT；由上层 DCIM_Array 按 Tile 下发
     
     localparam SRAM_WD = CH_IN * CH_OUT * WD1 / CYCLE, // 128-bit
     localparam ADDR_WD = $clog2(SRAM_DP),
@@ -65,7 +66,7 @@ module dcim #(
 	);
 
     calculate_core #(
-        .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT)
+        .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .MULT_DSP_EN(MULT_DSP_EN)
     ) u_calculate_core (
         .clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .mode(mode_cal),
         .up_valid(up_valid_cal), .up_ready(w_ready_cal),

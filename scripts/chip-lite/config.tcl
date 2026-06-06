@@ -37,11 +37,10 @@ set placeDirective      Default
 set physOptDirective    AggressiveExplore
 set routeDirective      AggressiveExplore
 
-# --- DSP 限额（xcvu37p 共 9024 DSP48E2）---
-# DCIM OOC 限额: 确保 DCIM + VPU(~57) + other < 9024
-set dcimMaxDsp  8700
-# 顶层综合总限额（二次保险）
-set topMaxDsp   8800
+# --- DSP 用量说明 ---
+# DCIM DSP 用量由 RTL 层控制：chip_defines.vh `DCIM_DSP_TILES（默认3）。
+# 每 Tile 约 2256 DSP；DSP_TILES=3 时 DCIM ~6768 + VPU ~57 = 6825 < 9024（设备容量）。
+# 无需 synth_design -max_dsp 或 OOC patch。
 
 # --- 时序门控阈值 ---
 # post-place: 超过阈值 → 中止（不浪费 route 时间）
