@@ -179,8 +179,8 @@ report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing
 # ==============================================================================
 puts "\n========== Step 5: Route Design =========="
 
-# route_design 是最吃多核的步骤，开到 Vivado 上限 64 线程
-set_param general.maxThreads 64
+# route_design 开到服务器支持上限 32 线程
+set_param general.maxThreads 32
 route_design -directive $routeDirective
 set_param general.maxThreads 32
 

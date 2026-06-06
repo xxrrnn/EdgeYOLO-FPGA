@@ -1,12 +1,26 @@
 # ==============================================================================
 # run.tcl — 完整流程入口（顺序执行 config → build → bd → synth → rpt）
 # ==============================================================================
-# 用法:
+# 用法（完整流程）：
+#   cd /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite
 #   vivado -mode batch -source scripts/chip-lite/run.tcl
 #
-# 环境变量:
-#   RESUME_FROM=opt    从 post_opt.dcp 恢复（跳过 build/bd/synth，重跑 place→route→bit）
-#   RESUME_FROM=place  从 post_place.dcp 恢复（跳过到 phys_opt→route→bit）
+# 断点恢复（通过环境变量 RESUME_FROM 指定从哪个 checkpoint 继续）：
+#
+#   RESUME_FROM=opt       从 post_opt.dcp 恢复
+#                         跑步骤：place → phys_opt → route → bitstream
+#                         命令：RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
+#
+#   RESUME_FROM=place     从 post_place.dcp 恢复
+#                         跑步骤：phys_opt → route → bitstream
+#                         命令：RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
+#
+#   RESUME_FROM=phys_opt  从 post_phys_opt.dcp 恢复（最快，仅跑 route + bitstream）
+#                         跑步骤：route → bitstream
+#                         命令：RESUME_FROM=phys_opt vivado -mode batch -source scripts/chip-lite/run.tcl
+#
+# Checkpoint 位置：build/lite/ImplOutputDir/post_{opt,place,phys_opt}.dcp
+# 注意：Vivado maxThreads 上限为 32（软件硬性限制，与服务器核数无关）
 # ==============================================================================
 
 set thisScriptDir [file dirname [file normalize [info script]]]
@@ -18,7 +32,7 @@ if {[info exists ::env(RESUME_FROM)]} {
     set resumeFrom [string tolower [string trim $::env(RESUME_FROM)]]
 }
 
-if {$resumeFrom ne "" && $resumeFrom ne "opt" && $resumeFrom ne "place"} {
+if {$resumeFrom ne "" && $resumeFrom ne "opt" && $resumeFrom ne "place" && $resumeFrom ne "phys_opt"} {
     puts "WARNING: Unknown RESUME_FROM='$resumeFrom' — running full flow."
     set resumeFrom ""
 }
@@ -33,8 +47,10 @@ if {$resumeFrom ne ""} {
 
     if {$resumeFrom eq "opt"} {
         set dcp [file normalize "$ImplOutputDir/post_opt.dcp"]
-    } else {
+    } elseif {$resumeFrom eq "place"} {
         set dcp [file normalize "$ImplOutputDir/post_place.dcp"]
+    } else {
+        set dcp [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
     }
     if {![file exists $dcp]} {
         error "Checkpoint not found: $dcp — run full flow first."
@@ -60,13 +76,14 @@ if {$resumeFrom ne ""} {
         report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
     }
 
-    # phys_opt → route → bit
-    phys_opt_design -directive $physOptDirective
-    write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
+    if {$resumeFrom eq "opt" || $resumeFrom eq "place"} {
+        # phys_opt → route → bit
+        phys_opt_design -directive $physOptDirective
+        write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
+    }
 
-    set_param general.maxThreads 64
+    # route → bit（phys_opt 已完成时直接从此继续）
     route_design -directive $routeDirective
-    set_param general.maxThreads 32
     write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
     report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
 
