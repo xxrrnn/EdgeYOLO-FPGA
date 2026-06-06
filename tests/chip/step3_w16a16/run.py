@@ -51,7 +51,7 @@ def make_test_input(network: str, seed: int = 42) -> np.ndarray:
 
 
 def run_single(network: str, dry_run: bool, device: str, seed: int):
-    build_dir = REPO / "build" / f"{network}_w16a16"
+    build_dir = REPO / "tests" / "chip" / "dist" / f"{network}_w16a16"
     compile_network(network, build_dir)
 
     plan = json.loads((build_dir / "plan.json").read_text())

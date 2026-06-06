@@ -3,8 +3,8 @@
 compile.py - end-to-end compiler driver.
 
 Usage:
-    python tools/compiler/compile.py --network yolov5n --out build/yolov5n
-    python tools/compiler/compile.py --network resnet18 --out build/resnet18 --max-layers 3
+    python tests/chip/compiler/compile.py --network yolov5n --out tests/chip/dist/yolov5n
+    python tests/chip/compiler/compile.py --network resnet18 --out tests/chip/dist/resnet18 --max-layers 3
 
 Outputs (in --out directory):
     plan.json           - the full execution plan (JSON, schema v1)

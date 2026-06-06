@@ -95,7 +95,7 @@ def golden_conv_layer(input_nhwc: np.ndarray, weights_dir: Path, layer_name: str
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="No hardware, just verify flow")
-    ap.add_argument("--build-dir", default=str(REPO / "build" / "resnet18_l1"))
+    ap.add_argument("--build-dir", default=str(REPO / "tests" / "chip" / "dist" / "resnet18_l1"))
     ap.add_argument("--device", default="/dev/xdma0")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--tolerance", type=float, default=1e-3,

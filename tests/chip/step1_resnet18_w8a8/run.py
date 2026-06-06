@@ -87,7 +87,7 @@ def host_postprocess(features: np.ndarray) -> np.ndarray:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--build-dir", default=str(REPO / "build" / "resnet18_w8a8"))
+    ap.add_argument("--build-dir", default=str(REPO / "tests" / "chip" / "dist" / "resnet18_w8a8"))
     ap.add_argument("--device", default="/dev/xdma0")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--skip-compile", action="store_true")

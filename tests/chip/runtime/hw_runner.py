@@ -14,7 +14,7 @@ mmap; all reads/writes go through /dev/xdma0_h2c_0 (writes) and
 /dev/xdma0_c2h_0 (reads) using `os.pwrite` / `os.pread`.
 
 CLI:
-    python tools/runtime/hw_runner.py --build-dir build/yolov5n \
+    python tests/chip/runtime/hw_runner.py --build-dir tests/chip/dist/yolov5n \
         --input image.bin --output result.bin [--device /dev/xdma0]
 """
 
