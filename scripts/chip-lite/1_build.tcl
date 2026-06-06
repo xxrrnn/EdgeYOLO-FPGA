@@ -9,8 +9,11 @@ if {[llength [info commands create_project]] == 0} {
 }
 if {[llength [get_projects -quiet]] != 0} { close_project }
 
-# --- 清理旧工程 ---
-foreach dirToClean [list [file normalize "$bdDir/$bdName"] $projPath] {
+# --- 清理本次 run 的旧产物 ---
+# bdDir（BD 产物）现在位于 projPath/bd/ 内部，删除 projPath 即可一并清理，
+# 无需单独列出。各 run 的 projPath 均已通过 BUILD_TAG / 时间戳隔离，
+# 不会影响其他正在运行的 Vivado 进程。
+foreach dirToClean [list $projPath] {
     if {[file exists $dirToClean]} {
         puts "INFO: Removing: $dirToClean"
         for {set i 0} {$i < 3 && [file exists $dirToClean]} {incr i} {

@@ -5,21 +5,39 @@
 #   cd /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite
 #   vivado -mode batch -source scripts/chip-lite/run.tcl
 #
-# 断点恢复（通过环境变量 RESUME_FROM 指定从哪个 checkpoint 继续）：
+# ------------------------------------------------------------------------------
+# 并行构建 / BUILD_TAG（支持多个 Vivado 进程同时跑，互不干扰）
+# ------------------------------------------------------------------------------
+# 每次 run 的产物位于独立子目录 build/lite/<tag>/，BD 也在其中，完全隔离。
 #
+#   # 自动时间戳（无需指定，每次唯一，默认行为）
+#   vivado -mode batch -source scripts/chip-lite/run.tcl > logs/run1.log 2>&1 &
+#   vivado -mode batch -source scripts/chip-lite/run.tcl > logs/run2.log 2>&1 &
+#
+#   # 自定义 tag（方便区分实验，两个进程并行）
+#   BUILD_TAG=aggressive vivado -mode batch -source scripts/chip-lite/run.tcl > logs/agg.log 2>&1 &
+#   BUILD_TAG=default    vivado -mode batch -source scripts/chip-lite/run.tcl > logs/def.log 2>&1 &
+#
+#   # 查看所有历史 build
+#   ls build/lite/
+#
+# ------------------------------------------------------------------------------
+# 断点恢复（通过环境变量 RESUME_FROM 指定从哪个 checkpoint 继续）
+# 必须同时传入与原始 run 相同的 BUILD_TAG，确保找到正确的 projPath
+# ------------------------------------------------------------------------------
 #   RESUME_FROM=opt       从 post_opt.dcp 恢复
 #                         跑步骤：place → phys_opt → route → bitstream
-#                         命令：RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
+#                         命令：BUILD_TAG=<tag> RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
 #
 #   RESUME_FROM=place     从 post_place.dcp 恢复
 #                         跑步骤：phys_opt → route → bitstream
-#                         命令：RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
+#                         命令：BUILD_TAG=<tag> RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
 #
 #   RESUME_FROM=phys_opt  从 post_phys_opt.dcp 恢复（最快，仅跑 route + bitstream）
 #                         跑步骤：route → bitstream
-#                         命令：RESUME_FROM=phys_opt vivado -mode batch -source scripts/chip-lite/run.tcl
+#                         命令：BUILD_TAG=<tag> RESUME_FROM=phys_opt vivado -mode batch -source scripts/chip-lite/run.tcl
 #
-# Checkpoint 位置：build/lite/ImplOutputDir/post_{opt,place,phys_opt}.dcp
+# Checkpoint 位置：build/lite/<tag>/ImplOutputDir/post_{opt,place,phys_opt}.dcp
 # 注意：Vivado maxThreads 上限为 32（软件硬性限制，与服务器核数无关）
 # ==============================================================================
 

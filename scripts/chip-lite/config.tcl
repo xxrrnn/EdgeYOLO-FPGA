@@ -2,20 +2,63 @@
 # config.tcl — 项目基础配置 + 实现阈值
 # ==============================================================================
 
-# --- 项目名称与路径 ---
+# --- 项目名称 ---
 set projName   "lite"
 set bdName     "lite"
 set topName    "${bdName}_wrapper"
 set part       "xcvu37p-fsvh2892-2L-e"
 set boardPart  "xilinx.com:vcu128:part0:1.0"
 
+# ==============================================================================
+# 构建 Tag（支持并行跑多个 build，每次结果互不干扰）
+# ------------------------------------------------------------------------------
+# 优先级：
+#   1. 环境变量 BUILD_TAG   → 自定义标签，例如 aggressive / exp1 / 20260606
+#   2. 自动时间戳           → 格式 yyyymmdd_HHMMSS，每次唯一
+#
+# 用法示例：
+#   # 自动时间戳（推荐日常使用，无需手动命名）
+#   vivado -mode batch -source scripts/chip-lite/run.tcl
+#
+#   # 自定义 tag（方便比较不同 directive）
+#   BUILD_TAG=aggressive vivado -mode batch -source scripts/chip-lite/run.tcl &
+#   BUILD_TAG=default    vivado -mode batch -source scripts/chip-lite/run.tcl &
+#
+#   # Resume 断点续跑（必须传相同 tag，否则找不到工程）
+#   BUILD_TAG=aggressive RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
+#
+# 结果目录结构：
+#   build/lite/<tag>/          ← 本次 run 的隔离根目录（projPath）
+#     <tag>.xpr                ← Vivado 工程（projName 仍为 "lite"，工程文件名用 tag）
+#     lite.runs/               ← OOC runs 产物（Vivado 自动创建）
+#     bd/lite/                 ← BD 生成产物（lite.bd / wrapper / ip/）
+#     SynOutputDir/            ← 综合报告 + DCP
+#     ImplOutputDir/           ← 实现报告 + DCP + bitstream
+# ==============================================================================
+if {[info exists ::env(BUILD_TAG)] && [string trim $::env(BUILD_TAG)] ne ""} {
+    # 用户指定 tag（去除两端空白）
+    set runTag [string trim $::env(BUILD_TAG)]
+} else {
+    # 自动生成时间戳（yyyymmdd_HHMMSS），并行时每次唯一
+    set runTag [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+}
+
+# --- 路径 ---
 set ScriptDir   [file dirname [file normalize [info script]]]
 set scriptsDir  [file normalize "$ScriptDir/.."]
 set localDir    [file normalize "$scriptsDir/.."]
 set buildDir    [file normalize "$localDir/build"]
-set projPath    [file normalize "$buildDir/$projName"]
-set bdDir       [file normalize "$localDir/bd"]
+
+# projPath = build/lite/<runTag>/  — 每次 run 独立，并行安全
+set projPath    [file normalize "$buildDir/$projName/$runTag"]
+
+# bdDir 放在 projPath 内部，BD 产物随 run 完全隔离
+# 注意：ipBdDir（BD 创建脚本目录）是只读源码，不受此影响
+set bdDir       [file normalize "$projPath/bd"]
+
+# ipBdDir：BD 创建脚本（hbm.tcl / connect.tcl 等），保持指向源码，不随 run 变化
 set ipBdDir     [file normalize "$scriptsDir/ip/bd/lite"]
+
 set rootDir     $localDir
 set srcDir      [file normalize "$rootDir/rtl"]
 set vpuRtlDir   [file normalize "$srcDir/vpu"]
@@ -62,4 +105,5 @@ set wns_warn_place   -2.0
 set_param general.maxThreads 32
 catch {set_param place.ILREnabled false}
 
-puts "INFO: config.tcl loaded — project: $projName, part: $part"
+puts "INFO: config.tcl loaded — project: $projName  tag: $runTag  part: $part"
+puts "INFO: projPath = $projPath"
