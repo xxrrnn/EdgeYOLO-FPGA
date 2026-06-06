@@ -15,6 +15,7 @@ $REPO_ROOT/rtl/ref/DCIM/src/inc/dff.v
 $REPO_ROOT/rtl/ref/DCIM/src/inc/pipe_stage.v
 $REPO_ROOT/rtl/ref/DCIM/src/macro/rf_sp_hde128x128.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/multiplier.v
+$REPO_ROOT/rtl/ref/DCIM/src/dcim/multiplier_dsp.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/adderTree.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/calculate_core.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/sramWrap.v
