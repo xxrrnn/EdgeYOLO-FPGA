@@ -70,8 +70,8 @@ connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins dci
 # M02: VPU Weight Buffer BRAM controller
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins vpu_wb_ctrl/S_AXI]
 
-# M03: Instruction BRAM (AXI write from XDMA, wire read from INST_Decoder)
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins inst_bram/S_AXI]
+# M03: Instruction BRAM controller (AXI → inst_bram_ctrl → BRAM signals → inst_bram)
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins inst_bram_ctrl/S_AXI]
 
 # M04: VPU AXI Register interface
 connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M04_AXI] [get_bd_intf_pins vpu_regs/S_AXI]
@@ -143,7 +143,16 @@ connect_bd_net [get_bd_pins dcim_array_0/vpu_obuf_dout]     [get_bd_pins vpu_0/o
 connect_bd_net [get_bd_pins dcim_array_0/vpu_obuf_rd_valid] [get_bd_pins vpu_0/obuf_rd_valid]
 
 # ==============================================================================
-# INST_Decoder <-> inst_bram (wire read interface)
+# inst_bram_ctrl (axi_bram_ctrl) → inst_bram Port A (BRAM interface)
+# ==============================================================================
+connect_bd_net [get_bd_pins inst_bram_ctrl/bram_en_a]     [get_bd_pins inst_bram/bram_en_a]
+connect_bd_net [get_bd_pins inst_bram_ctrl/bram_we_a]     [get_bd_pins inst_bram/bram_we_a]
+connect_bd_net [get_bd_pins inst_bram_ctrl/bram_addr_a]   [get_bd_pins inst_bram/bram_addr_a]
+connect_bd_net [get_bd_pins inst_bram_ctrl/bram_wrdata_a] [get_bd_pins inst_bram/bram_wrdata_a]
+connect_bd_net [get_bd_pins inst_bram/bram_rddata_a]      [get_bd_pins inst_bram_ctrl/bram_rddata_a]
+
+# ==============================================================================
+# INST_Decoder <-> inst_bram (Port B: direct read interface)
 # ==============================================================================
 connect_bd_net [get_bd_pins inst_decoder/inst_rd_addr] [get_bd_pins inst_bram/inst_rd_addr]
 connect_bd_net [get_bd_pins inst_bram/inst_rd_data]    [get_bd_pins inst_decoder/inst_rd_data]
@@ -208,6 +217,10 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_mem_smc/aresetn
 # AXI BRAM controllers (lite: GB 已删除，只剩 WB)
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_wb_ctrl/s_axi_aclk]
 connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins vpu_wb_ctrl/s_axi_aresetn]
+
+# inst_bram_ctrl 时钟
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins inst_bram_ctrl/s_axi_aclk]
+connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins inst_bram_ctrl/s_axi_aresetn]
 
 # inst_bram 时钟
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins inst_bram/clk]

@@ -2,220 +2,111 @@
 `include "chip_defines.vh"
 
 //////////////////////////////////////////////////////////////////////////////////
-// INST_BRAM - 指令存储 BRAM（双端口）
-// 
-// 功能：
-//   - 端口 A：AXI4-Lite Slave 接口，供 XDMA 写入指令
-//   - 端口 B：直接 wire 接口，供 INST_Decoder 读取指令
+// INST_BRAM - 指令存储（真双端口 Block RAM）
 //
-// 特点：
-//   - 真双端口 BRAM，支持同时读写
-//   - 端口 A 支持读写（AXI 接口）
-//   - 端口 B 只读（wire 接口，1 周期延迟）
+// Port A: BRAM 接口（供 axi_bram_ctrl IP 连接，XDMA 读写指令）
+//         信号命名遵循 axi_bram_ctrl bram_* 端口规范
+// Port B: 直读接口（供 INST_Decoder 读取指令，N 拍流水延迟）
+//
+// 128KB = 32768 × 32-bit，使用 RAMB36E2（32 个 BRAM36）
 //////////////////////////////////////////////////////////////////////////////////
 
 module INST_BRAM #(
-    parameter DEPTH = `INST_DEPTH,
-    parameter ADDR_WIDTH = `INST_ADDR_WIDTH,
-    parameter AXI_ADDR_WIDTH = `INST_AXI_ADDR_WIDTH,
-    parameter AXI_DATA_WIDTH = `INST_DATA_WIDTH,
-    parameter ENABLE_PIPELINE = 1        // 启用内部流水线优化（默认开启）
+    parameter DEPTH      = `INST_DEPTH,       // 32768
+    parameter ADDR_WIDTH = `INST_ADDR_WIDTH,  // 15 (word address)
+    parameter DATA_WIDTH = `INST_DATA_WIDTH,  // 32
+    parameter NPIPE      = `INST_BRAM_NPIPE,  // Port B output pipeline stages
+    parameter RD_PIPE_A  = `INST_BRAM_RD_PIPE_A // Port A output pipeline stages
 ) (
-    input  wire                          clk,
-    input  wire                          rst_n,
-    
+    input  wire                       clk,
+    input  wire                       rst_n,
+
     // ========================================
-    // 端口 A：AXI4-Lite Slave 接口（XDMA 写入）
+    // Port A: BRAM interface (from axi_bram_ctrl)
     // ========================================
-    input  wire [AXI_ADDR_WIDTH-1:0]     s_axi_awaddr,
-    input  wire [2:0]                    s_axi_awprot,
-    input  wire                          s_axi_awvalid,
-    output reg                           s_axi_awready,
-    
-    input  wire [AXI_DATA_WIDTH-1:0]     s_axi_wdata,
-    input  wire [AXI_DATA_WIDTH/8-1:0]   s_axi_wstrb,
-    input  wire                          s_axi_wvalid,
-    output reg                           s_axi_wready,
-    
-    output reg  [1:0]                    s_axi_bresp,
-    output reg                           s_axi_bvalid,
-    input  wire                          s_axi_bready,
-    
-    input  wire [AXI_ADDR_WIDTH-1:0]     s_axi_araddr,
-    input  wire [2:0]                    s_axi_arprot,
-    input  wire                          s_axi_arvalid,
-    output reg                           s_axi_arready,
-    
-    output reg  [AXI_DATA_WIDTH-1:0]     s_axi_rdata,
-    output reg  [1:0]                    s_axi_rresp,
-    output reg                           s_axi_rvalid,
-    input  wire                          s_axi_rready,
-    
+    input  wire                       bram_en_a,
+    input  wire [DATA_WIDTH/8-1:0]    bram_we_a,
+    input  wire [ADDR_WIDTH+1:0]      bram_addr_a,   // byte address from ctrl
+    input  wire [DATA_WIDTH-1:0]      bram_wrdata_a,
+    output wire [DATA_WIDTH-1:0]      bram_rddata_a,
+
     // ========================================
-    // 端口 B：直接 wire 接口（INST_Decoder 读取）
+    // Port B: Direct read (INST_Decoder)
     // ========================================
-    input  wire [ADDR_WIDTH-1:0]         inst_rd_addr,   // 读地址（字地址）
-    output reg  [31:0]                   inst_rd_data    // 读数据（流水线延迟取决于ENABLE_PIPELINE）
+    input  wire [ADDR_WIDTH-1:0]      inst_rd_addr,  // word address
+    output wire [DATA_WIDTH-1:0]      inst_rd_data   // pipelined read data
 );
 
-    // BRAM 存储
-    // CASCADE_HEIGHT=4: 限制 RAMB36E2 级联深度为 4 级（默认被综合器推断为 7 级，
-    // 导致 CASDOUT 链路径延迟 3.6ns，超过 250MHz 时钟周期减去 clock skew 后的余量）。
-    // 降至 4 级后，级联延迟从 ~1.47ns 降至 ~0.84ns，剩余地址译码改用 LUT output mux，
-    // 总路径约 3.0ns，可满足 4ns 周期（含 0.35ns skew + 0.10ns uncertainty）。
-    (* CASCADE_HEIGHT = 4 *) reg [31:0] mem [0:DEPTH-1];
-    
-    // 初始化为 0
+    // ========================================
+    // BRAM storage (force block RAM inference)
+    // ========================================
+    (* ram_style = "block" *) reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+
     integer i;
     initial begin
         for (i = 0; i < DEPTH; i = i + 1)
-            mem[i] = 32'h0;
-        // BD sim: port-B reads this array directly; optional backdoor load
+            mem[i] = {DATA_WIDTH{1'b0}};
         if ($test$plusargs("INST_READMEMH")) begin
             $readmemh("inst.hex", mem);
             $display("[%0t] INST_BRAM: readmemh(inst.hex) loaded", $time);
         end
     end
-    
+
     // ========================================
-    // 端口 B：直接读取 + 可选的内部流水线优化
+    // Port A: synchronous read/write (single clock)
     // ========================================
-    // 当BRAM深度很大时，Vivado会自动推断CASCADE BRAM，导致长延迟路径
-    // 通过内部流水线打断这个路径，改善时序
-    
+    wire [ADDR_WIDTH-1:0] addr_a = bram_addr_a[ADDR_WIDTH+1:2]; // byte→word
+
+    reg [DATA_WIDTH-1:0] rddata_a_raw;
+
+    always @(posedge clk) begin
+        if (bram_en_a) begin
+            if (bram_we_a[0]) mem[addr_a][ 7: 0] <= bram_wrdata_a[ 7: 0];
+            if (bram_we_a[1]) mem[addr_a][15: 8] <= bram_wrdata_a[15: 8];
+            if (bram_we_a[2]) mem[addr_a][23:16] <= bram_wrdata_a[23:16];
+            if (bram_we_a[3]) mem[addr_a][31:24] <= bram_wrdata_a[31:24];
+            rddata_a_raw <= mem[addr_a]; // read-first mode, 1-cycle latency
+        end
+    end
+
+    // Port A output pipeline (RD_PIPE_A stages after BRAM read register)
     generate
-        if (ENABLE_PIPELINE) begin : gen_pipelined_read
-            // 三级流水打断 BRAM CASCADE 长链（128KB = 8个 RAMB36 级联）：
-            // Stage 0: BRAM 读取 (mem[addr])  → inst_rd_data_s0
-            // Stage 1: 中间寄存器              → inst_rd_data_s1
-            // Stage 2: 输出寄存器              → inst_rd_data
-            //
-            // KEEP="TRUE"（非 DONT_TOUCH）：阻止 Vivado retiming/opt 删除中间级，
-            // 同时允许 placer 自由选址（DONT_TOUCH 会固化位置，迫使 BRAM cascade
-            // 末端输出绕线到固定 FF 坐标，反而拉长 routing 延迟造成时序违规）。
-            (* KEEP = "TRUE" *) reg [31:0] inst_rd_data_s0;
-            (* KEEP = "TRUE" *) reg [31:0] inst_rd_data_s1;
-
+        if (RD_PIPE_A == 0) begin : gen_porta_no_pipe
+            assign bram_rddata_a = rddata_a_raw;
+        end else begin : gen_porta_pipe
+            reg [DATA_WIDTH-1:0] pipeA [0:RD_PIPE_A-1];
+            integer pa;
             always @(posedge clk) begin
-                if (!rst_n) begin
-                    inst_rd_data_s0 <= 32'h0;
-                    inst_rd_data_s1 <= 32'h0;
-                    inst_rd_data    <= 32'h0;
-                end else begin
-                    inst_rd_data_s0 <= mem[inst_rd_addr];
-                    inst_rd_data_s1 <= inst_rd_data_s0;
-                    inst_rd_data    <= inst_rd_data_s1;
-                end
+                pipeA[0] <= rddata_a_raw;
+                for (pa = 1; pa < RD_PIPE_A; pa = pa + 1)
+                    pipeA[pa] <= pipeA[pa-1];
             end
-
-        end else begin : gen_direct_read
-            // 原始单周期读取（向后兼容）
-            always @(posedge clk) begin
-                inst_rd_data <= mem[inst_rd_addr];
-            end
+            assign bram_rddata_a = pipeA[RD_PIPE_A-1];
         end
     endgenerate
-    
+
     // ========================================
-    // 端口 A：AXI4-Lite Slave 逻辑
+    // Port B: synchronous read + pipeline
     // ========================================
-    
-    // 写通道
-    reg [AXI_ADDR_WIDTH-1:0] aw_addr_reg;
-    reg aw_en;
-    
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            s_axi_awready <= 1'b0;
-            aw_en <= 1'b1;
-            aw_addr_reg <= 0;
-        end else begin
-            if (~s_axi_awready && s_axi_awvalid && s_axi_wvalid && aw_en) begin
-                s_axi_awready <= 1'b1;
-                aw_en <= 1'b0;
-                aw_addr_reg <= s_axi_awaddr;
-            end else if (s_axi_bready && s_axi_bvalid) begin
-                aw_en <= 1'b1;
-                s_axi_awready <= 1'b0;
-            end else begin
-                s_axi_awready <= 1'b0;
-            end
-        end
-    end
-    
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            s_axi_wready <= 1'b0;
-        end else begin
-            if (~s_axi_wready && s_axi_wvalid && s_axi_awvalid && aw_en) begin
-                s_axi_wready <= 1'b1;
-            end else begin
-                s_axi_wready <= 1'b0;
-            end
-        end
-    end
-    
-    // 写入 BRAM
-    wire wr_en = s_axi_awready && s_axi_awvalid && s_axi_wready && s_axi_wvalid;
-    wire [ADDR_WIDTH-1:0] wr_addr = aw_addr_reg[ADDR_WIDTH+1:2];  // 字节地址转字地址
-    
+    reg [DATA_WIDTH-1:0] portb_rd_raw;
+
     always @(posedge clk) begin
-        if (wr_en) begin
-            if (s_axi_wstrb[0]) mem[wr_addr][7:0]   <= s_axi_wdata[7:0];
-            if (s_axi_wstrb[1]) mem[wr_addr][15:8]  <= s_axi_wdata[15:8];
-            if (s_axi_wstrb[2]) mem[wr_addr][23:16] <= s_axi_wdata[23:16];
-            if (s_axi_wstrb[3]) mem[wr_addr][31:24] <= s_axi_wdata[31:24];
-        end
+        portb_rd_raw <= mem[inst_rd_addr];
     end
-    
-    // 写响应
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            s_axi_bvalid <= 1'b0;
-            s_axi_bresp  <= 2'b00;
-        end else begin
-            if (s_axi_awready && s_axi_awvalid && ~s_axi_bvalid && s_axi_wready && s_axi_wvalid) begin
-                s_axi_bvalid <= 1'b1;
-                s_axi_bresp  <= 2'b00;
-            end else if (s_axi_bready && s_axi_bvalid) begin
-                s_axi_bvalid <= 1'b0;
+
+    generate
+        if (NPIPE == 0) begin : gen_no_pipe
+            assign inst_rd_data = portb_rd_raw;
+        end else begin : gen_pipe
+            reg [DATA_WIDTH-1:0] pipe [0:NPIPE-1];
+            integer p;
+            always @(posedge clk) begin
+                pipe[0] <= portb_rd_raw;
+                for (p = 1; p < NPIPE; p = p + 1)
+                    pipe[p] <= pipe[p-1];
             end
+            assign inst_rd_data = pipe[NPIPE-1];
         end
-    end
-    
-    // 读通道
-    reg [AXI_ADDR_WIDTH-1:0] ar_addr_reg;
-    
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            s_axi_arready <= 1'b0;
-            ar_addr_reg   <= 0;
-        end else begin
-            if (~s_axi_arready && s_axi_arvalid) begin
-                s_axi_arready <= 1'b1;
-                ar_addr_reg   <= s_axi_araddr;
-            end else begin
-                s_axi_arready <= 1'b0;
-            end
-        end
-    end
-    
-    wire [ADDR_WIDTH-1:0] rd_addr = ar_addr_reg[ADDR_WIDTH+1:2];
-    
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            s_axi_rvalid <= 1'b0;
-            s_axi_rresp  <= 2'b00;
-            s_axi_rdata  <= 0;
-        end else begin
-            if (s_axi_arready && s_axi_arvalid && ~s_axi_rvalid) begin
-                s_axi_rvalid <= 1'b1;
-                s_axi_rresp  <= 2'b00;
-                s_axi_rdata  <= mem[rd_addr];
-            end else if (s_axi_rvalid && s_axi_rready) begin
-                s_axi_rvalid <= 1'b0;
-            end
-        end
-    end
+    endgenerate
 
 endmodule

@@ -150,6 +150,20 @@ set_property -dict [list \
 ] [get_bd_cells vpu_wb_ctrl]
 
 # ==============================================================================
+# 6b. Instruction BRAM Controller (128KB, 32-bit, for INST_BRAM Port A)
+# ==============================================================================
+if {![info exists ::INST_BRAM_READ_LATENCY]} {
+    error "INST_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
+}
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 inst_bram_ctrl
+set_property -dict [list \
+  CONFIG.DATA_WIDTH {32} \
+  CONFIG.SINGLE_PORT_BRAM {1} \
+  CONFIG.ECC_TYPE {0} \
+  CONFIG.READ_LATENCY $::INST_BRAM_READ_LATENCY \
+] [get_bd_cells inst_bram_ctrl]
+
+# ==============================================================================
 # 7. VPU Control Infrastructure (RTL Module References)
 # ==============================================================================
 create_bd_cell -type module -reference VPU_AXI_Regs vpu_regs

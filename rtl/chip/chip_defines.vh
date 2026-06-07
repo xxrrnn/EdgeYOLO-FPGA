@@ -80,6 +80,9 @@
 `define INST_DEPTH              (`INST_SIZE_BYTES / 4)                 // 32768
 `define INST_ADDR_WIDTH         15
 `define INST_AXI_ADDR_WIDTH     17
+`define INST_BRAM_NPIPE         2       // Port B pipeline stages (after 1-cycle BRAM read)
+`define INST_BRAM_RD_PIPE_A     1       // Port A output pipeline stages (after 1-cycle BRAM read)
+`define INST_BRAM_READ_LATENCY  (`INST_BRAM_RD_PIPE_A + 1)  // axi_bram_ctrl: 1(BRAM read) + RD_PIPE_A = 2
 
 // HBM BRAM
 `define HBM_BRAM_SIZE_BYTES     1048576 // 1MB
