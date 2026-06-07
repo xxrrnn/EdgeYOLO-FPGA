@@ -4,7 +4,27 @@ set -euo pipefail
 OUT="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-LITE_GEN="${LITE_GEN:-$REPO_ROOT/build/lite/lite.gen/sources_1/ip}"
+
+# LITE_GEN：FP IP 仿真模型所在目录，位于 build/lite/<tag>/lite.gen/sources_1/ip
+# 解析优先级：
+#   1. 环境变量 LITE_GEN（显式覆盖，由 run_module_sim.sh 导出）
+#   2. 环境变量 BUILD_TAG → build/lite/<BUILD_TAG>/lite.gen/...
+#   3. build/lite/<latest_tag>/lite.gen/...（自动取最新含 lite.xpr 的子目录）
+if [[ -z "${LITE_GEN:-}" ]]; then
+  BUILD_TAG="${BUILD_TAG:-}"
+  if [[ -n "$BUILD_TAG" ]] && [[ -d "$REPO_ROOT/build/lite/$BUILD_TAG/lite.gen/sources_1/ip" ]]; then
+    LITE_GEN="$REPO_ROOT/build/lite/$BUILD_TAG/lite.gen/sources_1/ip"
+  else
+    _latest=$(ls -dt "$REPO_ROOT"/build/lite/*/lite.xpr 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+    if [[ -n "$_latest" ]]; then
+      LITE_GEN="$_latest/lite.gen/sources_1/ip"
+    else
+      echo "ERROR: gen_bd_rtl_extra.sh — cannot find any build under $REPO_ROOT/build/lite/" >&2
+      echo "  set BUILD_TAG or run vivado -source scripts/chip-lite/run.tcl first" >&2
+      exit 1
+    fi
+  fi
+fi
 
 emit() { if [[ -n "$OUT" ]]; then cat >"$OUT"; else cat; fi; }
 

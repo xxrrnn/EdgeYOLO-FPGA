@@ -13,6 +13,24 @@ vcs_setup
 EXPORT_VCS_DIR="$REPO_ROOT/sim/lite_bd_export/vcs/lite/vcs"
 BD_SIM_DIR="$LITE_BD_DIR/sim"
 
+# ── 解析 BUILD_TAG → LITE_BUILD_DIR ──────────────────────────────────────────
+# 优先用环境变量 BUILD_TAG；否则取 build/lite/ 下最新含 lite.xpr 的子目录。
+# LITE_BUILD_DIR: build/lite/<tag>   （不含末尾 /）
+# LITE_GEN      : .../lite.gen/sources_1/ip  传给 gen_bd_rtl_extra.sh
+if [[ -z "${BUILD_TAG:-}" ]]; then
+  _latest=$(ls -dt "$REPO_ROOT/build/lite"/*/lite.xpr 2>/dev/null | head -1)
+  if [[ -n "$_latest" ]]; then
+    BUILD_TAG="$(basename "$(dirname "$_latest")")"
+  fi
+fi
+if [[ -z "${BUILD_TAG:-}" ]]; then
+  echo "ERROR: no build found under $REPO_ROOT/build/lite/ — run vivado -source scripts/chip-lite/run.tcl first" >&2
+  exit 1
+fi
+LITE_BUILD_DIR="$REPO_ROOT/build/lite/$BUILD_TAG"
+export LITE_GEN="$LITE_BUILD_DIR/lite.gen/sources_1/ip"
+echo "INFO: using BUILD_TAG=$BUILD_TAG  LITE_BUILD_DIR=$LITE_BUILD_DIR"
+
 MODULE_CASE="${MODULE_CASE:-dcim_matmul}"
 MODULE_VARIANT="${MODULE_VARIANT:-default}"
 MODULE_VARIANTS="${MODULE_VARIANTS:-}"
@@ -131,9 +149,9 @@ compile_simv() {
     "+incdir+$REPO_ROOT/rtl/vpu"
     "+incdir+$LITE_BD_DIR"
     "+incdir+$MODULE_TB_DIR"
-    "+incdir+$REPO_ROOT/build/lite/lite.ip_user_files/bd/lite/ip/lite_xdma_0_0/ip_0/source"
+    "+incdir+$LITE_BUILD_DIR/lite.ip_user_files/bd/lite/ip/lite_xdma_0_0/ip_0/source"
     "+incdir+$REPO_ROOT/bd/lite/ipshared/eebc/hdl/verilog"
-    "+incdir+$REPO_ROOT/build/lite/lite.ip_user_files/bd/lite/ip/lite_hbm_0_0/hdl/rtl"
+    "+incdir+$LITE_BUILD_DIR/lite.ip_user_files/bd/lite/ip/lite_hbm_0_0/hdl/rtl"
     "+incdir+$REPO_ROOT/bd/lite/ipshared/7b8c/verif/model"
     "+define+SIMULATION"
   )
