@@ -106,7 +106,7 @@ module DCIM_Tile #(
         ST_DONE
     } state_t;
 
-    state_t state, next_state;
+    (* max_fanout = 64 *) state_t state, next_state;
 
     wire                     dcim_clr;
     wire                     dcim_ena = 1'b1;

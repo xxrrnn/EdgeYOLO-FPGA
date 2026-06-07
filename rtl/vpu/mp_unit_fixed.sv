@@ -68,7 +68,7 @@ module mp_unit_fixed #(
     reg [1:0]             mode_r;
     reg [3:0]             kernel_r;
     reg [1:0]             stride_r;
-    reg [2:0]             pad_r;
+    (* max_fanout = 32 *) reg [2:0] pad_r;
 
     // =========================================================================
     // 状态机
@@ -101,7 +101,7 @@ module mp_unit_fixed #(
     // =========================================================================
     // S_INIT
     reg [ADDR_WIDTH-1:0] row_stride_r;      // = src_w * c_blocks
-    reg [ADDR_WIDTH-1:0] gap_total_r;
+    // gap_total_r 已在配置寄存器区（line 66）声明，此处不重复
     // S_PRECOMPUTE
     reg [ADDR_WIDTH-1:0] src_stride_row_r;  // = stride * row_stride
     reg [ADDR_WIDTH-1:0] src_stride_col_r;  // = stride * c_blocks
