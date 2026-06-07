@@ -430,7 +430,17 @@ module dqa_relu_unit #(
 
 
     wire [ADDR_WIDTH-1:0] dqa_channel_group_count = dqa_src_c_reg >> $clog2(FP_CORE_NUM);
-    wire [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel = dqa_channel_group_count - 1 - dqa_x_load_c_cnt;
+    wire [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel_nxt = dqa_channel_group_count - 1 - dqa_x_load_c_cnt;
+
+    // 注册化 group_sel：打一拍降低 fan-out 路径延迟（fo=16384 → 250MHz timing closure）。
+    // 安全性：dqa_x_load_c_cnt 在 DQA_UPDATE 更新，到 DQA_COMPUTE 使用至少相隔 4 个状态，
+    // group_sel_r 延迟 1 拍不影响 DQA_COMPUTE 采样的值。
+    (* MAX_FANOUT = 64, shreg_extract = "no" *)
+    reg [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) dqa_scale_bias_group_sel <= '0;
+        else        dqa_scale_bias_group_sel <= dqa_scale_bias_group_sel_nxt;
+    end
 
     genvar relu_i;
     generate

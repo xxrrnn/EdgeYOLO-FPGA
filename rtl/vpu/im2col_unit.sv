@@ -104,24 +104,25 @@ module im2col_unit #(
     // =========================================================================
     // 状态机
     // =========================================================================
-    localparam S_IDLE       = 4'd0;
-    localparam S_INIT       = 4'd1;
-    localparam S_PRECOMPUTE = 4'd9;   // 一级：in_col_stride / kw_times_c
-    localparam S_PRECOMPUTE2 = 4'd14; // 二级：w_times_c / stride_w_c / row_stride
-    localparam S_PRECOMPUTE3 = 4'd15; // 三级：stride_h_wc / in_base
-    localparam S_READ_REQ   = 4'd2;  // 发出读请求（单周期 pulse）
-    localparam S_READ_WAIT  = 4'd3;  // 等待 douta_valid
-    localparam S_READ_LATCH = 4'd4;  // 释放总线
-    localparam S_WRITE      = 4'd5;  // 发出写请求
-    localparam S_NEXT_C     = 4'd6;  // 推进 c_chunk
-    localparam S_NEXT       = 4'd7;  // 推进 kw/kh/ow/oh
-    localparam S_DONE       = 4'd8;
-    localparam S_WRITE_TAIL       = 4'd10; // 跨 OBUF 字边界时的第二拍写
-    localparam S_READ_TAIL_REQ      = 4'd11; // 输入数据跨读字边界时补读下一字
-    localparam S_READ_TAIL_WAIT     = 4'd12;
-    localparam S_READ_TAIL_LATCH    = 4'd13;
+    localparam S_IDLE       = 5'd0;
+    localparam S_INIT       = 5'd1;
+    localparam S_PRECOMPUTE = 5'd9;   // 一级：in_col_stride / kw_times_c
+    localparam S_PRECOMPUTE2 = 5'd14; // 二级：w_times_c / stride_w_c / row_stride
+    localparam S_PRECOMPUTE3 = 5'd15; // 三级：stride_h_wc / in_base
+    localparam S_BOUND_CHECK = 5'd16; // 注册 ih_calc_ok / iw_calc_ok（切断组合链）
+    localparam S_READ_REQ   = 5'd2;  // 发出读请求（单周期 pulse）
+    localparam S_READ_WAIT  = 5'd3;  // 等待 douta_valid
+    localparam S_READ_LATCH = 5'd4;  // 释放总线
+    localparam S_WRITE      = 5'd5;  // 发出写请求
+    localparam S_NEXT_C     = 5'd6;  // 推进 c_chunk
+    localparam S_NEXT       = 5'd7;  // 推进 kw/kh/ow/oh
+    localparam S_DONE       = 5'd8;
+    localparam S_WRITE_TAIL       = 5'd10; // 跨 OBUF 字边界时的第二拍写
+    localparam S_READ_TAIL_REQ      = 5'd11; // 输入数据跨读字边界时补读下一字
+    localparam S_READ_TAIL_WAIT     = 5'd12;
+    localparam S_READ_TAIL_LATCH    = 5'd13;
 
-    reg [3:0] state;
+    reg [4:0] state;
 
     // 循环索引（c_chunk 在最内层，处理 CH_IN > 16 的情况）
     reg signed [15:0] oh, ow;
@@ -236,11 +237,16 @@ module im2col_unit #(
         end
     end
 
-    // 输入坐标组合计算（S_READ_REQ 同拍 in_bound 判定）
+    // 输入坐标组合计算（S_BOUND_CHECK 注册，S_READ_REQ 使用寄存版）
     wire signed [15:0] ih_calc = $signed(oh) * strideH_r - padH_r + $signed({8'd0, kh});
     wire signed [15:0] iw_calc = $signed(ow) * strideW_r - padW_r + $signed({8'd0, kw});
     wire ih_calc_ok = (ih_calc >= 0) && (ih_calc < $signed(src_h_r));
     wire iw_calc_ok = (iw_calc >= 0) && (iw_calc < $signed(src_w_r));
+
+    // 注册化版本（在 S_BOUND_CHECK 锁存，S_READ_REQ 使用）：
+    // 切断 oh×strideH→CARRY8×6→比较→CE 的 13-level 组合链（post_opt WNS=+0.177ns 余量不足）
+    reg ih_calc_ok_r, iw_calc_ok_r;
+    reg signed [15:0] ih_calc_r, iw_calc_r;
 
     // 输入是否在范围内（寄存 ih/iw 版本）
     wire ih_ok = (ih >= 0) && (ih < $signed(src_h_r));
@@ -259,6 +265,8 @@ module im2col_unit #(
             gb_enb            <= 1'b0;
             oh <= 0; ow <= 0; kh <= 0; kw <= 0;
             ih <= 0; iw <= 0;
+            ih_calc_r <= 0; iw_calc_r <= 0;
+            ih_calc_ok_r <= 1'b0; iw_calc_ok_r <= 1'b0;
             c_chunk <= 0; c_chunk_max <= 0;
             c_chunk_byte_offset_r <= '0;
             write_chunk_nbyte_r <= '0;
@@ -355,15 +363,24 @@ module im2col_unit #(
                     in_base_r     <= $signed(src_addr_r)
                                    - $signed(padH_r) * $signed(w_times_c_r)
                                    - $signed(padW_r) * $signed(in_col_stride_r);
-                    state <= S_READ_REQ;
+                    state <= S_BOUND_CHECK;
+                end
+
+                S_BOUND_CHECK: begin
+                    // 注册 ih/iw 坐标计算结果和越界判定（切断 13-level 组合链）
+                    ih_calc_r     <= ih_calc;
+                    iw_calc_r     <= iw_calc;
+                    ih_calc_ok_r  <= ih_calc_ok;
+                    iw_calc_ok_r  <= iw_calc_ok;
+                    state         <= S_READ_REQ;
                 end
 
                 S_READ_REQ: begin
-                    ih <= ih_calc;
-                    iw <= iw_calc;
+                    ih <= ih_calc_r;
+                    iw <= iw_calc_r;
                     rd_wait_cnt <= 0;
                     latch_stall_cnt <= 0;
-                    if (ih_calc_ok && iw_calc_ok) begin
+                    if (ih_calc_ok_r && iw_calc_ok_r) begin
                         in_bound          <= 1'b1;
                         // 像素数据在 16B 对齐槽位内的偏移 = (align - CH_IN) + c_chunk*0（c_chunk已含在in_pixel_byte_addr）
                         // 像素数据从对齐槽位的 byte0 开始（hex 小端格式）
@@ -375,7 +392,7 @@ module im2col_unit #(
                         in_bound <= 1'b0;
                         gb_enb   <= 1'b0;
                     end
-                    state <= (ih_calc_ok && iw_calc_ok) ? S_READ_WAIT : S_WRITE;
+                    state <= (ih_calc_ok_r && iw_calc_ok_r) ? S_READ_WAIT : S_WRITE;
                 end
 
                 S_READ_WAIT: begin
@@ -484,7 +501,7 @@ module im2col_unit #(
                             write_chunk_nbyte_r <= 5'd16;
                         else
                             write_chunk_nbyte_r <= elem_total_bytes_r - (c_chunk_byte_offset_r + C_CHUNK_BYTES);
-                        state <= S_READ_REQ;
+                        state <= S_BOUND_CHECK;
                     end else begin
                         c_chunk <= 0;
                         c_chunk_byte_offset_r <= '0;
@@ -499,7 +516,7 @@ module im2col_unit #(
                         kw <= kw + 1;
                         in_kw_acc_r      <= in_kw_acc_r + in_col_stride_r;
                         out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
-                        state <= S_READ_REQ;
+                        state <= S_BOUND_CHECK;
                         end else begin
                             kw <= 0;
                             in_kw_acc_r      <= 0;
@@ -508,7 +525,7 @@ module im2col_unit #(
                                 in_kh_acc_r      <= in_kh_acc_r + w_times_c_r;
                                 // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 elem_total_bytes
                                 out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
-                                state <= S_READ_REQ;
+                                state <= S_BOUND_CHECK;
                             end else begin
                                 kh <= 0;
                                 in_kh_acc_r      <= 0;
@@ -517,7 +534,7 @@ module im2col_unit #(
                                 ow <= ow + 1;
                                 in_ow_acc_r      <= in_ow_acc_r + stride_w_c_r;
                                 out_row_offset_r <= out_row_offset_r + row_stride_r;
-                                state <= S_READ_REQ;
+                                state <= S_BOUND_CHECK;
                             end else begin
                                 ow <= 0;
                                 in_ow_acc_r      <= 0;
@@ -525,7 +542,7 @@ module im2col_unit #(
                                     oh <= oh + 1;
                                     in_oh_acc_r      <= in_oh_acc_r + stride_h_wc_r;
                                     out_row_offset_r <= out_row_offset_r + row_stride_r;
-                                    state <= S_READ_REQ;
+                                    state <= S_BOUND_CHECK;
                                 end else begin
                                     state <= S_DONE;
                                 end

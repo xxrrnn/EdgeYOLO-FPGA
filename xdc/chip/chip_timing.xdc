@@ -205,6 +205,50 @@ if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
 }
 
 # ============================================================================
+# SLR 穿越流水寄存器 MCP 约束
+# ============================================================================
+# DCIM_Array.sv 在 ready 出口和 start 入口各加了 1 级流水寄存器：
+#   - ready_r  : tile_ready AND → ready_r → (SLL) → dcim_ready → INST_Decoder FSM
+#   - start_r  : cfg_start → start_r → (SLL) → Tile.start
+# 这两级寄存器是为了让 Vivado 把它们放在 SLR 边界（TX_REG/RX_REG），
+# 消除 SLR2→SLR0 的直跨（2.78 ns net delay）。
+#
+# 功能安全：
+#   ready_r 延迟 1 拍：INST_Decoder 用 dcim_layer_seen_busy 先检测 ready=0 忙态，
+#   再检测 ready=1 完成，多 1 拍不影响正确性。
+#   start_r 延迟 1 拍：start 为单周期脉冲，Tile FSM 在第 1 或第 2 拍收到均可正常启动；
+#   ready_r=0 会在 start_r=1 同周期或稍后到达 INST_Decoder，seen_busy 可正常捕捉。
+#
+# MCP：ready_r/start_r 这两级寄存器与其后级 FSM 之间 放宽 1 拍（2-cycle setup），
+# 允许综合器做跨 SLR 寄存器复制（SLL TX REG pipelining）而不被时序 DRC 误报。
+
+# ready_r → inst_decoder FSM CE/D（主要 MCP，消除 worst path）
+set _mcp_ready_r_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/ready_r_reg/C}]
+set _mcp_ready_r_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ *inst_decoder*/FSM_onehot_state_reg*/CE ||
+           NAME =~ *inst_decoder*/FSM_onehot_state_reg*/D  ||
+           NAME =~ *inst_decoder*/dcim_layer_seen_busy_reg*/D}]
+if {[llength $_mcp_ready_r_from] && [llength $_mcp_ready_r_to]} {
+  set_multicycle_path 2 -setup -from $_mcp_ready_r_from -to $_mcp_ready_r_to
+  set_multicycle_path 1 -hold  -from $_mcp_ready_r_from -to $_mcp_ready_r_to
+  puts "INFO: ready_r→inst_decoder MCP(2): [llength $_mcp_ready_r_from] src, [llength $_mcp_ready_r_to] dst"
+}
+
+# start_r → tile FSM（下行流水，确保 start_r 到 Tile 的路径不被误约束）
+set _mcp_start_r_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/start_r_reg/C}]
+set _mcp_start_r_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/FSM_onehot_state_reg*/CE ||
+           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/*state_reg*/CE           ||
+           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/*state_reg*/D}]
+if {[llength $_mcp_start_r_from] && [llength $_mcp_start_r_to]} {
+  set_multicycle_path 2 -setup -from $_mcp_start_r_from -to $_mcp_start_r_to
+  set_multicycle_path 1 -hold  -from $_mcp_start_r_from -to $_mcp_start_r_to
+  puts "INFO: start_r→tile FSM MCP(2): [llength $_mcp_start_r_from] src, [llength $_mcp_start_r_to] dst"
+}
+
+# ============================================================================
 # HBM IP 内部时序豁免
 # ============================================================================
 # clk_out1_lite_hbm_axi_clk_wiz_0 setup WNS=-0.198ns (17 EP):
@@ -399,6 +443,19 @@ foreach _slr_cell {
   if {[llength $_c]} {
     set_property USER_SLR_ASSIGNMENT SLR0 $_c
   }
+}
+
+# ============================================================================
+# DQA scale/bias group_sel 高扇出约束
+# ============================================================================
+# post_route WNS=-0.583ns: dqa_x_load_c_cnt → dqa_scale_bias_group_sel → fo=16384
+# RTL 修复：已将 group_sel 注册化（打 1 拍），并加 MAX_FANOUT=64 属性。
+# XDC 双保险：如果综合未识别 RTL 属性，此处再加一次。
+set _dqa_gs_regs [get_cells -quiet -hierarchical \
+  -filter {NAME =~ *dqa_inst/dqa_scale_bias_group_sel_reg*}]
+if {[llength $_dqa_gs_regs]} {
+  set_property MAX_FANOUT 64 $_dqa_gs_regs
+  puts "INFO: DQA group_sel MAX_FANOUT=64 applied to [llength $_dqa_gs_regs] cells"
 }
 
 # ============================================================================

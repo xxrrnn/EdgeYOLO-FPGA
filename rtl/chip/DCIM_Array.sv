@@ -56,8 +56,36 @@ module DCIM_Array #(
     wire [NUM_TILES-1:0] tile_done;
     wire [NUM_TILES-1:0] tile_ready;
 
+    // -----------------------------------------------------------------------
+    // SLR 穿越流水寄存器
+    // -----------------------------------------------------------------------
+    // ready 上行（SLR2/SLR1 Tile → SLR0 INST_Decoder）：
+    //   worst path = tile[3](SLR2) → ready(SLR0)，直跨 2 个 SLR，routing 2.78 ns。
+    //   在 DCIM_Array 顶层增加 1 级寄存器，Vivado 可将其放置于 SLR1 的 SLL TX 侧，
+    //   把 SLR2→SLR0 的直跨拆成 SLR2→SLR1→SLR0 两段，每段约 1.0 ns，完全满足 4 ns 周期。
+    //   功能安全性：INST_Decoder 用 dcim_layer_seen_busy 先捕捉 ready=0（忙），
+    //   再等 ready=1（完成），延迟 1 拍仅意味着 INST_Decoder 多等 1 个时钟才感知到完成，
+    //   不影响计算结果的正确性，也不影响 start 握手（seen_busy 保证 start 已先到达）。
+    (* shreg_extract = "no", KEEP = "TRUE" *) reg ready_r;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) ready_r <= 1'b1;   // 复位后 IDLE 即 ready
+        else        ready_r <= &tile_ready;
+    end
+
+    // start 下行（SLR0 INST_Decoder → SLR1/SLR2 Tile）：
+    //   start 原来由 DCIM_Array_bd 的 cfg_start 寄存器驱动（已有 1 级），
+    //   再在 DCIM_Array 内部增加 1 级，确保 SLR0→SLR2 不直跨。
+    //   功能安全性：start 为单周期脉冲，延迟 1 拍后 Tile 仍能正常捕捉启动沿；
+    //   此时 ready_r=0 已先到达 INST_Decoder（因为 Tile 收到 start 后下一周期就拉低 ready），
+    //   INST_Decoder 不会误判"已完成"。
+    (* shreg_extract = "no", KEEP = "TRUE" *) reg start_r;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) start_r <= 1'b0;
+        else        start_r <= start;
+    end
+
     assign done  = &(tile_done | ~tile_mask);
-    assign ready = &tile_ready;
+    assign ready = ready_r;
 
     wire [NUM_TILES-1:0]                tile_ibuf_rd_valid;
     wire [NUM_TILES-1:0]                tile_ibuf_rd_ready;
@@ -106,7 +134,7 @@ module DCIM_Array #(
             ) u_tile (
                 .clk(clk),
                 .rst_n(rst_n),
-                .start(start),
+                .start(start_r),
                 .tile_enable(tile_mask[i]),
                 .done(tile_done[i]),
                 .ready(tile_ready[i]),
