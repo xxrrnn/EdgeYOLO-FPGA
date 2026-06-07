@@ -95,6 +95,10 @@ set tns_stop_place   -80000.0
 set fail_stop_place  50000
 set wns_warn_place   -2.0
 
+# --- 详细时序报告 ---
+# report_timing -max_paths 输出前 N 条 failing 路径（slack < 0）
+set rptMaxPaths      20
+
 # post-route: WNS < 0 不写 bitstream
 # (hardcoded in proc, threshold = 0)
 

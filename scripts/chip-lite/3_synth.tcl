@@ -160,6 +160,8 @@ set_param general.maxThreads 32   ;# 恢复多线程供后续步骤使用
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
+report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+  -file [file normalize "$ImplOutputDir/post_place_failing_paths.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
 
 # 时序门控：post-place
@@ -173,6 +175,8 @@ puts "\n========== Step 4: Phys Opt Design =========="
 phys_opt_design -directive $physOptDirective
 write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
+report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+  -file [file normalize "$ImplOutputDir/post_phys_opt_failing_paths.rpt"]
 
 # ==============================================================================
 # Step 5: Route Design
@@ -186,6 +190,8 @@ set_param general.maxThreads 32
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
+report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+  -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
 
 # 时序门控：post-route（WNS < 0 不写 bitstream）
