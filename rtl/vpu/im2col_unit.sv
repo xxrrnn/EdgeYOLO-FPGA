@@ -107,8 +107,8 @@ module im2col_unit #(
     localparam S_IDLE       = 5'd0;
     localparam S_INIT       = 5'd1;
     localparam S_PRECOMPUTE = 5'd9;   // 一级：in_col_stride / kw_times_c
-    localparam S_PRECOMPUTE2 = 5'd14; // 二级：w_times_c / stride_w_c / row_stride
-    localparam S_PRECOMPUTE3 = 5'd15; // 三级：stride_h_wc / in_base
+    localparam S_PRECOMPUTE2 = 5'd14; // 二级：w_times_c / stride_w_c / kH_kw_c（DSP 乘法寄存）
+    localparam S_PRECOMPUTE3 = 5'd15; // 三级：stride_h_wc / in_base / row_stride（加法+移位）
     localparam S_BOUND_CHECK = 5'd16; // 注册 ih_calc_ok / iw_calc_ok（切断组合链）
     localparam S_READ_REQ   = 5'd2;  // 发出读请求（单周期 pulse）
     localparam S_READ_WAIT  = 5'd3;  // 等待 douta_valid
@@ -156,6 +156,7 @@ module im2col_unit #(
     // 预算常量（S_INIT 算一级，S_PRECOMPUTE 算二级）
     reg [31:0] elem_total_bytes_r;   // = CH_IN * ELEM_BYTES
     reg [31:0] row_stride_r;         // = ceil(kH*kW*CH_IN/DCIM_CH_IN)*DCIM_CH_IN*ELEM_BYTES
+    reg [31:0] kH_kw_c_r;            // = kH * kw_times_c（S_PRECOMPUTE2 中间寄存，切断 DSP 级联路径）
     reg [31:0] in_col_stride_r;      // feature map 像素间距：ceil(CH_IN*ELEM_BYTES/16)*16
     reg [31:0] w_times_c_r;          // = W * CH_IN（一级，S_INIT）
     reg [31:0] stride_h_wc_r;        // = strideH * W * CH_IN（二级，S_PRECOMPUTE）
@@ -283,7 +284,7 @@ module im2col_unit #(
             padH_r <= 0; padW_r <= 0;
             elem_total_bytes_r <= 0;
             row_stride_r <= 0; in_col_stride_r <= 0; w_times_c_r <= 0;
-            stride_h_wc_r <= 0; stride_w_c_r <= 0; kw_times_c_r <= 0;
+            stride_h_wc_r <= 0; stride_w_c_r <= 0; kw_times_c_r <= 0; kH_kw_c_r <= 0;
             in_base_r <= 0;
         end else begin
             // 默认信号
@@ -345,13 +346,12 @@ module im2col_unit #(
                     // 二级乘法：依赖 S_PRECOMPUTE 的 in_col_stride_r / kw_times_c_r
                     // w_times_c    = W(≤16bit) × in_col_stride(≤16bit) → ≤32bit
                     // stride_w_c   = strideW(5bit) × in_col_stride(≤16bit) → ≤21bit
-                    // row_stride   用条件移位替代除法（消除组合延迟）
-                    // kH × kw_times_c: kH(8bit) × kw_times_c(≤21bit) → ≤29bit
+                    // kH_kw_c     = kH(8bit) × kw_times_c(≤21bit) → ≤29bit
+                    //   → 中间寄存，切断 DSP 级联 + 取整运算的跨拍组合链
+                    //   → row_stride 的取整/移位在 S_PRECOMPUTE3 中单独一拍完成
                     w_times_c_r   <= src_w_r * in_col_stride_r;
                     stride_w_c_r  <= strideW_r * in_col_stride_r;
-                    row_stride_r  <= (elem_bytes_r == 2'd2) ?
-                        (((kH_r * kw_times_c_r) + 7'd127) >> 7) << 7 :
-                        (((kH_r * kw_times_c_r) +  7'd63) >> 6) << 6;
+                    kH_kw_c_r     <= kH_r * kw_times_c_r;
                     state <= S_PRECOMPUTE3;
                 end
 
@@ -359,10 +359,14 @@ module im2col_unit #(
                     // 三级乘法：依赖 S_PRECOMPUTE2 的 w_times_c_r
                     // stride_h_wc = strideH(5bit) × w_times_c(≤32bit) → 依赖 S_PC2
                     // in_base 含两路 signed 乘法（padH/padW 各 5bit × 32bit）
+                    // row_stride  = ceil(kH_kw_c / align) * align（加常量+移位/掩码，~2 LUT，<1ns）
                     stride_h_wc_r <= strideH_r * w_times_c_r;
                     in_base_r     <= $signed(src_addr_r)
                                    - $signed(padH_r) * $signed(w_times_c_r)
                                    - $signed(padW_r) * $signed(in_col_stride_r);
+                    row_stride_r  <= (elem_bytes_r == 2'd2) ?
+                        ((kH_kw_c_r + 32'd127) & ~32'd127) :
+                        ((kH_kw_c_r +  32'd63) & ~32'd63);
                     state <= S_BOUND_CHECK;
                 end
 
