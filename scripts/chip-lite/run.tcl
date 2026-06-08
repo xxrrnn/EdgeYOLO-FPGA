@@ -55,6 +55,9 @@ if {$resumeFrom ne "" && $resumeFrom ne "opt" && $resumeFrom ne "place" && $resu
     set resumeFrom ""
 }
 
+set _run_error ""
+if {[catch {
+
 if {$resumeFrom ne ""} {
     # Resume 模式：打开工程，加载 checkpoint，从指定阶段继续
     set xpr [file normalize "$projPath/${projName}.xpr"]
@@ -93,7 +96,7 @@ if {$resumeFrom ne ""} {
         cd $ImplOutputDir
         set_param general.maxThreads 1
         place_design -directive $placeDirective
-        set_param general.maxThreads 32   ;# 恢复，place 是唯一需要单线程的步骤
+        set_param general.maxThreads 32
         cd $_savedCwd
         write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
         report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
@@ -134,4 +137,97 @@ if {$resumeFrom ne ""} {
     source [file normalize "$thisScriptDir/4_rpt.tcl"]
 }
 
+} _catch_msg]} {
+    set _run_error $_catch_msg
+    puts "ERROR: Run failed — $_catch_msg"
+}
+
 puts "\n======== run.tcl DONE ========"
+
+# ==============================================================================
+# 完成通知（终端打印 + 126邮箱 SMTP）
+# ==============================================================================
+
+# 辅助：读一行 SMTP 响应（定义在 proc 外部，避免重定义）
+proc _smtp_read {sock} {
+    set line [gets $sock]
+    return $line
+}
+
+proc notify_completion {status detail} {
+    global notifyEmail notify126From notify126Auth projName runTag projPath
+
+    set host      [info hostname]
+    set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+    # Subject 内容纯 ASCII，不需要 base64 编码整行
+    set subject   "\[Vivado\] ${projName}/${runTag}: ${status}"
+    set body      "Build:  $projName / $runTag\nStatus: $status\nDetail: $detail\nHost:   $host\nTime:   $timestamp\nPath:   $projPath"
+
+    # 终端醒目输出（无论是否配置邮件）
+    puts "\a"
+    puts "=============================================="
+    puts "  BUILD $status  |  $projName/$runTag"
+    puts "  $detail"
+    puts "  $timestamp"
+    puts "=============================================="
+
+    # 邮件通知（仅当三个变量都非空时）
+    if {$notifyEmail eq "" || $notify126From eq "" || $notify126Auth eq ""} {
+        return
+    }
+
+    set smtp_server "smtp.126.com"
+    set port        25
+    set b64_user [binary encode base64 $notify126From]
+    set b64_pass [binary encode base64 $notify126Auth]
+
+    if {[catch {set sock [socket $smtp_server $port]} err]} {
+        puts "WARNING: 无法连接 SMTP 服务器 $smtp_server:$port — $err"
+        return
+    }
+    fconfigure $sock -buffering line -translation crlf
+
+    _smtp_read $sock
+    puts $sock "HELO localhost";  _smtp_read $sock
+    puts $sock "AUTH LOGIN";      _smtp_read $sock
+    puts $sock $b64_user;         _smtp_read $sock
+    puts $sock $b64_pass
+    set auth_resp [_smtp_read $sock]
+
+    if {![string match "235 *" $auth_resp]} {
+        puts "WARNING: 126邮箱认证失败（$auth_resp），请检查授权码"
+        catch {puts $sock "QUIT"}
+        close $sock
+        return
+    }
+
+    puts $sock "MAIL FROM:<$notify126From>";  _smtp_read $sock
+    puts $sock "RCPT TO:<$notifyEmail>";      _smtp_read $sock
+    puts $sock "DATA";                        _smtp_read $sock
+
+    puts $sock "From: Vivado Build <$notify126From>"
+    puts $sock "To: $notifyEmail"
+    puts $sock "Subject: $subject"
+    puts $sock "Content-Type: text/plain; charset=\"UTF-8\""
+    puts $sock ""
+    foreach line [split $body "\n"] { puts $sock $line }
+    puts $sock ".";   _smtp_read $sock
+    puts $sock "QUIT"; _smtp_read $sock
+    close $sock
+    puts "INFO: 通知邮件已发送至 $notifyEmail"
+}
+
+# 判断最终状态
+if {$_run_error ne ""} {
+    notify_completion "FAILED" $_run_error
+} else {
+    if {[info exists wns]} {
+        if {$wns >= 0} {
+            notify_completion "SUCCESS" "WNS=${wns}ns, bitstream generated"
+        } else {
+            notify_completion "TIMING_FAIL" "WNS=${wns}ns, bitstream skipped"
+        }
+    } else {
+        notify_completion "COMPLETED" "Flow finished (check reports)"
+    }
+}

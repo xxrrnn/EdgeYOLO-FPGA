@@ -67,7 +67,7 @@ set SynOutputDir  [file normalize "$projPath/SynOutputDir"]
 set ImplOutputDir [file normalize "$projPath/ImplOutputDir"]
 
 # module reference IP（OOC 需要 stub/DCP）
-set modRefIpTops [list lite_vpu_0_0 lite_dcim_array_0_0]
+set modRefIpTops [list lite_vpu_0_0 lite_dcim_array_0_0 lite_cdma_ctrl_0 lite_inst_bram_0 lite_inst_decoder_0 lite_vpu_regs_0]
 
 # --- 解析 chip_defines.vh（BD 脚本依赖 ::DCIM_* 等全局变量）---
 source [file normalize "$scriptsDir/common/chip_defines.tcl"]
@@ -111,3 +111,11 @@ catch {set_param place.ILREnabled false}
 
 puts "INFO: config.tcl loaded — project: $projName  tag: $runTag  part: $part"
 puts "INFO: projPath = $projPath"
+
+# ==============================================================================
+# 邮件通知配置（126邮箱，留空则不启用）
+# ==============================================================================
+# 填写后自动在 build 完成/失败时发送通知
+set notifyEmail    "xrn2019@126.com"             ;# 接收通知的邮箱（可与发件箱不同）
+set notify126From  "xrn2019@126.com"             ;# 你的126发件邮箱，例如 foo@126.com
+set notify126Auth  "EP35FjvaTixBNgbq"             ;# 126邮箱授权码（网页端「设置-POP3/SMTP」获取）

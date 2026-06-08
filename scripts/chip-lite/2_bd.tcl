@@ -176,6 +176,10 @@ foreach r $allOocRuns {
 # 顺序执行 OOC 综合
 # DSP 用量由 RTL 层精确控制（maArray 按 col < DCIM_DSP_COL_NUM 选择 DSP/LUT），
 # 无需 TCL 层 -max_dsp 注入，直接 reset + launch 即可。
+#
+# 注意：-jobs 32 时子进程内 STATUS="synth_design complete"，但父工程轮询
+# STATUS 可能停在 "Scripts Generated" 或 "Complete" 等变体，无法用正则可靠
+# 匹配。改为：①宽松正则覆盖所有完成态；②DCP 存在即视为成功（最可靠）。
 foreach batch [list $smcRuns $otherRuns] {
     if {![llength $batch]} { continue }
     puts "INFO: Launching [llength $batch] OOC run(s)..."
@@ -185,10 +189,17 @@ foreach batch [list $smcRuns $otherRuns] {
         set rname [get_property NAME $r]
         wait_on_run $r
         set st [get_property STATUS [get_runs $rname]]
-        if {![regexp -nocase {synth_design complete} $st]} {
-            error "OOC synthesis failed: $rname ($st)"
+        # DCP 路径：lite.runs/<rname>/<rname>.dcp
+        set dcpPath [file normalize "$projPath/${bdName}.runs/${rname}/${rname}.dcp"]
+        # 成功判断：STATUS 含 complete/Complete，或 DCP 文件已生成
+        set ok 0
+        if {[regexp -nocase {complete} $st]}         { set ok 1 }
+        if {[string match "*cached*" $st]}            { set ok 1 }
+        if {[file exists $dcpPath]}                   { set ok 1 }
+        if {!$ok} {
+            error "OOC synthesis failed: $rname (STATUS=$st, DCP=$dcpPath)"
         }
-        puts "INFO: OOC done: $rname"
+        puts "INFO: OOC done: $rname (STATUS=$st)"
     }
 }
 
@@ -200,7 +211,13 @@ foreach ipTop $modRefIpTops {
     if {![file exists $stub] && [file exists $dcpRun]} {
         file mkdir [file normalize "$ipRoot/$ipTop"]
         file copy -force $dcpRun [file normalize "$ipRoot/$ipTop/${ipTop}.dcp"]
-        puts "INFO: Copied OOC DCP for $ipTop"
+        # 从 DCP 生成 stub（顶层综合需要）
+        set curDesign [current_design -quiet]
+        open_checkpoint $dcpRun -quiet
+        write_verilog -force -mode synth_stub $stub
+        close_design
+        if {$curDesign ne ""} { current_design $curDesign }
+        puts "INFO: Generated stub for $ipTop from DCP"
     }
 }
 
