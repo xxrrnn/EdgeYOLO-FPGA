@@ -119,23 +119,21 @@
 // 每 Tile 有 16 列 × 4 subcol × 64 ch = 4096 个 4-bit 乘法器。
 // 细粒度双参数方案：
 //   DSP_COL_NUM        : 前 N 列全部 4 subcol 使用 DSP48E2
-//   DSP_PARTIAL_SUBCOL : 第 N 列仅前 M 个 subcol 使用 DSP48E2（0=不启用第 N 列部分 DSP）
+//   DSP_PARTIAL_SUBCOL : 第 N+1 列仅前 M 个 subcol 使用 DSP48E2（0=禁用）
 //
 // 每 Tile DSP 数 = (DSP_COL_NUM × 4 + DSP_PARTIAL_SUBCOL) × 64(ch)
-// xcvu37p: 9024 DSP total, ~3008/SLR; 1 Tile/SLR 布局（SLR0~SLR3 各 1 Tile）。
+// xcvu37p: 9024 DSP total, 3 SLR (SLR0/1/2), 约 3008/SLR
+// 当前布局: 2 Tiles/SLR（pblock_tile_01→SLR1, pblock_tile_23→SLR2）
+// 约束: 2 × DSP/Tile ≤ 3072 → DSP/Tile ≤ 1536
 //
-//   DSP_COL_NUM  DSP_PARTIAL_SUBCOL  DSP/Tile  4Tile总DSP  +VPU(57)  1Tile/SLR  SLR安全?
-//   5            0                   1280      5120        5177      1280       ✓ (43%)
-//   8            0                   2048      8192        8249      2048       ✓ (68%)
-//   8            2                   2176      8704        8761      2176       ✓ (72%)  ← 推荐
-//   8            4(=9列全DSP)         2304      9216        —         —          ✗ 超芯片总量
+//   DSP_COL_NUM  DSP_PARTIAL_SUBCOL  DSP/Tile  2Tiles/SLR  利用率
+//   5            0                   1280      2560        83%
+//   5            2                   1408      2816        92% ← 推荐
+//   6            0                   1536      3072        100%（无余量，风险）
 //
-// 推荐值 DSP_COL_NUM=8, DSP_PARTIAL_SUBCOL=2：
-//   总 DSP 8761，占 xcvu37p 97%；每 SLR 仅 2176/3008 = 72%，安全余量充足。
-//   需配合 XDC 改为 1 Tile/SLR（SLR0=Tile0, SLR1=Tile1, SLR2=Tile2, SLR3=Tile3）。
 `define DCIM_DSP_TILES          4       // 所有 Tile 均使用 DSP+LUT 混合
-`define DCIM_DSP_COL_NUM        8       // 每 Tile 前 8 列全部 4 subcol 使用 DSP
-`define DCIM_DSP_PARTIAL_SUBCOL 2       // 第 8 列（第9列）中前 2 个 subcol 使用 DSP（共 2×64=128 额外 DSP/Tile）
+`define DCIM_DSP_COL_NUM        5       // 每 Tile 前 5 列全部 4 subcol 使用 DSP
+`define DCIM_DSP_PARTIAL_SUBCOL 2       // 第 6 列中前 2 个 subcol 使用 DSP（共 2×64=128 额外 DSP/Tile）
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
