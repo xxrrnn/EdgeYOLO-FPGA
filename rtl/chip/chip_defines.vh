@@ -123,17 +123,22 @@
 //
 // 每 Tile DSP 数 = (DSP_COL_NUM × 4 + DSP_PARTIAL_SUBCOL) × 64(ch)
 // xcvu37p: 9024 DSP total, 3 SLR (SLR0/1/2), 约 3008/SLR
-// 当前布局: 2 Tiles/SLR（pblock_tile_01→SLR1, pblock_tile_23→SLR2）
-// 约束: 2 × DSP/Tile ≤ 3072 → DSP/Tile ≤ 1536
 //
-//   DSP_COL_NUM  DSP_PARTIAL_SUBCOL  DSP/Tile  2Tiles/SLR  利用率
-//   5            0                   1280      2560        83%
-//   5            2                   1408      2816        92% ← 推荐
-//   6            0                   1536      3072        100%（无余量，风险）
+// 布局方案 1+2+1:
+//   SLR0: Tile 0 (独占) + VPU/XDMA/IBUF (~60 DSP)  → Tile 可用 ~2940
+//   SLR1: Tile 1 + Tile 2 (共享) + arb              → 每 Tile 可用 ~1536
+//   SLR2: Tile 3 (独占)                              → Tile 可用 ~3000
 //
-`define DCIM_DSP_TILES          4       // 所有 Tile 均使用 DSP+LUT 混合
-`define DCIM_DSP_COL_NUM        5       // 每 Tile 前 5 列全部 4 subcol 使用 DSP
-`define DCIM_DSP_PARTIAL_SUBCOL 2       // 第 6 列中前 2 个 subcol 使用 DSP（共 2×64=128 额外 DSP/Tile）
+//   位置        DSP_COL_NUM  PARTIAL  DSP/Tile  SLR总DSP  利用率
+//   独占(0,3)   9            0        2304      2304      77%
+//   共享(1,2)   5            2        1408      2816      92%
+//   总计: 2304+1408+1408+2304 = 7424 DSP (82% 芯片利用率)
+//
+`define DCIM_DSP_TILES          4
+`define DCIM_DSP_COL_SOLO       9       // 独占 SLR 的 Tile (Tile 0, 3)
+`define DCIM_DSP_PARTIAL_SOLO   0
+`define DCIM_DSP_COL_SHARED     5       // 共享 SLR 的 Tile (Tile 1, 2)
+`define DCIM_DSP_PARTIAL_SHARED 2
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）

@@ -129,6 +129,12 @@ module DCIM_Array #(
     generate
         genvar i;
         for (i = 0; i < NUM_TILES; i = i + 1) begin : gen_tiles
+            // Per-Tile DSP 分配（1+2+1 布局）:
+            // Tile 0 (SLR0 独占), Tile 3 (SLR2 独占) → 更多 DSP
+            // Tile 1, 2 (SLR1 共享) → 较少 DSP
+            localparam TILE_IS_SOLO = (i == 0 || i == 3) ? 1 : 0;
+            localparam TILE_DSP_COL = TILE_IS_SOLO ? `DCIM_DSP_COL_SOLO : `DCIM_DSP_COL_SHARED;
+            localparam TILE_DSP_PARTIAL = TILE_IS_SOLO ? `DCIM_DSP_PARTIAL_SOLO : `DCIM_DSP_PARTIAL_SHARED;
             (* keep_hierarchy = "yes" *)
             DCIM_Tile #(
                 .WD1(WD1),
@@ -140,12 +146,9 @@ module DCIM_Array #(
                 .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH),
                 .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
                 .TILE_IDX(i),
-                // Per-Tile 部分 DSP：所有 Tile 均启用 DSP，
-                // 内部 maArray 按 col_idx < DCIM_DSP_COL_NUM 选择 DSP/LUT，
-                // 按 DCIM_DSP_PARTIAL_SUBCOL 控制第 DSP_COL_NUM 列的 subcol 级粒度。
                 .MULT_DSP_EN(1),
-                .DSP_COL_NUM(`DCIM_DSP_COL_NUM),
-                .DSP_PARTIAL_SUBCOL(`DCIM_DSP_PARTIAL_SUBCOL)
+                .DSP_COL_NUM(TILE_DSP_COL),
+                .DSP_PARTIAL_SUBCOL(TILE_DSP_PARTIAL)
             ) u_tile (
                 .clk(clk),
                 .rst_n(rst_n),

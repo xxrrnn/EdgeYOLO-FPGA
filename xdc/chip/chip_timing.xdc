@@ -367,38 +367,41 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
 #   SLR0 留给 XDMA + VPU + IBUF + AXI interconnect。
 # ============================================================================
 
-# Tile 0 + Tile 1 → SLR1（仅 SLR1，不跨 SLR）
-set _tile01_cells {}
-foreach _t01_filt {
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[0].*}
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[1].*}
-} {
-  set _tc [get_cells -quiet -hierarchical -filter $_t01_filt]
-  if {[llength $_tc]} { set _tile01_cells [concat $_tile01_cells $_tc] }
-}
-if {[llength $_tile01_cells]} {
-  create_pblock pblock_tile_01
-  add_cells_to_pblock [get_pblocks pblock_tile_01] $_tile01_cells
-  resize_pblock [get_pblocks pblock_tile_01] -add {SLR1}
-  set_property IS_SOFT TRUE [get_pblocks pblock_tile_01]
-  puts "INFO: pblock_tile_01 -> SLR1 only: [llength $_tile01_cells] cells"
+# Tile 0 → SLR0（独占，与 VPU/XDMA 同 SLR，DSP 充裕）
+set _tile0_cells [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[0].*}]
+if {[llength $_tile0_cells]} {
+  create_pblock pblock_tile_0
+  add_cells_to_pblock [get_pblocks pblock_tile_0] $_tile0_cells
+  resize_pblock [get_pblocks pblock_tile_0] -add {SLR0}
+  set_property IS_SOFT TRUE [get_pblocks pblock_tile_0]
+  puts "INFO: pblock_tile_0 -> SLR0: [llength $_tile0_cells] cells"
 }
 
-# Tile 2 + Tile 3 → SLR2（仅 SLR2，不跨 SLR）
-set _tile23_cells {}
-foreach _t23_filt {
+# Tile 1 + Tile 2 → SLR1（共享，DSP 按共享预算分配）
+set _tile12_cells {}
+foreach _t12_filt {
+  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[1].*}
   {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[2].*}
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[3].*}
 } {
-  set _tc [get_cells -quiet -hierarchical -filter $_t23_filt]
-  if {[llength $_tc]} { set _tile23_cells [concat $_tile23_cells $_tc] }
+  set _tc [get_cells -quiet -hierarchical -filter $_t12_filt]
+  if {[llength $_tc]} { set _tile12_cells [concat $_tile12_cells $_tc] }
 }
-if {[llength $_tile23_cells]} {
-  create_pblock pblock_tile_23
-  add_cells_to_pblock [get_pblocks pblock_tile_23] $_tile23_cells
-  resize_pblock [get_pblocks pblock_tile_23] -add {SLR2}
-  set_property IS_SOFT TRUE [get_pblocks pblock_tile_23]
-  puts "INFO: pblock_tile_23 -> SLR2 only: [llength $_tile23_cells] cells"
+if {[llength $_tile12_cells]} {
+  create_pblock pblock_tile_12
+  add_cells_to_pblock [get_pblocks pblock_tile_12] $_tile12_cells
+  resize_pblock [get_pblocks pblock_tile_12] -add {SLR1}
+  set_property IS_SOFT TRUE [get_pblocks pblock_tile_12]
+  puts "INFO: pblock_tile_12 -> SLR1: [llength $_tile12_cells] cells"
+}
+
+# Tile 3 → SLR2（独占，DSP 充裕）
+set _tile3_cells [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[3].*}]
+if {[llength $_tile3_cells]} {
+  create_pblock pblock_tile_3
+  add_cells_to_pblock [get_pblocks pblock_tile_3] $_tile3_cells
+  resize_pblock [get_pblocks pblock_tile_3] -add {SLR2}
+  set_property IS_SOFT TRUE [get_pblocks pblock_tile_3]
+  puts "INFO: pblock_tile_3 -> SLR2: [llength $_tile3_cells] cells"
 }
 
 # 仲裁器放 SLR1（居中，面向两侧 Tile 数据通路）
