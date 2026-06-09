@@ -44,14 +44,14 @@ module obuf (
 // 第 1 级输入寄存器（中心，1 份）
 // 作用：吸收上游 routing 与 SLR 跨越延迟
 // ============================================================================
-(* shreg_extract = "no" *) reg [`DCIM_BUF_NUM_COL-1:0] wea_reg;
+(* shreg_extract = "no", max_fanout = 2 *) reg [`DCIM_BUF_NUM_COL-1:0] wea_reg;
 (* shreg_extract = "no" *) reg               mem_ena_reg;
-(* shreg_extract = "no" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]  dina_reg;
+(* shreg_extract = "no", max_fanout = 2 *) reg [`DCIM_BUF_DATA_WIDTH-1:0]  dina_reg;
 (* shreg_extract = "no" *) reg [`DCIM_OBUF_ADDR_WIDTH-1:0]  addra_reg;
 
-(* shreg_extract = "no" *) reg [`DCIM_BUF_NUM_COL-1:0] web_reg;
+(* shreg_extract = "no", max_fanout = 2 *) reg [`DCIM_BUF_NUM_COL-1:0] web_reg;
 (* shreg_extract = "no" *) reg               mem_enb_reg;
-(* shreg_extract = "no" *) reg [`DCIM_BUF_DATA_WIDTH-1:0]  dinb_reg;
+(* shreg_extract = "no", max_fanout = 2 *) reg [`DCIM_BUF_DATA_WIDTH-1:0]  dinb_reg;
 (* shreg_extract = "no" *) reg [`DCIM_OBUF_ADDR_WIDTH-1:0]  addrb_reg;
 
 always @(posedge clk) begin
@@ -172,8 +172,8 @@ endgenerate
 // ============================================================================
 // Bank 选择流水线（相比 v2 多 1 拍，匹配新增的 reg3）
 // 读路径总延迟（端到端）：
-(* shreg_extract = "no" *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_a_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
-(* shreg_extract = "no" *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_b_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
+(* shreg_extract = "no", max_fanout = 32 *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_a_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
+(* shreg_extract = "no", max_fanout = 32 *) reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_b_pipe [0:`DCIM_OBUF_BANK_MUX_PIPE-1];
 
 // bank_sel / read_en 与 per-bank reg3 对齐（reg1 就启动会导致 CDMA 读早 1~2 拍 → concat 整体错位）
 reg [`DCIM_OBUF_BANK_BITS-1:0] bank_sel_a_align [0:`DCIM_OBUF_IN_REG_STAGES-1];

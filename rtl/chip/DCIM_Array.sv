@@ -99,10 +99,23 @@ module DCIM_Array #(
     wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_obuf_wr_data;
     wire [NUM_TILES*STRB_WIDTH-1:0]     tile_obuf_wr_strb;
 
+    // SLR crossing registers for obuf_wr signals (Tile→Arbiter)
+    (* shreg_extract = "no" *) reg [NUM_TILES-1:0]                tile_obuf_wr_valid_q;
+    (* shreg_extract = "no" *) reg [NUM_TILES*BUF_ADDR_WIDTH-1:0] tile_obuf_wr_addr_q;
+    (* shreg_extract = "no" *) reg [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_obuf_wr_data_q;
+    (* shreg_extract = "no" *) reg [NUM_TILES*STRB_WIDTH-1:0]     tile_obuf_wr_strb_q;
+
+    always @(posedge clk) begin
+        tile_obuf_wr_valid_q <= tile_obuf_wr_valid;
+        tile_obuf_wr_addr_q  <= tile_obuf_wr_addr;
+        tile_obuf_wr_data_q  <= tile_obuf_wr_data;
+        tile_obuf_wr_strb_q  <= tile_obuf_wr_strb;
+    end
+
     wire                          ibuf_int_en;
     wire [BUF_ADDR_WIDTH-1:0]     ibuf_int_addr;
     wire [BUF_DATA_WIDTH-1:0]     ibuf_int_dout_raw;
-    (* shreg_extract = "no" *) reg [BUF_DATA_WIDTH-1:0] ibuf_int_dout;
+    (* shreg_extract = "no", max_fanout = 32 *) reg [BUF_DATA_WIDTH-1:0] ibuf_int_dout;
 
     always @(posedge clk) begin
         ibuf_int_dout <= ibuf_int_dout_raw;
@@ -128,9 +141,11 @@ module DCIM_Array #(
                 .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
                 .TILE_IDX(i),
                 // Per-Tile 部分 DSP：所有 Tile 均启用 DSP，
-                // 内部 maArray 按 col_idx < DCIM_DSP_COL_NUM 选择 DSP/LUT。
+                // 内部 maArray 按 col_idx < DCIM_DSP_COL_NUM 选择 DSP/LUT，
+                // 按 DCIM_DSP_PARTIAL_SUBCOL 控制第 DSP_COL_NUM 列的 subcol 级粒度。
                 .MULT_DSP_EN(1),
-                .DSP_COL_NUM(`DCIM_DSP_COL_NUM)
+                .DSP_COL_NUM(`DCIM_DSP_COL_NUM),
+                .DSP_PARTIAL_SUBCOL(`DCIM_DSP_PARTIAL_SUBCOL)
             ) u_tile (
                 .clk(clk),
                 .rst_n(rst_n),
@@ -181,11 +196,11 @@ module DCIM_Array #(
     ) u_obuf_arb (
         .clk(clk),
         .rst_n(rst_n),
-        .tile_wr_valid(tile_obuf_wr_valid),
+        .tile_wr_valid(tile_obuf_wr_valid_q),
         .tile_wr_ready(tile_obuf_wr_ready),
-        .tile_wr_addr(tile_obuf_wr_addr),
-        .tile_wr_data(tile_obuf_wr_data),
-        .tile_wr_strb(tile_obuf_wr_strb),
+        .tile_wr_addr(tile_obuf_wr_addr_q),
+        .tile_wr_data(tile_obuf_wr_data_q),
+        .tile_wr_strb(tile_obuf_wr_strb_q),
         .obuf_en(obuf_int_en),
         .obuf_we(obuf_int_we),
         .obuf_addr(obuf_int_addr),

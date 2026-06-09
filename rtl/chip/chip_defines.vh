@@ -117,21 +117,25 @@
 
 // ── DSP 映射控制（Per-Tile 部分 DSP 方案）─────────────────────────────────
 // 每 Tile 有 16 列 × 4 subcol × 64 ch = 4096 个 4-bit 乘法器。
-// 新方案：所有 4 Tile 均参与 DSP 映射，但每 Tile 只有前 DSP_COL_NUM 列使用 DSP48E2，
-// 其余列用 LUT 实现，从而实现跨 Tile/SLR 的均匀资源分配。
+// 细粒度双参数方案：
+//   DSP_COL_NUM        : 前 N 列全部 4 subcol 使用 DSP48E2
+//   DSP_PARTIAL_SUBCOL : 第 N 列仅前 M 个 subcol 使用 DSP48E2（0=不启用第 N 列部分 DSP）
 //
-// 每 Tile DSP 数 = DSP_COL_NUM × 4(subcol) × 64(ch) = DSP_COL_NUM × 256
-// xcvu37p: 9024 DSP total, ~3008/SLR; 目标 2 Tile/SLR 不超限。
+// 每 Tile DSP 数 = (DSP_COL_NUM × 4 + DSP_PARTIAL_SUBCOL) × 64(ch)
+// xcvu37p: 9024 DSP total, ~3008/SLR; 1 Tile/SLR 布局（SLR0~SLR3 各 1 Tile）。
 //
-//   DSP_COL_NUM  DSP/Tile  4Tile总DSP  +VPU(57)  2Tile/SLR  SLR安全?
-//   4            1024      4096        4153      2048       ✓ (68%)
-//   5            1280      5120        5177      2560       ✓ (85%)  ← 推荐
-//   6            1536      6144        6201      3072       ✗ (>3008)
-//   7            1792      7168        7225      3584       ✗
+//   DSP_COL_NUM  DSP_PARTIAL_SUBCOL  DSP/Tile  4Tile总DSP  +VPU(57)  1Tile/SLR  SLR安全?
+//   5            0                   1280      5120        5177      1280       ✓ (43%)
+//   8            0                   2048      8192        8249      2048       ✓ (68%)
+//   8            2                   2176      8704        8761      2176       ✓ (72%)  ← 推荐
+//   8            4(=9列全DSP)         2304      9216        —         —          ✗ 超芯片总量
 //
-// 推荐值 5：DSP 利用率 57%，每 SLR 85% DSP 安全余量；LUT/Tile ~195K，2Tile/SLR<434K。
+// 推荐值 DSP_COL_NUM=8, DSP_PARTIAL_SUBCOL=2：
+//   总 DSP 8761，占 xcvu37p 97%；每 SLR 仅 2176/3008 = 72%，安全余量充足。
+//   需配合 XDC 改为 1 Tile/SLR（SLR0=Tile0, SLR1=Tile1, SLR2=Tile2, SLR3=Tile3）。
 `define DCIM_DSP_TILES          4       // 所有 Tile 均使用 DSP+LUT 混合
-`define DCIM_DSP_COL_NUM        5       // 每 Tile 前 5 列用 DSP，后 11 列用 LUT
+`define DCIM_DSP_COL_NUM        8       // 每 Tile 前 8 列全部 4 subcol 使用 DSP
+`define DCIM_DSP_PARTIAL_SUBCOL 2       // 第 8 列（第9列）中前 2 个 subcol 使用 DSP（共 2×64=128 额外 DSP/Tile）
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）

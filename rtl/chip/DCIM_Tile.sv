@@ -27,7 +27,8 @@ module DCIM_Tile #(
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
     parameter TILE_IDX        = 0,
     parameter MULT_DSP_EN         = 1,   // 1=DSP48E2, 0=LUT；由 DCIM_Array 按 tile_id 下发
-    parameter DSP_COL_NUM         = CH_OUT/4, // 前 DSP_COL_NUM 列用 DSP
+    parameter DSP_COL_NUM         = CH_OUT/4, // 前 DSP_COL_NUM 列全部 4 subcol 使用 DSP
+    parameter DSP_PARTIAL_SUBCOL  = 0,   // 第 DSP_COL_NUM 列中前 N 个 subcol 使用 DSP（0=禁用）
 
     localparam SRAM_WD        = CH_IN * CH_OUT * WD1 / CYCLE,
     localparam ADDR_WD        = $clog2(SRAM_DP),
@@ -117,7 +118,16 @@ module DCIM_Tile #(
     reg  [ADDR_WD-1:0]       dcim_addr_wei;
     reg  [SRAM_WD-1:0]       dcim_data_wei;
 
-    assign dcim_clr = (state == ST_IDLE) || (state == ST_CLEAR);
+    // Pipeline dcim_clr to reduce fan-out on state_reg → adderTree path
+    wire                     dcim_clr_comb = (state == ST_IDLE) || (state == ST_CLEAR);
+    (* max_fanout = 128 *) reg dcim_clr_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            dcim_clr_q <= 1'b1;
+        else
+            dcim_clr_q <= dcim_clr_comb;
+    end
+    assign dcim_clr = dcim_clr_q;
 
     wire                     dcim_valid_out;
     wire                     dcim_ready_out = 1'b1;
@@ -631,7 +641,8 @@ module DCIM_Tile #(
         .CYCLE(CYCLE),
         .ACC(ACC),
         .MULT_DSP_EN(MULT_DSP_EN),
-        .DSP_COL_NUM(DSP_COL_NUM)
+        .DSP_COL_NUM(DSP_COL_NUM),
+        .DSP_PARTIAL_SUBCOL(DSP_PARTIAL_SUBCOL)
     ) u_dcim (
         .clk            (clk),
         .rstn           (rst_n),

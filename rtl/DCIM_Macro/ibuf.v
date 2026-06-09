@@ -127,8 +127,8 @@ endgenerate
 // ============================================================================
 // Bank 选择流水线
 // ============================================================================
-(* shreg_extract = "no" *) reg [`DCIM_IBUF_BANK_BITS-1:0] bank_sel_a_pipe [0:`DCIM_IBUF_BANK_MUX_PIPE-1];
-(* shreg_extract = "no" *) reg [`DCIM_IBUF_BANK_BITS-1:0] bank_sel_b_pipe [0:`DCIM_IBUF_BANK_MUX_PIPE-1];
+(* shreg_extract = "no", max_fanout = 32 *) reg [`DCIM_IBUF_BANK_BITS-1:0] bank_sel_a_pipe [0:`DCIM_IBUF_BANK_MUX_PIPE-1];
+(* shreg_extract = "no", max_fanout = 32 *) reg [`DCIM_IBUF_BANK_BITS-1:0] bank_sel_b_pipe [0:`DCIM_IBUF_BANK_MUX_PIPE-1];
 
 integer i;
 always @(posedge clk) begin
