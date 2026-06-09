@@ -15,6 +15,7 @@ module dcim #(
     parameter ACC = 16,
     parameter MULT_DSP_EN = 1,      // 1=DSP48E2, 0=LUT；由上层 DCIM_Array 按 Tile 下发
     parameter DSP_COL_NUM = CH_OUT/4, // 前 DSP_COL_NUM 列用 DSP，其余 LUT
+    parameter DSP_PARTIAL_SUBCOL = 0, // 第 DSP_COL_NUM 列中前 N 个 subcol 用 DSP（0=禁用）
     
     localparam SRAM_WD = CH_IN * CH_OUT * WD1 / CYCLE, // 128-bit
     localparam ADDR_WD = $clog2(SRAM_DP),
@@ -67,7 +68,7 @@ module dcim #(
 	);
 
     calculate_core #(
-        .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .MULT_DSP_EN(MULT_DSP_EN), .DSP_COL_NUM(DSP_COL_NUM)
+        .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT), .MULT_DSP_EN(MULT_DSP_EN), .DSP_COL_NUM(DSP_COL_NUM), .DSP_PARTIAL_SUBCOL(DSP_PARTIAL_SUBCOL)
     ) u_calculate_core (
         .clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .mode(mode_cal),
         .up_valid(up_valid_cal), .up_ready(w_ready_cal),

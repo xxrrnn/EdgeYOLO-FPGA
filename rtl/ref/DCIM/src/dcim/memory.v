@@ -59,10 +59,29 @@ module memory#(
 		.dn_valid(mid_valid),	.dn_ready(mid_ready)
 	);
 
+	// Pipeline register: break BRAM rdata → ppCache critical path (WNS fix)
+	wire pip_valid, pip_ready;
+	reg [WD-1: 0] mid_data_q;
+
+	pipe_stage u_mid_pipe_stage(
+		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
+		.up_valid(mid_valid),	.up_ready(mid_ready),
+		.dn_valid(pip_valid),	.dn_ready(pip_ready)
+	);
+
+	always @(posedge clk or negedge rstn) begin
+		if (!rstn)
+			mid_data_q <= {WD{1'b0}};
+		else if (clr)
+			mid_data_q <= {WD{1'b0}};
+		else if (mid_valid & mid_ready)
+			mid_data_q <= mid_data;
+	end
+
 	ppCache#(.CH_IN(CH_IN), .CH_OUT(CH_OUT), .WD1(WD1), .CYCLE(CYCLE)) u_ppCache(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
 		.swap(swap),
-		.up_valid(mid_valid), .up_ready(mid_ready), .up_data(mid_data),
+		.up_valid(pip_valid), .up_ready(pip_ready), .up_data(mid_data_q),
 		.dn_valid(dn_valid),  .dn_data(dn_data)
 	);
 

@@ -10,7 +10,8 @@ module maArray#(
 	parameter WD2 = 2*WD1+ $clog2(CH_IN),
 	parameter CH_OUT = 4,
 	parameter MULT_DSP_EN = 1,
-	parameter DSP_COL_NUM = CH_OUT/4     // 前 DSP_COL_NUM 列用 DSP，其余用 LUT
+	parameter DSP_COL_NUM = CH_OUT/4,     // 前 DSP_COL_NUM 列用 DSP，其余用 LUT
+	parameter DSP_PARTIAL_SUBCOL = 0      // 第 DSP_COL_NUM 列中前 N 个 subcol 用 DSP
 )(
 	input clk,
 	input rstn,
@@ -59,7 +60,9 @@ module maArray#(
 	generate
 		for(col=0; col<CH_OUT/4; col=col+1) begin:MaColumn
 			localparam COL_DSP_EN = (MULT_DSP_EN && (col < DSP_COL_NUM)) ? 1 : 0;
-			maColumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(COL_DSP_EN)) 
+			localparam COL_IS_PARTIAL = (MULT_DSP_EN && !COL_DSP_EN && (col == DSP_COL_NUM) && (DSP_PARTIAL_SUBCOL > 0)) ? 1 : 0;
+			localparam COL_DSP_SUBCOL_CNT = COL_DSP_EN ? 4 : (COL_IS_PARTIAL ? DSP_PARTIAL_SUBCOL : 0);
+			maColumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(COL_DSP_EN || COL_IS_PARTIAL), .DSP_SUBCOL_CNT(COL_DSP_SUBCOL_CNT)) 
 				u_maColumn(
 					.clk(clk),
 					.rstn(rstn),
@@ -95,7 +98,8 @@ module maColumn#(
 	parameter WD1 = 4,
 	parameter CH_IN = 16,
 	parameter WD2 = 2*WD1 + $clog2(CH_IN),
-	parameter MULT_DSP_EN = 1
+	parameter MULT_DSP_EN = 1,
+	parameter DSP_SUBCOL_CNT = 4    // 4 subcol 中前 N 个使用 DSP
 )(
 	input clk,
 	input rstn,
@@ -128,7 +132,8 @@ module maColumn#(
 	genvar subcol;
 	generate
 		for(subcol=0; subcol<4; subcol=subcol+1) begin:MaSubcolumn
-			maSubcolumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(MULT_DSP_EN)) u_maSubcolumn(
+			localparam SUBCOL_DSP_EN = (MULT_DSP_EN && (subcol < DSP_SUBCOL_CNT)) ? 1 : 0;
+			maSubcolumn#(.WD1(WD1), .CH_IN(CH_IN), .MULT_DSP_EN(SUBCOL_DSP_EN)) u_maSubcolumn(
 				.clk(clk),
 				.rstn(rstn),
 				.clr(clr),
@@ -169,8 +174,8 @@ module maSubcolumn#(
 	genvar ch;
 
 	// Input pipeline registers: break counter→LUT→DSP cross-SLR path
-	reg [WD1*CH_IN-1: 0] data1_reg;
-	reg [WD1*CH_IN-1: 0] data2_reg;
+	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data1_reg;
+	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data2_reg;
 	reg s1_reg;
 	reg s2_reg;
 
