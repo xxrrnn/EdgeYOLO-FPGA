@@ -113,6 +113,12 @@ foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
 
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
+# 强制重新生成 BD targets（含 module reference stub），防止增量编译时
+# 自定义模块（如 lite_cdma_ctrl_0）的 stub 丢失导致 synth_design 报
+# "module not found" (Vivado realtime compilation 的已知问题)
+generate_target all [get_files $bdFile] -force -quiet
+update_compile_order -fileset sources_1
+
 synth_design -top $topName -part $part -directive $synDirective \
     -resource_sharing auto
 
