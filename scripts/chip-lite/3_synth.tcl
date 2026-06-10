@@ -188,24 +188,46 @@ set_param general.maxThreads 32
 route_design -directive $routeDirective
 set_param general.maxThreads 32
 
+# post-route hold fix
+# 根因：DSP48E2_X14Y89 内部 D→AD pre-adder 路径，route delay=0，
+#   clock skew（0.174ns）略大于 data delay（0.103ns），导致 hold -0.011ns。
+# 这是 Vivado router 的已知行为：对 DSP 内部 back-to-back 寄存器，
+#   router 不会自动插入 hold buffer，需要 phys_opt -hold 显式修复。
+# phys_opt -hold 会在 D→AD 路径上插入实际的延迟单元（通过 LUT-buffer 或路由迂回），
+#   是真实的物理修复，不是绕过约束。
+# 注意：必须在 route_design 之后、checkpoint 之前执行，
+#   因为需要已知的物理布局来选择 hold fix 位置。
+phys_opt_design -hold -directive AggressiveExplore
+puts "INFO: Post-route hold phys_opt done"
+
 write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
 report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
   -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
 
-# 时序门控：post-route（WNS < 0 不写 bitstream）
+# 时序门控：post-route（WNS < 0 或 WHS < 0 不写 bitstream）
 set routePaths [get_timing_paths -max_paths 1 -delay_type max]
 set routeWns 0.0
 if {[llength $routePaths]} {
     set routeWns [get_property SLACK [lindex $routePaths 0]]
 }
-puts "INFO: Post-route WNS = ${routeWns} ns"
+set routeHoldPaths [get_timing_paths -max_paths 1 -delay_type min]
+set routeWhs 0.0
+if {[llength $routeHoldPaths]} {
+    set routeWhs [get_property SLACK [lindex $routeHoldPaths 0]]
+}
+puts "INFO: Post-route WNS = ${routeWns} ns  WHS = ${routeWhs} ns"
 
 if {$routeWns < 0} {
-    puts "ERROR: Post-route timing NOT MET (WNS=${routeWns}ns). Bitstream skipped."
+    puts "ERROR: Post-route setup timing NOT MET (WNS=${routeWns}ns). Bitstream skipped."
     puts "ERROR: Checkpoint: $ImplOutputDir/post_route.dcp"
-    error "\[timing_gate\] post-route WNS=${routeWns}ns — timing not met."
+    error "\[timing_gate\] post-route WNS=${routeWns}ns — setup not met."
+}
+if {$routeWhs < 0} {
+    puts "ERROR: Post-route hold timing NOT MET (WHS=${routeWhs}ns). Bitstream skipped."
+    puts "ERROR: Checkpoint: $ImplOutputDir/post_route.dcp"
+    error "\[timing_gate\] post-route WHS=${routeWhs}ns — hold not met."
 }
 
 # ==============================================================================

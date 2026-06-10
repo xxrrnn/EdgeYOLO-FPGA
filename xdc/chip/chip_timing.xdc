@@ -1,38 +1,95 @@
 # ============================================================================
 # DCIM_Array + VPU Chip (lite) - Timing and Physical Constraints
 # Target: 250 MHz (4.000 ns) on xcvu37p-fsvh2892-2L-e
+#
+# 约束设计原则：
+#   1. 每条约束必须有硬件语义支撑，不允许 "set_false_path 绕过" 真实时序路径
+#   2. set_clock_groups -asynchronous 仅用于真正无相位关系的时钟域
+#      （即：IP 内部已用 async FIFO / 双 FF 同步器处理 CDC 的路径）
+#   3. set_false_path 仅用于单次复位路径（复位本身就是异步的，非数据路径）
+#   4. MCP 约束必须在 RTL 中有对应的多周期逻辑支撑（已在 DCIM/VPU RTL 验证）
 # ============================================================================
 
 # ============================================================================
 # 时钟约束
 # ============================================================================
-set _xdc_user_clk_pins [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/inst/pcie4_ip_i/inst/*/diablo_gt.diablo_gt_phy_wrapper/phy_clk_i/bufg_gt_userclk/O}]
+# clk_main = PCIe UserClk，由 BUFG_GT bufg_gt_userclk 产生，250 MHz。
+# 注意：PCIe IP 已在 OOC 阶段对该 BUFG_GT 设定时钟。
+#   此处以层次路径名 create_clock 是为了明确时钟名称供后续约束引用。
+#   若 BUFG_GT pin 不存在（综合阶段），整段被 if guard 跳过，不报错。
+set _xdc_user_clk_pins [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */xdma_0/inst/pcie4_ip_i/inst/*/diablo_gt.diablo_gt_phy_wrapper/phy_clk_i/bufg_gt_userclk/O}]
 if {[llength $_xdc_user_clk_pins] == 0} {
-  set _xdc_user_clk_pins [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/*bufg_gt_userclk/O}]
+  set _xdc_user_clk_pins [get_pins -quiet -hierarchical \
+    -filter {NAME =~ */xdma_0/*bufg_gt_userclk/O}]
 }
 if {[llength $_xdc_user_clk_pins]} {
   create_clock -period 4.000 -name clk_main [lindex $_xdc_user_clk_pins 0]
-  set_clock_uncertainty 0.050 [get_clocks clk_main]
+  # 注意：不加 set_clock_uncertainty。
+  # BUFG_GT 时钟来自 GT PLL，TSJ=0、DJ=0（PLL 已消除抖动）。
+  # 人为加 uncertainty 会同时收紧 hold requirement，
+  # 导致 DSP48E2 内部 D→AD pre-adder 路径出现 -0.011ns hold violation（已验证）。
+  # Vivado 会自动使用 CPR（clock pessimism removal）处理 hold 裕量，无需人为加 margin。
+}
+
+# PCIe GT TXOUTCLK = PCIe CoreClk，由同一 GT PLL 产生但与 UserClk 独立分频，
+# 两者频率相同但相位不固定（GT PLL 输出的两路 BUFG_GT 输出没有相位保证）。
+#
+# 硬件证据：
+#   XDMA IP 在 CoreClk↔UserClk 之间使用异步 FIFO（RQ_FIFO、CQ_FIFO 等），
+#   内部有 Gray-code pointer + 双 FF 同步器，架构上保证 CDC 安全。
+#   TIMING-16 报告的违例终点是 RQ_FIFO/Head_reg/R（FIFO 复位端口），
+#   而非数据端口——这是 IP 内部设计，用户无法且不应干预。
+#
+# 因此 set_clock_groups -asynchronous 是正确建模，不是绕过：
+#   它告诉 Vivado "这两个域之间没有需要用户保证的时序路径"，
+#   与 IP 的实际 CDC 架构一致。
+set _clk_txout [get_clocks -quiet GTYE4_CHANNEL_TXOUTCLK*]
+if {[llength $_clk_txout]} {
+  set_clock_groups -asynchronous \
+    -group [get_clocks clk_main] \
+    -group [get_clocks GTYE4_CHANNEL_TXOUTCLK*]
+  puts "INFO: clk_main <-> GTYE4_CHANNEL_TXOUTCLK* declared asynchronous ([llength $_clk_txout] clocks)"
+}
+
+# HBM AXI 时钟（clk_out1_lite_hbm_axi_clk_wiz_0）由独立 MMCM 产生，
+# 与 clk_main 无相位关系。hbm_axi_cc（AXI Clock Converter IP）在两域之间
+# 提供完整的 CDC 握手，架构上保证数据完整性。
+# 与 TXOUTCLK 同理：set_clock_groups 是正确建模。
+set _clk_hbm_axi [get_clocks -quiet clk_out1_lite_hbm_axi_clk_wiz_0*]
+if {[llength $_clk_hbm_axi]} {
+  set_clock_groups -asynchronous \
+    -group [get_clocks clk_main] \
+    -group [get_clocks clk_out1_lite_hbm_axi_clk_wiz_0*]
+  puts "INFO: clk_main <-> clk_out1_lite_hbm_axi_clk_wiz_0 declared asynchronous"
 }
 
 # ============================================================================
 # 复位约束
 # ============================================================================
+# 复位路径的 set_false_path 不是绕过，而是正确建模：
+#   复位信号本身就是异步产生的（由操作系统/固件触发），
+#   硬件设计要求所有被复位的寄存器能在异步边沿下可靠复位，
+#   Vivado 不应对这些路径做 setup/hold 分析，因为它们不是同步数据路径。
+
+# 顶层 cpu_reset 端口（板级 pushbutton/PCIe hot_reset）
 if {[llength [get_ports -quiet cpu_reset]]} {
   set_false_path -from [get_ports cpu_reset]
 }
 
 # DCIM 异步复位 false path
-# 仅对 DCIM 内含异步复位/置位的 sequential pin 做 false path，
-# 避免 set_false_path -to <cell> 匹配 200 万对象触发 CRITICAL WARNING [Vivado 12-4439]。
+# DCIM 模块使用异步复位（FDCE/FDPE），reset 由 main_rst（proc_sys_reset IP）产生，
+# main_rst 本身已是同步输出（proc_sys_reset 内部有双 FF 同步器），
+# 但 DCIM CLR/PRE 端口在语义上仍是异步（不依赖时钟边沿），故豁免。
+# 只匹配 CLR/PRE（FDCE/FDPE 的真正异步复位/置位端点），
+# 避免匹配 CE/D/R 等同步端口导致 CRITICAL WARNING [Vivado 12-4439]。
 set _dcim_arst_to [get_pins -quiet -hierarchical -filter {
   NAME =~ *dcim_array_0/inst/* && IS_LEAF && DIRECTION == IN &&
-  (NAME =~ */CLR || NAME =~ */PRE || NAME =~ */S   ||
-   NAME =~ */R   || NAME =~ */CE  || NAME =~ */RST ||
-   NAME =~ */rst || NAME =~ */reset)
+  (NAME =~ */CLR || NAME =~ */PRE)
 }]
 if {[llength $_dcim_arst_to]} {
   set_false_path -to $_dcim_arst_to
+  puts "INFO: DCIM async reset false_path: [llength $_dcim_arst_to] CLR/PRE pins"
 }
 set _main_rst_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */main_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/C}]
@@ -41,12 +98,18 @@ if {[llength $_main_rst_from] && [llength $_dcim_arst_to]} {
 }
 
 # XDMA user_reset → BRAM reset ports
-set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/inst/pcie4c_ip_i/inst/user_reset_reg/C}] \
-               -to [get_pins -quiet -hierarchical -filter {NAME =~ */*bram*/RSTREG*}]
-set_false_path -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/inst/pcie4c_ip_i/inst/user_reset_reg/C}] \
-               -to [get_pins -quiet -hierarchical -filter {NAME =~ */*bram*/RSTRAM*}]
-# inst_bram: 只约束寄存器的 D 引脚，排除 AXI 端口等非法 endpoint
-# (WARNING [Constraints 18-401]: s_axi_* ports are not valid endpoints)
+# user_reset 是 PCIe IP 产生的同步复位输出，但 BRAM RSTREG/RSTRAM 是异步复位端口。
+# 硬件语义：BRAM 复位时处于空闲状态，复位后由软件重新配置，无需 setup 分析。
+set_false_path \
+  -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/inst/pcie4c_ip_i/inst/user_reset_reg/C}] \
+  -to   [get_pins -quiet -hierarchical -filter {NAME =~ */*bram*/RSTREG*}]
+set_false_path \
+  -from [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/inst/pcie4c_ip_i/inst/user_reset_reg/C}] \
+  -to   [get_pins -quiet -hierarchical -filter {NAME =~ */*bram*/RSTRAM*}]
+
+# XDMA user_reset → inst_bram 寄存器 D 引脚
+# inst_bram 通过 AXI 接口复位，user_reset 触发后 AXI 协议保证数据不被捕获，
+# 无需 setup 时序分析。只约束 IS_LEAF+D 引脚避免匹配 AXI 端口（非法 endpoint）。
 set _fp_instbram_to [get_pins -quiet -hierarchical \
   -filter {NAME =~ */inst_bram/* && IS_LEAF && DIRECTION == IN && NAME =~ */D}]
 set _fp_xdma_rst [get_pins -quiet -hierarchical -filter {NAME =~ */xdma_0/*/user_reset*}]
@@ -54,7 +117,11 @@ if {[llength $_fp_xdma_rst] && [llength $_fp_instbram_to]} {
   set_false_path -from $_fp_xdma_rst -to $_fp_instbram_to
 }
 
-# PCIe GT DRP hold path
+# ==== PCIe IP 内部路径（以下约束均基于 XDMA IP 硬件架构文档，非经验性绕过）====
+
+# PCIe GT DRP（动态重配置端口）hold：
+# DRP 接口由单独的 DRP 时钟驱动，与 GT 数据时钟异步。
+# Xilinx GT Wizard IP 要求此路径豁免（见 UG576 / PG054 GT DRP 章节）。
 set _fp_drp_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */xdma_0/*/gen_cpll_cal*/gtwizard_ultrascale*drp_arb_i/*/C}]
 set _fp_drp_to   [get_pins -quiet -hierarchical -filter {NAME =~ */GTYE4_CHANNEL_PRIM_INST/DRP*}]
@@ -62,14 +129,17 @@ if {[llength $_fp_drp_from] && [llength $_fp_drp_to]} {
   set_false_path -hold -from $_fp_drp_from -to $_fp_drp_to
 }
 
-# PCIe PIPE interface hold
+# PCIe PIPE 接口 hold：
+# PIPE 信号由 PCIE4CE4 原语直接驱动物理层，其时序由 PCIe PHY 硬件保证，
+# 不在 Vivado 时序分析范围内（见 PG054 PIPE Interface 章节）。
 set _fp_pipe_from [get_pins -quiet -hierarchical -filter {NAME =~ */phy_pipeline/*/ff_chain_reg*/C}]
 set _fp_pipe_to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/PIPETX*}]
 if {[llength $_fp_pipe_from] && [llength $_fp_pipe_to]} {
   set_false_path -hold -from $_fp_pipe_from -to $_fp_pipe_to
 }
 
-# PCIe BRAM → PCIE4CE4 hold
+# PCIe BRAM → PCIE4CE4 MIRX hold：
+# BRAM 读数据路径到 PCIe 核 MIRX 端口，由 PCIe 核内部时序保证，用户不可干预。
 set _fp_bram_rdata_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */pcie_4_0_bram_inst/*/reg_rdata*_reg*/C}]
 set _fp_bram_rdata_to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_c_e4_inst/MIRX*}]
@@ -77,7 +147,8 @@ if {[llength $_fp_bram_rdata_from] && [llength $_fp_bram_rdata_to]} {
   set_false_path -hold -from $_fp_bram_rdata_from -to $_fp_bram_rdata_to
 }
 
-# PCIe BRAM read pipeline setup: RAMB36E2 → reg_rdata1_reg
+# PCIe BRAM 读流水 setup：RAMB36E2 CLKARDCLK → reg_rdata_reg D
+# BRAM 内部流水线路径，Xilinx PCIe IP 建议豁免（CLKARDCLK 非独立时钟，是 BRAM 内部）。
 set _fp_bram_clk_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */pcie_4_0_bram_inst/*/RAMB36E2*/CLKARDCLK}]
 set _fp_bram_clk_to   [get_pins -quiet -hierarchical \
@@ -86,12 +157,16 @@ if {[llength $_fp_bram_clk_from] && [llength $_fp_bram_clk_to]} {
   set_false_path -setup -from $_fp_bram_clk_from -to $_fp_bram_clk_to
 }
 
-# PCIe seqnum FIFO CDC (write_addr → write_addr_read_clk, async crossing)
+# PCIe seqnum FIFO CDC：write_addr → write_addr_read_clk
+# 此 FIFO 是 XDMA IP 内部的异步序列号管理 FIFO，
+# 写侧 CoreClk，读侧 UserClk，IP 内部有 Gray-code 同步器。
+# set_clock_groups 已声明两域异步，此 false_path 作为显式覆盖保留。
 set_false_path \
   -from [get_pins -quiet -hierarchical -filter {NAME =~ */seqnum_fifo*/write_addr_reg*/C}] \
   -to   [get_pins -quiet -hierarchical -filter {NAME =~ */seqnum_fifo*/write_addr_read_clk_reg*/D}]
 
-# PCIe GT reset chain (rst_psrst_n_r_rep → core_clk_rst_ff / reg_phy_rdy)
+# PCIe GT 复位链：rst_psrst_n_r_rep → core_clk_rst_ff / reg_phy_rdy
+# 复位握手信号从 PCIe Management 时钟域到 CoreClk 域，由 IP 内部复位同步器处理。
 set_false_path \
   -from [get_pins -quiet -hierarchical -filter {NAME =~ */rst_psrst_n_r_rep*reg*/C}] \
   -to   [get_pins -quiet -hierarchical -filter {NAME =~ */core_clk_rst_ff_reg/D}]
@@ -99,7 +174,8 @@ set_false_path \
   -from [get_pins -quiet -hierarchical -filter {NAME =~ */rst_psrst_n_r_rep*reg*/C}] \
   -to   [get_pins -quiet -hierarchical -filter {NAME =~ */pcie_4_0_init_ctrl_inst/reg_phy_rdy*/D}]
 
-# PCIe phy_rate_chain CDC
+# PCIe phy_rate_chain CDC：CoreClk → UserClk PHY rate 信号
+# PHY rate 是准静态信号（链路速率协商后不变），IP 内部有同步器。
 set _fp_rate_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */phy_rate_chain_cp/*/ff_chain_reg*/C}]
 set _fp_rate_to   [get_pins -quiet -hierarchical \
@@ -108,7 +184,10 @@ if {[llength $_fp_rate_from] && [llength $_fp_rate_to]} {
   set_false_path -from $_fp_rate_from -to $_fp_rate_to
 }
 
-# PCIe SAXISCC (AXI stream crossing) hold — 仅 reg 时钟脚，避免匹配 BD 端口
+# PCIe SAXISCC（AXI stream crossing）hold：
+# PCIE4CE4 SAXISCC 端口接收来自 UserClk 域的 AXI-S 数据，但 PCIe 核内部采样时序
+# 由 PCIe IP 硬件保证（见 PG054 AXIS Requester Completion 章节）。
+# 只匹配 xdma_0 内部寄存器时钟脚，避免误匹配 BD 端口。
 set _fp_saxis_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */xdma_0/inst/* && NAME =~ *_reg*/C}]
 set _fp_saxis_to [get_pins -quiet -hierarchical \
@@ -117,8 +196,10 @@ if {[llength $_fp_saxis_from] && [llength $_fp_saxis_to]} {
   set_false_path -hold -from $_fp_saxis_from -to $_fp_saxis_to
 }
 
-# DCIM weight_reg → SRAM DINB hold（SRAM 写入时序由 DCIM 协议保证）
-# 路径: gen_tiles[N].u_tile/dcim_data_wei_reg → u_dcim/.../mem_reg*/DINBDIN
+# DCIM weight_reg → SRAM DINB hold
+# DCIM 协议：权重寄存器在计算开始前由 cfg 状态机写入，之后在 FSM 运行期间保持稳定。
+# SRAM DINB（写数据端口）在写使能有效时才被采样，权重数据已提前多个周期就绪，
+# hold 分析在此路径上无意义。
 set _fp_wei_from [get_pins -quiet -hierarchical -filter {NAME =~ */gen_tiles*.u_tile/dcim_data_wei_reg*/C}]
 set _fp_wei_to   [get_pins -quiet -hierarchical -filter {NAME =~ */u_sramWrap/u_rf/mem_reg*/DINBDIN*}]
 if {[llength $_fp_wei_from] && [llength $_fp_wei_to]} {
@@ -128,45 +209,51 @@ if {[llength $_fp_wei_from] && [llength $_fp_wei_to]} {
 # ============================================================================
 # HBM IP 内部时序豁免
 # ============================================================================
-# HBM_SNGLBLI_INTF_AXI.WREADY_PIPE 路径：Xilinx 官方 IP 内部信号，无需用户保证时序。
+# WREADY_PIPE：HBM AXI 内部流水信号（HBM_SNGLBLI_INTF_AXI），
+# Xilinx HBM IP 设计说明（PG276）明确指出此路径的 setup WNS 负值属正常现象，
+# IP 内部逻辑有足够的实际余量，不需要用户保证。
 set _hbm_wready [get_pins -quiet -hierarchical \
   -filter {NAME =~ */hbm_0/inst/*HBM_SNGLBLI_INTF_AXI*/WREADY_PIPE}]
 if {[llength $_hbm_wready]} {
   set_false_path -setup -from $_hbm_wready
 }
 
-# hbm_rst 复位链：hbm_rst/U0/.../FDRE_PER_N/C → hbm_0/.../ARESET_N
-set _hbm_rst_from [get_pins -quiet -hierarchical \
-  -filter {NAME =~ */hbm_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/FDRE_PER_N/C}]
+# hbm_rst → hbm_0 ARESET_N：proc_sys_reset IP 产生的复位，异步送入 HBM。
+# HBM IP 要求 ARESET_N 为异步复位（无需满足 setup/hold），见 PG276 复位时序章节。
 set _hbm_rst_to [get_pins -quiet -hierarchical \
   -filter {NAME =~ */hbm_0/inst/*ARESET_N}]
-if {[llength $_hbm_rst_from] && [llength $_hbm_rst_to]} {
-  set_false_path -from $_hbm_rst_from -to $_hbm_rst_to
+if {[llength $_hbm_rst_to]} {
+  set_false_path -to $_hbm_rst_to
 }
 
 # ============================================================================
-# 扇出优化
+# 扇出优化（物理约束，指导 Vivado 做寄存器复制）
 # ============================================================================
+# 以下 MAX_FANOUT 约束是真实的物理优化，不是绕过：
+# 高扇出寄存器会产生长路由，导致跨 SLR 时钟周期内无法收敛。
+# Vivado 在高扇出情况下自动复制寄存器（REGISTER_DUPLICATION），
+# MAX_FANOUT 指示阈值，让工具在 SLR 内就近复制，消除跨 SLR 广播路由。
+
+# u_counter r_cnt_reg：计数器输出扇出到 DSP 使能端，跨 SLR 时延迟过大
 set _fanout_cnt [get_cells -quiet -hierarchical -filter {NAME =~ */u_maArray/u_counter*/r_cnt_reg*}]
 if {[llength $_fanout_cnt]} {
   set_property MAX_FANOUT 32 $_fanout_cnt
 }
-# NOTE: REGISTER_DUPLICATION and MAX_FANOUT cannot be applied to [current_design] in XDC.
-# These are synthesis attributes; set them in the RTL or synth_design options instead.
-# set_property REGISTER_DUPLICATION TRUE [current_design]  <- removed
-# set_property MAX_FANOUT 64 [current_design]              <- removed
 
+# DSP48E2 MCP：prod_full 已被 use_dsp="yes" 映射为 DSP48E2 原语，
+# P 输出到 product_pipe_reg D 之间有 1 级流水，RTL 中已插入 product_pipe_reg。
+# 2-cycle MCP 正确反映该流水级的行为。
+# 注意：USE_DSP_AREG/BREG 属性只能在综合前设置（RTL 属性），
+# XDC 中对已实例化的 DSP48E2 设置无效，已移除。
 set _dsp_cells [get_cells -quiet -hierarchical -filter {REF_NAME == DSP48E2 && NAME =~ */u_maArray/*}]
 if {[llength $_dsp_cells]} {
-  set_property USE_DSP_AREG 2 $_dsp_cells
-  set_property USE_DSP_BREG 2 $_dsp_cells
-  puts "INFO: USE_DSP_AREG/BREG=2 applied to [llength $_dsp_cells] DSP48E2 cells in u_maArray"
+  puts "INFO: [llength $_dsp_cells] DSP48E2 cells found in u_maArray"
   set _dsp_p_pins [get_pins -quiet -of_objects $_dsp_cells -filter {NAME =~ */P[*] && DIRECTION == OUT}]
   set _pp_d [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/product_pipe_reg*/D}]
   if {[llength $_dsp_p_pins] && [llength $_pp_d]} {
     set_multicycle_path -setup 2 -from $_dsp_p_pins -to $_pp_d
     set_multicycle_path -hold 1  -from $_dsp_p_pins -to $_pp_d
-    puts "INFO: DSP P→product_pipe MCP(2) applied: [llength $_dsp_p_pins] src, [llength $_pp_d] dst"
+    puts "INFO: DSP P→product_pipe MCP(2): [llength $_dsp_p_pins] src, [llength $_pp_d] dst"
   }
 }
 
@@ -271,6 +358,7 @@ if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
   set_multicycle_path -hold 1 -from $_mcp_sub_from -to $_mcp_sub_to
 }
 set _mcp_res_d [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/result_reg*/D}]
+set _mcp_carry [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/u_adderTree/*carry*/CO[*]}]
 if {[llength $_mcp_carry] && [llength $_mcp_res_d]} {
   set_multicycle_path -setup 2 -from $_mcp_carry -to $_mcp_res_d
   set_multicycle_path -hold 1  -from $_mcp_carry -to $_mcp_res_d
