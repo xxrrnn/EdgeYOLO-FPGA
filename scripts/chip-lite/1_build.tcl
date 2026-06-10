@@ -30,6 +30,18 @@ foreach dirToClean [list $projPath] {
 create_project $projName $projPath -part $part
 set_property board_part $boardPart [current_project]
 
+# -----------------------------------------------------------------------
+# 把 IP Cache 限定在本次 build 的 projPath 内部（每次 run 独立目录）。
+# 好处：
+#   1. 不同同学/不同 Vivado 进程的 IP Cache 完全隔离，避免 cache hit
+#      导致 OOC 子进程不启动、stub 不写入主进程 .Xil/realtime/ 的问题。
+#   2. projPath 每次重建时被清空，缓存自动失效，确保使用最新 IP 配置。
+# 注意：每次 build 都重新跑 OOC 综合，比共享 cache 略慢，但结果确定可靠。
+# -----------------------------------------------------------------------
+set _ip_cache_dir [file normalize "$projPath/ip_cache"]
+file mkdir $_ip_cache_dir
+set_property ip_output_repo $_ip_cache_dir [current_project]
+
 # --- 添加 XDC ---
 # chip.xdc（纯 pin/IO 约束，无 Tcl 控制流）→ 放入 fileset，synth_design 可直接读。
 # chip_timing.xdc（含 if/foreach/set 等控制流）→ 只通过 reload_xdc 以 -unmanaged 加载，

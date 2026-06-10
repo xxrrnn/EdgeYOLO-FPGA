@@ -223,6 +223,33 @@ foreach ipTop $modRefIpTops {
 
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
+# -----------------------------------------------------------------------
+# 把所有 OOC IP 的 stub 文件持久化到 projPath/ip_stubs/，
+# 避免依赖 .Xil/realtime/（在新 Vivado session 启动后会为空）。
+# 3_synth.tcl 会从这里 read_verilog，确保顶层综合器能找到黑盒定义。
+# -----------------------------------------------------------------------
+set _stub_persist_dir [file normalize "$projPath/ip_stubs"]
+file mkdir $_stub_persist_dir
+set _xil_root [file normalize "$projPath/../../.Xil"]
+set _bd_ip_dir_2bd [file normalize "$bdDir/$bdName/ip"]
+foreach _xci [glob -nocomplain "$_bd_ip_dir_2bd/*/*.xci"] {
+    set _ipn [file rootname [file tail $_xci]]
+    set _dst  [file normalize "$_stub_persist_dir/${_ipn}_stub.v"]
+    if {[file exists $_dst]} { continue }
+    # 先找 .Xil/realtime 里由 export_ip_user_files 写入的 stub
+    set _cands [glob -nocomplain "$_xil_root/Vivado-*/realtime/${_ipn}_stub.v"]
+    set _best ""
+    set _best_t 0
+    foreach _c $_cands {
+        set _t [file mtime $_c]
+        if {$_t > $_best_t} { set _best_t $_t; set _best $_c }
+    }
+    if {$_best ne ""} {
+        file copy -force $_best $_dst
+        puts "INFO: \[2_bd\] stub persisted: $_ipn"
+    }
+}
+
 # 确保 chip.xdc 已在 fileset（chip_timing.xdc 只走 reload_xdc 的 -unmanaged 路径）
 foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
     if {[string match "*chip_timing*" $xdcFile]} { continue }
