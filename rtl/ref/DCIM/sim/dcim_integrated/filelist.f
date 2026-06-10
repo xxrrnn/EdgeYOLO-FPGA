@@ -9,6 +9,7 @@
 ../../src/dcim/memory.v
 ../../src/dcim/mergeArray.v
 ../../src/dcim/multiplier.v
+../../src/dcim/multiplier_dsp.v
 ../../src/dcim/postProcess.v
 ../../src/dcim/ppCache.v
 ../../src/dcim/sramWrap.v

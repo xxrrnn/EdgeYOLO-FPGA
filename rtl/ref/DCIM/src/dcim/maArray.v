@@ -168,16 +168,17 @@ module maSubcolumn#(
 
 );
 	wire [2*WD1*CH_IN-1: 0] product;
-	reg [2*WD1*CH_IN-1: 0] product_pipe; // Pipeline register between DSP and adder tree
-	reg s_pipe; // Pipeline the sign signal as well
+	reg s_pipe;
 	wire [WD2-1: 0] sum_out;
 	genvar ch;
 
-	// Input pipeline registers: break counter→LUT→DSP cross-SLR path
+	// Input pipeline registers: fanout distribution for data1/data2/s1/s2
+	// 乘法器内部有 AREG/BREG (1 cycle)，替代了原 product_pipe 的 pipeline 作用
+	// 本级 reg 仅负责扇出分发 + 打断跨 SLR 路径
 	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data1_reg;
 	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data2_reg;
 	reg s1_reg;
-	reg s2_reg;
+	(* max_fanout = 16 *) reg s2_reg;
 
 	always @(posedge clk or negedge rstn) begin
 		if (!rstn) begin
@@ -198,14 +199,17 @@ module maSubcolumn#(
 		end
 	end
 
-	// 乘法器实例化：按 MULT_DSP_EN 选择独立模块，保证 Vivado 不做跨模块 sharing
-	// MULT_DSP_EN=1 → multiplier_dsp（use_dsp="yes"，映射 DSP48E2）
-	// MULT_DSP_EN=0 → multiplier    （use_dsp="no"，保持 LUT 实现）
+	// 乘法器实例化：内含 1 级 input pipeline (AREG/BREG)
+	// 路径: data1_reg → LUT(符号扩展) → multiplier 内部 a_reg → multiply → product
+	// multiplier 输出为组合逻辑（从内部 a_reg/b_reg 出发），直连 adderTree
 	generate
 		if (MULT_DSP_EN) begin : gen_mult_dsp
 			for(ch=0; ch<CH_IN; ch=ch+1) begin:MultiplierChannels
 				multiplier_dsp#(.WD_IN(WD1))
 					u_multiplier(
+						.clk(clk),
+						.rstn(rstn),
+						.ena(ena),
 						.a(data1_reg[ch*WD1+: WD1]),
 						.b(data2_reg[ch*WD1+: WD1]),
 						.c(product[ch*2*WD1+: 2*WD1]),
@@ -217,6 +221,9 @@ module maSubcolumn#(
 			for(ch=0; ch<CH_IN; ch=ch+1) begin:MultiplierChannels
 				multiplier#(.WD_IN(WD1))
 					u_multiplier(
+						.clk(clk),
+						.rstn(rstn),
+						.ena(ena),
 						.a(data1_reg[ch*WD1+: WD1]),
 						.b(data2_reg[ch*WD1+: WD1]),
 						.c(product[ch*2*WD1+: 2*WD1]),
@@ -227,28 +234,23 @@ module maSubcolumn#(
 		end
 	endgenerate
 
-	// ========== TIMING FIX: Pipeline register between DSP output and adder tree ==========
-	// This breaks the critical path: DSP → CARRY8 → CARRY8 → ... → output register
-	// Data flows freely through pipeline when enabled, valid signal propagates via pipe_stage
+	// s_pipe: 与 multiplier 内部 AREG/BREG 对齐（同 cycle latch）
 	always @(posedge clk or negedge rstn) begin
-		if (!rstn) begin
-			product_pipe <= {(2*WD1*CH_IN){1'b0}};
+		if (!rstn)
 			s_pipe <= 1'b0;
-		end else if (clr) begin
-			product_pipe <= {(2*WD1*CH_IN){1'b0}};
+		else if (clr)
 			s_pipe <= 1'b0;
-		end else if (ena) begin
-			product_pipe <= product;
+		else if (ena)
 			s_pipe <= s1_reg | s2_reg;
-		end
 	end
 
+	// multiplier 输出 product 与 s_pipe 在同一 cycle 有效，直连 adderTree
 	adderTreePipe#(.WD_IN(2*WD1), .CH_IN(CH_IN)) u_adderTree(
 		.clk(clk),
 		.rstn(rstn),
 		.clr(clr),
 		.ena(ena),
-		.d(product_pipe),
+		.d(product),
 		.s(s_pipe),
 		.sum(sum_out)
 	);

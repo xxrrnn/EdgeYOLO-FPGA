@@ -9,6 +9,7 @@
 
 # DCIM 核心
 ../../ref/DCIM/src/dcim/multiplier.v
+../../ref/DCIM/src/dcim/multiplier_dsp.v
 ../../ref/DCIM/src/dcim/adderTree.v
 ../../ref/DCIM/src/dcim/calculate_core.v
 ../../ref/DCIM/src/dcim/sramWrap.v
