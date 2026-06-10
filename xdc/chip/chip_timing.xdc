@@ -1,17 +1,7 @@
 # ============================================================================
 # DCIM_Array + VPU Chip (lite) - Timing and Physical Constraints
 # Target: 250 MHz (4.000 ns) on xcvu37p-fsvh2892-2L-e
-# Memory: XDMA only (HBM removed in lite version)
 # ============================================================================
-
-# ============================================================================
-# DSP 资源约束
-# ============================================================================
-# Per-Tile 部分 DSP 方案：DCIM_DSP_COL_NUM=5，每 Tile 前 5 列用 DSP48E2，后 11 列 LUT。
-# - 每 Tile DSP: 5 col × 4 subcol × 64 ch = 1280 DSP48E2
-# - 4 Tile 总: 5120 + VPU(57) = 5177 DSP（设备 9024，利用率 57%）
-# - 每 SLR 放 2 Tile: 2560 DSP < 3008/SLR（余 15%）
-# - 不再需要 synth_design -max_dsp（RTL 层已精确控制 DSP 用量）。
 
 # ============================================================================
 # 时钟约束
@@ -25,8 +15,6 @@ if {[llength $_xdc_user_clk_pins]} {
   set_clock_uncertainty 0.050 [get_clocks clk_main]
 }
 
-# (HBM clocks removed in lite version - single clock domain)
-
 # ============================================================================
 # 复位约束
 # ============================================================================
@@ -35,16 +23,21 @@ if {[llength [get_ports -quiet cpu_reset]]} {
 }
 
 # DCIM 异步复位 false path
-# 用 cell-level 约束替代 pin-level，避免匹配 54 万个 CLR/PRE pin 导致性能问题
-# (CRITICAL WARNING [Vivado 12-4439]: 541554 objects)
-set _dcim_cells [get_cells -quiet -hierarchical -filter {NAME =~ *dcim_array_0*}]
-if {[llength $_dcim_cells]} {
-  set_false_path -to $_dcim_cells
+# 仅对 DCIM 内含异步复位/置位的 sequential pin 做 false path，
+# 避免 set_false_path -to <cell> 匹配 200 万对象触发 CRITICAL WARNING [Vivado 12-4439]。
+set _dcim_arst_to [get_pins -quiet -hierarchical -filter {
+  NAME =~ *dcim_array_0/inst/* && IS_LEAF && DIRECTION == IN &&
+  (NAME =~ */CLR || NAME =~ */PRE || NAME =~ */S   ||
+   NAME =~ */R   || NAME =~ */CE  || NAME =~ */RST ||
+   NAME =~ */rst || NAME =~ */reset)
+}]
+if {[llength $_dcim_arst_to]} {
+  set_false_path -to $_dcim_arst_to
 }
 set _main_rst_from [get_pins -quiet -hierarchical \
   -filter {NAME =~ */main_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/C}]
-if {[llength $_main_rst_from] && [llength $_dcim_cells]} {
-  set_false_path -from $_main_rst_from -to $_dcim_cells
+if {[llength $_main_rst_from] && [llength $_dcim_arst_to]} {
+  set_false_path -from $_main_rst_from -to $_dcim_arst_to
 }
 
 # XDMA user_reset → BRAM reset ports
@@ -133,6 +126,25 @@ if {[llength $_fp_wei_from] && [llength $_fp_wei_to]} {
 }
 
 # ============================================================================
+# HBM IP 内部时序豁免
+# ============================================================================
+# HBM_SNGLBLI_INTF_AXI.WREADY_PIPE 路径：Xilinx 官方 IP 内部信号，无需用户保证时序。
+set _hbm_wready [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */hbm_0/inst/*HBM_SNGLBLI_INTF_AXI*/WREADY_PIPE}]
+if {[llength $_hbm_wready]} {
+  set_false_path -setup -from $_hbm_wready
+}
+
+# hbm_rst 复位链：hbm_rst/U0/.../FDRE_PER_N/C → hbm_0/.../ARESET_N
+set _hbm_rst_from [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */hbm_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/FDRE_PER_N/C}]
+set _hbm_rst_to [get_pins -quiet -hierarchical \
+  -filter {NAME =~ */hbm_0/inst/*ARESET_N}]
+if {[llength $_hbm_rst_from] && [llength $_hbm_rst_to]} {
+  set_false_path -from $_hbm_rst_from -to $_hbm_rst_to
+}
+
+# ============================================================================
 # 扇出优化
 # ============================================================================
 set _fanout_cnt [get_cells -quiet -hierarchical -filter {NAME =~ */u_maArray/u_counter*/r_cnt_reg*}]
@@ -149,9 +161,6 @@ if {[llength $_dsp_cells]} {
   set_property USE_DSP_AREG 2 $_dsp_cells
   set_property USE_DSP_BREG 2 $_dsp_cells
   puts "INFO: USE_DSP_AREG/BREG=2 applied to [llength $_dsp_cells] DSP48E2 cells in u_maArray"
-  # DSP 推断后 prod_full 被映射为 DSP 原语，补充基于 DSP P 输出的 MCP
-  # Vivado 对 (* use_dsp="yes" *) wire 推断 DSP 时：DSP 实例名带 prod_full 前缀
-  # 同时用 REF_NAME+层次路径作为 fallback，确保约束命中
   set _dsp_p_pins [get_pins -quiet -of_objects $_dsp_cells -filter {NAME =~ */P[*] && DIRECTION == OUT}]
   set _pp_d [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/product_pipe_reg*/D}]
   if {[llength $_dsp_p_pins] && [llength $_pp_d]} {
@@ -249,42 +258,18 @@ if {[llength $_mcp_start_r_from] && [llength $_mcp_start_r_to]} {
 }
 
 # ============================================================================
-# HBM IP 内部时序豁免
-# ============================================================================
-# clk_out1_lite_hbm_axi_clk_wiz_0 setup WNS=-0.198ns (17 EP):
-#   HBM_SNGLBLI_INTF_AXI.WREADY_PIPE → LUT4 → FDCE
-#   HBM AXI IP 内部信号，Xilinx 官方 IP 不需要用户保证此路径时序，豁免之
-set _hbm_wready [get_pins -quiet -hierarchical \
-  -filter {NAME =~ */hbm_0/inst/*HBM_SNGLBLI_INTF_AXI*/WREADY_PIPE}]
-if {[llength $_hbm_wready]} {
-  set_false_path -setup -from $_hbm_wready
-}
-
-set _hbm_rst_from [get_pins -quiet -hierarchical \
-  -filter {NAME =~ */hbm_rst/U0/ACTIVE_LOW_PR_OUT_DFF*/FDRE_PER_N/C}]
-set _hbm_rst_to [get_pins -quiet -hierarchical \
-  -filter {NAME =~ */hbm_0/inst/*ARESET_N}]
-if {[llength $_hbm_rst_from] && [llength $_hbm_rst_to]} {
-  set_false_path -from $_hbm_rst_from -to $_hbm_rst_to
-}
-
-# ============================================================================
 # DCIM maArray 多周期路径约束
 # ============================================================================
-# 注意：use_dsp="yes" 生效后，prod_full 被推断为 DSP48E2 原语。
-# - 旧路径 prod_full*/P[*] → 变成 DSP 实例内部的 P 输出，filter 可能不匹配
-# - 新路径：通过 _dsp_cells (REF_NAME==DSP48E2) 的 P 输出 pin 匹配
-# - 两条路径均用 if guard，缺失不报错
+# prod_full 已被 use_dsp="yes" 映射为 DSP48E2。
+# _dsp_cells 块通过 REF_NAME==DSP48E2 匹配 P 输出 pin，两种映射均覆盖。
 
-# 路径1：multiplier P 输出 → product_pipe_reg D（LUT方式旧约束，DSP方式由上面 _dsp_cells 块覆盖）
-set _mcp_dsp_p [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/MultiplierChannels*/u_multiplier/prod_full*/P[*]}]
-set _mcp_pp_d  [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/product_pipe_reg*/D}]
-if {[llength $_mcp_dsp_p] && [llength $_mcp_pp_d]} {
-  set_multicycle_path -setup 2 -from $_mcp_dsp_p -to $_mcp_pp_d
-  set_multicycle_path -hold 1  -from $_mcp_dsp_p -to $_mcp_pp_d
+# maArray MaSubcolumn → ma_pipe 流水寄存器 MCP（cell-level，兜底 DSP/LUT 两种映射）
+set _mcp_sub_from [get_cells -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*}]
+set _mcp_sub_to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_maArray/gen_ma_pipe.r_ma_pipe*}]
+if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
+  set_multicycle_path -setup 2 -from $_mcp_sub_from -to $_mcp_sub_to
+  set_multicycle_path -hold 1 -from $_mcp_sub_from -to $_mcp_sub_to
 }
-
-set _mcp_carry [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/u_adderTree/*carry*/CO[*]}]
 set _mcp_res_d [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/result_reg*/D}]
 if {[llength $_mcp_carry] && [llength $_mcp_res_d]} {
   set_multicycle_path -setup 2 -from $_mcp_carry -to $_mcp_res_d
@@ -343,29 +328,10 @@ if {[llength $_mcp_ob_addr_from] && [llength $_mcp_ob_data_to]} {
   set_multicycle_path -hold 1  -from $_mcp_ob_addr_from -to $_mcp_ob_data_to
 }
 
-# maArray 流水寄存器 MCP（LUT方式；DSP方式由 _dsp_cells 块的 P-pin MCP 覆盖）
-set _mcp_ma_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/MultiplierChannels*/u_multiplier/prod_full*/P[*]}]
-set _mcp_ma_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/gen_ma_pipe.r_ma_pipe*/D}]
-if {[llength $_mcp_ma_from] && [llength $_mcp_ma_to]} {
-  set_multicycle_path -setup 2 -from $_mcp_ma_from -to $_mcp_ma_to
-  set_multicycle_path -hold 1 -from $_mcp_ma_from -to $_mcp_ma_to
-}
-set _mcp_sub_from [get_cells -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*}]
-set _mcp_sub_to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_maArray/gen_ma_pipe.r_ma_pipe*}]
-if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
-  set_multicycle_path -setup 2 -from $_mcp_sub_from -to $_mcp_sub_to
-  set_multicycle_path -hold 1 -from $_mcp_sub_from -to $_mcp_sub_to
-}
-
 # ============================================================================
-# SLR Pblock 约束 (lite: 4 Tile × 均衡 DSP+LUT, 器件 SLR0~2)
+# SLR Pblock 约束 (lite: 4 Tile, 器件 SLR0~2)
 # ============================================================================
-# Round 4: Per-Tile 部分 DSP 方案
-#   每 Tile: DSP_COL_NUM=5 × 4 subcol × 64 ch = 1280 DSP + 2816 LUT-multiplier
-#   2 Tile/SLR = 2560 DSP < 3008（余 15%），LUT ~390K < 434K（余 10%）
-#   Tile pblock 不重叠：SLR1 / SLR2 各放 2 Tile，消除 SLL 竞争。
-#   SLR0 留给 XDMA + VPU + IBUF + AXI interconnect。
-# ============================================================================
+# Tile 0/1/2/3 各占 SLR0/SLR1/SLR1/SLR2，OBUF bank 无 pblock（见注释）。
 
 # Tile 0 → SLR0（独占，与 VPU/XDMA 同 SLR，DSP 充裕）
 set _tile0_cells [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[0].*}]
@@ -462,23 +428,10 @@ if {[llength $_dqa_gs_regs]} {
 }
 
 # ============================================================================
-# OBUF per-bank Pblock
-# ============================================================================
-# 已移除 per-bank pblock 约束。原约束将 bank0/1 强制放 SLR1、bank2/3 强制放 SLR2，
-# 导致 SLR1/SLR2 CLB 占用率达 99.8%，router 几乎无空间修复 hold violation 或绕行。
-#
-# 移除后的安全性：
-# 1. URAM288 是固定物理资源，Vivado 必然将其放在 SLR1/SLR2 的 URAM 列，不需要 pblock 约束
-# 2. OBUF 写路径（Tile → reg3 → URAM）已有 MCP 4-cycle 约束（16ns 余量），
-#    即使 reg3 逻辑溢出到相邻 SLR，跨 SLR 延迟（~0.5ns）被余量完全吸收
-# 3. OBUF 读路径（URAM → memreg → rstage → pipe_reg → VPU）同样有 MCP 4-cycle 覆盖
-# 4. Tile pblock（SLR1/SLR2）+ IBUF pblock（SLR0）已保证大方向正确
-#
-# 预期效果：SLR1/SLR2 CLB 占用率从 99.8% 降至 ~93-95%，为 router 释放 hold fix 空间
-
-# ============================================================================
 # OBUF / IBUF 延迟策略（lite @ 250MHz）
-# obuf.v v4：reg3 写侧 + memrega/mem_rstage DONT_TOUCH 读侧；MCP 留 4-cycle 余量。
+# reg3 写侧 + memrega/mem_rstage DONT_TOUCH 读侧；MCP 留 4-cycle 余量。
+# OBUF per-bank pblock 已移除：URAM 物理位置由工具自动保证，强制约束反而
+# 导致 SLR1/SLR2 CLB 占用率 ~99.8%，router 无空间修复 hold violation。
 # ============================================================================
 set _buf_mcp_setup 4
 
@@ -613,5 +566,3 @@ if {[llength $_obuf_bank_reg3] && [llength $_obuf_bank_logic]} {
   set_multicycle_path -setup $_buf_mcp_setup -from $_obuf_bank_reg3 -to $_obuf_bank_logic
   set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_obuf_bank_reg3 -to $_obuf_bank_logic
 }
-
-# 保留旧 reg2 MCP 会被 reg3 覆盖（同路径取更宽松者由工具合并）
