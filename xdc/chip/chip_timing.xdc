@@ -24,6 +24,11 @@ if {[llength $_xdc_user_clk_pins] == 0} {
 }
 if {[llength $_xdc_user_clk_pins]} {
   create_clock -period 4.000 -name clk_main [lindex $_xdc_user_clk_pins 0]
+  # UU=50ps: 给 placer 施加额外 setup 压力, 迫使高扇出 data1_reg/s2_reg
+  # 与 DSP/product_pipe_reg 紧凑放置, 否则路由延迟从 ~2ns 爆增到 ~4ns.
+  # 副作用: DSP 内部路径出现微小 hold violation (~-0.011ns),
+  # 由 3_synth.tcl 中 phys_opt_design -hold 修复.
+  set_clock_uncertainty 0.050 [get_clocks clk_main]
 }
 
 # clk_main <-> GTYE4_TXOUTCLK: XDMA 内部 CoreClk, 与 UserClk 独立分频,
