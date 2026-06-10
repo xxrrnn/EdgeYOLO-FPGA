@@ -135,10 +135,10 @@
 //   总计: 2304+1408+1408+2304 = 7424 DSP (82% 芯片利用率)
 //
 `define DCIM_DSP_TILES          4
-`define DCIM_DSP_COL_SOLO       9       // 独占 SLR 的 Tile (Tile 0, 3)
+`define DCIM_DSP_COL_SOLO       0       // 独占 SLR 的 Tile (Tile 0, 3)
 `define DCIM_DSP_PARTIAL_SOLO   0
-`define DCIM_DSP_COL_SHARED     5       // 共享 SLR 的 Tile (Tile 1, 2)
-`define DCIM_DSP_PARTIAL_SHARED 2
+`define DCIM_DSP_COL_SHARED     0       // 共享 SLR 的 Tile (Tile 1, 2)
+`define DCIM_DSP_PARTIAL_SHARED 0
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
