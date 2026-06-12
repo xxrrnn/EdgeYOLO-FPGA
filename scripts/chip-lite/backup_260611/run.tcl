@@ -1,37 +1,13 @@
 # ==============================================================================
-# run.tcl — 完整流程入口（支持 Project Mode / Non-Project Mode 切换）
+# run.tcl — 完整流程入口（顺序执行 config → build → bd → synth → rpt）
 # ==============================================================================
 # 用法（完整流程）：
 #   cd /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite
 #   vivado -mode batch -source scripts/chip-lite/run.tcl
 #
-# ==============================================================================
-# FLOW_MODE 选择（环境变量）
-# ==============================================================================
-# FLOW_MODE=project   → Project Mode（默认）
-#   - 使用 Vivado .xpr 工程，launch_runs 管理 OOC 综合
-#   - 适合日常开发、GUI 交互式调试
-#   - 流程：1_build → 2_bd → 3_synth_project → 4_rpt
-#
-# FLOW_MODE=nonproj   → Non-Project Mode
-#   - 纯 Tcl 命令驱动，不依赖 .xpr（但仍需 2_bd 产物）
-#   - 适合 CI/CD、服务器批处理、精细 directive 调参
-#   - 前提：先跑过一次 project mode 到 2_bd（生成 IP DCP + stubs）
-#   - 流程：加载 config → 3_synth_nonproj → 4_rpt
-#
-# 示例：
-#   # Project Mode（默认）
-#   vivado -mode batch -source scripts/chip-lite/run.tcl
-#
-#   # Non-Project Mode
-#   FLOW_MODE=nonproj vivado -mode batch -source scripts/chip-lite/run.tcl
-#
-#   # Non-Project Mode + 自定义 tag
-#   FLOW_MODE=nonproj BUILD_TAG=np_test vivado -mode batch -source scripts/chip-lite/run.tcl
-#
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # 并行构建 / BUILD_TAG（支持多个 Vivado 进程同时跑，互不干扰）
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # 每次 run 的产物位于独立子目录 build/lite/<tag>/，BD 也在其中，完全隔离。
 #
 #   # 自动时间戳（无需指定，每次唯一，默认行为）
@@ -42,56 +18,53 @@
 #   BUILD_TAG=aggressive vivado -mode batch -source scripts/chip-lite/run.tcl > logs/agg.log 2>&1 &
 #   BUILD_TAG=default    vivado -mode batch -source scripts/chip-lite/run.tcl > logs/def.log 2>&1 &
 #
-# ==============================================================================
+#   # 查看所有历史 build
+#   ls build/lite/
+#
+# ------------------------------------------------------------------------------
 # 断点恢复（通过环境变量 RESUME_FROM 指定从哪个 checkpoint 继续）
 # 必须同时传入与原始 run 相同的 BUILD_TAG，确保找到正确的 projPath
-# ==============================================================================
-#   RESUME_FROM=opt       从 post_opt.dcp 恢复（place → phys_opt → route → bit）
-#   RESUME_FROM=place     从 post_place.dcp 恢复（phys_opt → route → bit）
-#   RESUME_FROM=phys_opt  从 post_phys_opt.dcp 恢复（route → bit）
+# ------------------------------------------------------------------------------
+#   RESUME_FROM=opt       从 post_opt.dcp 恢复
+#                         跑步骤：place → phys_opt → route → bitstream
+#                         命令：BUILD_TAG=<tag> RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
 #
-#   BUILD_TAG=<tag> RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
+#   RESUME_FROM=place     从 post_place.dcp 恢复
+#                         跑步骤：phys_opt → route → bitstream
+#                         命令：BUILD_TAG=<tag> RESUME_FROM=place vivado -mode batch -source scripts/chip-lite/run.tcl
+#
+#   RESUME_FROM=phys_opt  从 post_phys_opt.dcp 恢复（最快，仅跑 route + bitstream）
+#                         跑步骤：route → bitstream
+#                         命令：BUILD_TAG=<tag> RESUME_FROM=phys_opt vivado -mode batch -source scripts/chip-lite/run.tcl
 #
 # Checkpoint 位置：build/lite/<tag>/ImplOutputDir/post_{opt,place,phys_opt}.dcp
+# 注意：Vivado maxThreads 上限为 32（软件硬性限制，与服务器核数无关）
 # ==============================================================================
 
 set thisScriptDir [file dirname [file normalize [info script]]]
 source [file normalize "$thisScriptDir/config.tcl"]
 
-# --- 解析 FLOW_MODE ---
-set flowMode "project"
-if {[info exists ::env(FLOW_MODE)]} {
-    set flowMode [string tolower [string trim $::env(FLOW_MODE)]]
-}
-if {$flowMode ne "project" && $flowMode ne "nonproj"} {
-    puts "WARNING: Unknown FLOW_MODE='$flowMode' — defaulting to 'project'."
-    set flowMode "project"
-}
-puts "INFO: FLOW_MODE = $flowMode"
-
-# --- 解析 RESUME_FROM ---
+# --- Resume 模式 ---
 set resumeFrom ""
 if {[info exists ::env(RESUME_FROM)]} {
     set resumeFrom [string tolower [string trim $::env(RESUME_FROM)]]
 }
+
 if {$resumeFrom ne "" && $resumeFrom ne "opt" && $resumeFrom ne "place" && $resumeFrom ne "phys_opt"} {
     puts "WARNING: Unknown RESUME_FROM='$resumeFrom' — running full flow."
     set resumeFrom ""
 }
 
-# ==============================================================================
-# Resume 模式（从 checkpoint 继续，project/nonproj 通用）
-# ==============================================================================
 set _run_error ""
 if {[catch {
 
 if {$resumeFrom ne ""} {
-    # 加载已有 checkpoint 继续实现
-    if {$flowMode eq "project"} {
-        set xpr [file normalize "$projPath/${projName}.xpr"]
-        if {![file exists $xpr]} { error "Project not found: $xpr — run full flow first." }
-        open_project $xpr
+    # Resume 模式：打开工程，加载 checkpoint，从指定阶段继续
+    set xpr [file normalize "$projPath/${projName}.xpr"]
+    if {![file exists $xpr]} {
+        error "Project not found: $xpr — run full flow first."
     }
+    open_project $xpr
 
     if {$resumeFrom eq "opt"} {
         set dcp [file normalize "$ImplOutputDir/post_opt.dcp"]
@@ -100,42 +73,53 @@ if {$resumeFrom ne ""} {
     } else {
         set dcp [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
     }
-    if {![file exists $dcp]} { error "Checkpoint not found: $dcp" }
+    if {![file exists $dcp]} {
+        error "Checkpoint not found: $dcp — run full flow first."
+    }
 
     puts "INFO: RESUME_FROM=$resumeFrom — loading $dcp"
     open_checkpoint $dcp
 
+    # 重新加载 chip_timing.xdc（含 Tcl 控制流，必须 -unmanaged）
+    # chip.xdc 已在 project fileset，open_checkpoint 后不需重复加载。
     set pbs [get_pblocks -quiet]
     if {[llength $pbs]} { delete_pblocks $pbs }
     read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+
     file mkdir $ImplOutputDir
 
     if {$resumeFrom eq "opt"} {
-        catch {set_param place.ILREnabled false}
-        set_param general.maxThreads 8
+        # place → phys_opt → route → bit
+        # place_design 会在当前工作目录下生成 cong/ 拥塞热图，cd 到 ImplOutputDir
+        # 使其落在 build 树内而不是仓库根目录。
+        set _savedCwd [pwd]
+        cd $ImplOutputDir
+        if {$placeMode eq "safe"} {
+            catch {set_param place.ILREnabled true}
+            set_param general.maxThreads 1
+            puts "INFO: \[place_mode\] safe — ILR=on, threads=1"
+        } else {
+            catch {set_param place.ILREnabled false}
+            set_param general.maxThreads 32
+            puts "INFO: \[place_mode\] fast — ILR=off, threads=32"
+        }
         place_design -directive $placeDirective
         set_param general.maxThreads 32
+        cd $_savedCwd
         write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
         report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
-        report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-            -file [file normalize "$ImplOutputDir/post_place_failing_paths.rpt"]
-        report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
     }
 
     if {$resumeFrom eq "opt" || $resumeFrom eq "place"} {
+        # phys_opt → route → bit
         phys_opt_design -directive $physOptDirective
         write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
-        report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
     }
 
-    set_param general.maxThreads 32
+    # route → bit（phys_opt 已完成时直接从此继续）
     route_design -directive $routeDirective
-    phys_opt_design -hold_fix -directive AggressiveExplore
     write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
     report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
-    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-        -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
-    report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
 
     set paths [get_timing_paths -max_paths 1 -delay_type max]
     set wns 0.0
@@ -148,37 +132,17 @@ if {$resumeFrom ne ""} {
         write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]
         puts "INFO: Bitstream written."
     } else {
-        puts "ERROR: Timing not met (WNS=${wns}ns) — bitstream skipped."
+        puts "ERROR: Timing not met — bitstream skipped."
     }
 
+    # 报告
     source [file normalize "$thisScriptDir/4_rpt.tcl"]
-
 } else {
-    # ==============================================================================
-    # 完整流程
-    # ==============================================================================
-    if {$flowMode eq "project"} {
-        # --- Project Mode: 从头创建工程 → BD → 综合实现 ---
-        source [file normalize "$thisScriptDir/1_build.tcl"]
-        source [file normalize "$thisScriptDir/2_bd.tcl"]
-        source [file normalize "$thisScriptDir/3_synth_project.tcl"]
-        source [file normalize "$thisScriptDir/4_rpt.tcl"]
-
-    } else {
-        # --- Non-Project Mode ---
-        # 检查必要前置产物是否存在（2_bd 产出的 IP DCP 和 stubs）
-        set _stubDir [file normalize "$projPath/ip_stubs"]
-        set _ipRunsDir [file normalize "$projPath/${bdName}.runs"]
-        if {![file exists $_stubDir] || ![file exists $_ipRunsDir]} {
-            puts "ERROR: Non-project mode requires 2_bd products (ip_stubs + OOC DCPs)."
-            puts "ERROR: Run project mode first, or set BUILD_TAG to an existing build."
-            puts "ERROR: Expected: $_stubDir"
-            puts "ERROR: Expected: $_ipRunsDir"
-            error "Missing prerequisites for non-project mode. Run project mode (1_build + 2_bd) first."
-        }
-        source [file normalize "$thisScriptDir/3_synth_nonproj.tcl"]
-        source [file normalize "$thisScriptDir/4_rpt.tcl"]
-    }
+    # --- 完整流程 ---
+    source [file normalize "$thisScriptDir/1_build.tcl"]
+    source [file normalize "$thisScriptDir/2_bd.tcl"]
+    source [file normalize "$thisScriptDir/3_synth.tcl"]
+    source [file normalize "$thisScriptDir/4_rpt.tcl"]
 }
 
 } _catch_msg]} {
@@ -186,31 +150,36 @@ if {$resumeFrom ne ""} {
     puts "ERROR: Run failed — $_catch_msg"
 }
 
-puts "\n======== run.tcl DONE (mode=$flowMode) ========"
+puts "\n======== run.tcl DONE ========"
 
 # ==============================================================================
 # 完成通知（终端打印 + 126邮箱 SMTP）
 # ==============================================================================
+
+# 辅助：读一行 SMTP 响应（定义在 proc 外部，避免重定义）
 proc _smtp_read {sock} {
     set line [gets $sock]
     return $line
 }
 
 proc notify_completion {status detail} {
-    global notifyEmail notify126From notify126Auth projName runTag projPath flowMode
+    global notifyEmail notify126From notify126Auth projName runTag projPath
 
     set host      [info hostname]
     set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
-    set subject   "\[Vivado\] ${projName}/${runTag}: ${status} (${flowMode})"
-    set body      "Build:  $projName / $runTag\nMode:   $flowMode\nStatus: $status\nDetail: $detail\nHost:   $host\nTime:   $timestamp\nPath:   $projPath"
+    # Subject 内容纯 ASCII，不需要 base64 编码整行
+    set subject   "\[Vivado\] ${projName}/${runTag}: ${status}"
+    set body      "Build:  $projName / $runTag\nStatus: $status\nDetail: $detail\nHost:   $host\nTime:   $timestamp\nPath:   $projPath"
 
+    # 终端醒目输出（无论是否配置邮件）
     puts "\a"
     puts "=============================================="
-    puts "  BUILD $status  |  $projName/$runTag  |  mode=$flowMode"
+    puts "  BUILD $status  |  $projName/$runTag"
     puts "  $detail"
     puts "  $timestamp"
     puts "=============================================="
 
+    # 邮件通知（仅当三个变量都非空时）
     if {$notifyEmail eq "" || $notify126From eq "" || $notify126Auth eq ""} {
         return
     }
@@ -256,6 +225,7 @@ proc notify_completion {status detail} {
     puts "INFO: 通知邮件已发送至 $notifyEmail"
 }
 
+# 判断最终状态
 if {$_run_error ne ""} {
     notify_completion "FAILED" $_run_error
 } else {

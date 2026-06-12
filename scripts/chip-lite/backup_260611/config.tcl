@@ -40,7 +40,7 @@ if {[info exists ::env(BUILD_TAG)] && [string trim $::env(BUILD_TAG)] ne ""} {
     set runTag [string trim $::env(BUILD_TAG)]
 } else {
     # 自动生成时间戳（yymmdd_HHMM），并行时每次唯一
-    set runTag [clock format [clock seconds] -format "%y%m%d_%H%M"]
+    set runTag [clock format [clock seconds] -format "%y%m%d_%H%M%S"]
 }
 
 # --- 路径 ---
@@ -103,12 +103,14 @@ set rptMaxPaths      20
 # (hardcoded in proc, threshold = 0)
 
 # --- 并发线程 ---
-# Vivado 上限 64 线程；服务器 128 核，以下设置在安全范围内。
-# synthJobs: launch_runs -jobs 的并行 OOC synth 进程数（充分利用 CPU）
-# maxThreads: 单个 Vivado 进程内部的多线程数
-set synthJobs 32
+# Vivado maxThreads 软件上限 32（与服务器核数无关）。
 set_param general.maxThreads 32
-catch {set_param place.ILREnabled false}
+
+# --- place_design 模式 ---
+# "fast"  — 禁用 ILR + 32 线程（默认推荐）
+#           ILR 在 Vivado 2024.2 多线程下有 SIGSEGV bug；禁用后多线程安全，速度快。
+# "safe"  — 启用 ILR  + 1 线程（保守模式，行为与 GUI 一致，时序有时略好）
+set placeMode "fast"
 
 puts "INFO: config.tcl loaded — project: $projName  tag: $runTag  part: $part"
 puts "INFO: projPath = $projPath"

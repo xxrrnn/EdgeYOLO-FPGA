@@ -125,18 +125,7 @@ if {[llength $_mcp_ib_from] && [llength $_mcp_ib_to]} {
   set_multicycle_path -hold 1 -from $_mcp_ib_from -to $_mcp_ib_to
 }
 
-# OBUF arbiter: grant_idx, obuf_addr, rr_ptr, obuf_din
-set _mcp_ob_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/tile_wr_valid_q*C}]
-set _mcp_ob_grant [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/grant_idx*}]
-set _mcp_ob_addr  [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/obuf_addr_reg*/D}]
-set _mcp_ob_rr    [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/rr_ptr_reg*/D}]
-set _mcp_ob_din   [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_obuf_arb/obuf_din_reg*/D}]
-foreach _dst [list $_mcp_ob_grant $_mcp_ob_addr $_mcp_ob_rr $_mcp_ob_din] {
-  if {[llength $_mcp_ob_from] && [llength $_dst]} {
-    set_multicycle_path -setup 2 -from $_mcp_ob_from -to $_dst
-    set_multicycle_path -hold 1  -from $_mcp_ob_from -to $_dst
-  }
-}
+# OBUF arbiter: 已删除 (chip-v2: tile 直写 tile_obuf，无仲裁器)
 
 # --- 4.3 SLR 穿越流水 MCP ---
 # ready_r -> inst_decoder FSM
@@ -175,72 +164,10 @@ if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
   set_multicycle_path 1 -hold  -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
 }
 
-# --- 4.4 OBUF/IBUF URAM 延迟 MCP ---
+# --- 4.4 IBUF URAM 延迟 MCP ---
+# chip-v2: 共享 OBUF 已删除，tile_obuf 同 SLR 无跨越，cascade=2 不需要 MCP
+# 仅保留 IBUF MCP（cascade 较深，仍需要）
 set _buf_mcp_setup 4
-
-# OBUF 写侧寄存器 -> URAM
-set _obuf_lat_src {}
-foreach _f {
-  {NAME =~ *u_obuf*gen_banks*wea_reg3*}
-  {NAME =~ *u_obuf*gen_banks*web_reg3*}
-  {NAME =~ *u_obuf*gen_banks*mem_ena_reg3*}
-  {NAME =~ *u_obuf*gen_banks*mem_enb_reg3*}
-  {NAME =~ *u_obuf*gen_banks*dina_reg3*}
-  {NAME =~ *u_obuf*gen_banks*dinb_reg3*}
-  {NAME =~ *u_obuf*gen_banks*addra_reg3*}
-  {NAME =~ *u_obuf*gen_banks*addrb_reg3*}
-  {NAME =~ *u_obuf*gen_banks*wea_reg2*}
-  {NAME =~ *u_obuf*gen_banks*web_reg2*}
-  {NAME =~ *u_obuf/wea_reg*}
-  {NAME =~ *u_obuf/web_reg*}
-  {NAME =~ *u_obuf/mem_ena_reg}
-  {NAME =~ *u_obuf/mem_enb_reg}
-  {NAME =~ *u_obuf/dina_reg}
-  {NAME =~ *u_obuf/dinb_reg}
-  {NAME =~ *u_obuf/addra_reg}
-  {NAME =~ *u_obuf/addrb_reg}
-} {
-  set _c [get_cells -quiet -hierarchical -filter $_f]
-  if {[llength $_c]} { set _obuf_lat_src [concat $_obuf_lat_src $_c] }
-}
-set _obuf_uram [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_reg_uram*}]
-if {[llength $_obuf_lat_src] && [llength $_obuf_uram]} {
-  set_multicycle_path -setup $_buf_mcp_setup -from $_obuf_lat_src -to $_obuf_uram
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_obuf_lat_src -to $_obuf_uram
-}
-
-# OBUF URAM cascade 读路径
-set _obuf_memreg   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*memreg*_reg*}]
-set _obuf_rstage   [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_rstage_reg*_reg*}]
-set _obuf_pipe_dst [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*mem_pipe_reg*_reg*}]
-if {[llength $_obuf_uram] && [llength $_obuf_memreg]} {
-  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram -to $_obuf_memreg
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram -to $_obuf_memreg
-}
-if {[llength $_obuf_uram] && [llength $_obuf_rstage]} {
-  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram -to $_obuf_rstage
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram -to $_obuf_rstage
-}
-if {[llength $_obuf_memreg] && [llength $_obuf_rstage]} {
-  set_multicycle_path -setup 2 -from $_obuf_memreg -to $_obuf_rstage
-  set_multicycle_path -hold 1 -from $_obuf_memreg -to $_obuf_rstage
-}
-if {[llength $_obuf_rstage] && [llength $_obuf_pipe_dst]} {
-  set_multicycle_path -setup 1 -from $_obuf_rstage -to $_obuf_pipe_dst
-  set_multicycle_path -hold 0 -from $_obuf_rstage -to $_obuf_pipe_dst
-}
-if {[llength $_obuf_uram] && [llength $_obuf_pipe_dst]} {
-  set_multicycle_path -setup $_buf_mcp_setup -through $_obuf_uram -to $_obuf_pipe_dst
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_obuf_uram -to $_obuf_pipe_dst
-}
-
-# OBUF bank reg3 -> u_bank 组合译码
-set _obuf_bank_reg3  [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*gen_banks*reg3*}]
-set _obuf_bank_logic [get_cells -quiet -hierarchical -filter {NAME =~ *u_obuf*gen_banks*u_bank/*}]
-if {[llength $_obuf_bank_reg3] && [llength $_obuf_bank_logic]} {
-  set_multicycle_path -setup $_buf_mcp_setup -from $_obuf_bank_reg3 -to $_obuf_bank_logic
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_obuf_bank_reg3 -to $_obuf_bank_logic
-}
 
 # IBUF 写侧寄存器 -> URAM
 set _ibuf_lat_src {}
@@ -350,14 +277,9 @@ if {[llength $_tile3]} {
   set_property IS_SOFT TRUE [get_pblocks pblock_tile_3]
 }
 
-# 仲裁器 -> SLR1 (居中)
-foreach _f {
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf_arb}
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/u_obuf_arb}
-} {
-  set _c [get_cells -quiet -hierarchical -filter $_f]
-  if {[llength $_c]} { set_property USER_SLR_ASSIGNMENT SLR1 $_c }
-}
+# IBUF arbiter -> SLR1 (居中)
+set _c [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf_arb}]
+if {[llength $_c]} { set_property USER_SLR_ASSIGNMENT SLR1 $_c }
 
 # IBUF -> SLR0 (靠近 XDMA AXI 写通路)
 set _ibuf_top [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf}]

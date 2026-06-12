@@ -15,7 +15,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 VIVADO_HOME="${VIVADO_HOME:-/home/EDAtools/Xilinx/Vivado/2024.2}"
 LITE_GEN="${LITE_GEN:-$REPO_ROOT/build/lite/lite.gen/sources_1/ip}"
 
-OBUF="$REPO_ROOT/rtl/DCIM_Macro/obuf.v"
+OBUF_BANK="$REPO_ROOT/rtl/chip/obuf_bank.v"
+VPU_BUF="$REPO_ROOT/rtl/vpu/vpu_buf.v"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 

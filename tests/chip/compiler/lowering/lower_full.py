@@ -26,12 +26,12 @@ from chip_config import (  # noqa: E402
     DCIM_NUM_TILES,
 )
 
-# OBUF region constants (matching plan)
+# VPU_BUF region constants (chip-v2: 4MB vpu_buf)
 PING = 0x000000
-PONG = 0x400000
-IM2COL = 0x800000
-SKIP_BASE = 0xC00000
-WB_SHADOW = 0xFF0000
+PONG = 0x180000
+IM2COL = 0x300000
+SKIP_BASE = 0x3C0000
+WB_SHADOW = 0x400000   # end of vpu_buf (4MB); wb scratch in WB directly via XDMA
 
 
 def emit_add(src1_off: int, src2_off: int, dst_off: int,

@@ -57,8 +57,8 @@ def pack_all_layers(plan: dict, weights_npz_dir: str) -> Tuple[bytes, Dict[str, 
     """Concatenate all layers' WB sections in plan order.
 
     Returns (wb_bytes, info) where info[name] = {'offset': int, 'bytes': int}.
-    The host uploads `wb_bytes` to OBUF wb_scratch starting at
-        plan['memory_plan']['layers']  +  the obuf_wb_scratch.lo region (0xFF0000).
+    The host uploads `wb_bytes` to VPU_BUF skip region starting at
+        plan['wb_layout']['scratch_off_by_layer'][name] (chip-v2: 0x3C0000+).
     The program issues a CDMA copy per layer to bring each section into WB.
     """
     info: Dict[str, dict] = {}

@@ -174,6 +174,10 @@ module ad_unit #(
                 end
                 AD_WAIT_X: begin
                     if (gb_doutb_valid) begin
+`ifdef SIMULATION
+                        $display("[%0t] AD_UNIT: latch src0 data=0x%0h (src2_addr_reg=0x%0h)",
+                                 $time, gb_doutb, ad_src2_addr_reg);
+`endif
                         if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
                             ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
                         else
@@ -182,6 +186,9 @@ module ad_unit #(
                 end
                 AD_WAIT_X_2: begin
                     if (gb_doutb_valid) begin
+`ifdef SIMULATION
+                        $display("[%0t] AD_UNIT: latch src1 data=0x%0h", $time, gb_doutb);
+`endif
                         if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
                             ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
                         else
@@ -264,6 +271,10 @@ module ad_unit #(
             ad_src_w_reg     <= '0;
         end else if (ad_unit_start && ad_unit_ready) begin
             // Latch all input parameters when start is asserted and module is ready
+`ifdef SIMULATION
+            $display("[%0t] AD_UNIT: latch src_addr=0x%0h src2_addr=0x%0h",
+                     $time, ad_src_addr, ad_src2_addr);
+`endif
             ad_src_addr_reg  <= ad_src_addr;
             ad_src2_addr_reg <= ad_src2_addr;
             ad_dst_addr_reg  <= ad_dst_addr;

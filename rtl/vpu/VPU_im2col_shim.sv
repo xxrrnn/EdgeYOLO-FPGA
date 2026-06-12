@@ -12,7 +12,7 @@ module VPU_im2col_shim #(
     parameter ADDR_WIDTH    = `VPU_DATA_WIDTH,
     parameter GB_ADDR_WIDTH = `GB_ADDR_WIDTH,
     parameter GB_BANDWIDTH  = `GB_BANDWIDTH,
-    parameter OBUF_ADDR_WIDTH = `DCIM_OBUF_ADDR_WIDTH,
+    parameter OBUF_ADDR_WIDTH = `VPU_BUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH
 )(
     input  wire                          clk,

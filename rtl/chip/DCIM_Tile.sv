@@ -581,7 +581,7 @@ module DCIM_Tile #(
                         obuf_wr_strb <= {STRB_WIDTH{1'b1}};
                         obuf_wr_addr <= out_base_addr_reg + result_cnt;
                         obuf_wr_data <= pack_result_word(result_cnt);
-                        if (obuf_wr_ready) begin
+                        if (obuf_wr_valid && obuf_wr_ready) begin
                             obuf_wr_valid <= 1'b0;
                             if (result_cnt + 1'b1 >= active_out_words) begin
                                 result_write_done <= 1'b1;

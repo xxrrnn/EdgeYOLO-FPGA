@@ -44,8 +44,7 @@ set chipRtlFiles [list \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
     [file normalize "$srcDir/chip/ibuf_rd_arbiter.sv"] \
-    [file normalize "$srcDir/chip/obuf_bank.v"] \
-    [file normalize "$srcDir/chip/tile_obuf.v"] \
+    [file normalize "$srcDir/chip/obuf_wr_arbiter.sv"] \
 ]
 
 set dcimRtlFiles [list \
@@ -72,6 +71,7 @@ set dcimRtlFiles [list \
 
 set bufferRtlFiles [list \
     [file normalize "$srcDir/DCIM_Macro/ibuf.v"] \
+    [file normalize "$srcDir/DCIM_Macro/obuf.v"] \
 ]
 
 set vpuRtlFiles {}
@@ -224,30 +224,51 @@ foreach ipTop $modRefIpTops {
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
 # -----------------------------------------------------------------------
-# 把所有 OOC IP 的 stub 文件持久化到 projPath/ip_stubs/，
-# 避免依赖 .Xil/realtime/（在新 Vivado session 启动后会为空）。
-# 3_synth.tcl 会从这里 read_verilog，确保顶层综合器能找到黑盒定义。
+# 为所有 OOC IP 生成 stub（黑盒占位符），统一持久化到 projPath/ip_stubs/。
+# 覆盖范围：
+#   1. BD 内 Xilinx IP  — bd/lite/ip/*/*.xci
+#   2. 项目级独立 IP    — lite.srcs/sources_1/ip/*/*.xci（fp32_add/fp32_mac 等）
+# 两类合并成一个循环，3_synth.tcl 从 ip_stubs/ 统一 read_verilog。
+#
+# 为什么不依赖 .Xil/realtime/：
+#   launch_runs -jobs 32 时 stub 写在子进程各自的 .Xil/Vivado-{PID}/realtime/
+#   里，路径因 ip_output_repo 设置而漂移，主进程 realtime/ 几乎为空。
+# 正确做法：从已确认存在的 OOC DCP 直接生成 stub（官方支持的黑盒定义方式）。
 # -----------------------------------------------------------------------
-set _stub_persist_dir [file normalize "$projPath/ip_stubs"]
-file mkdir $_stub_persist_dir
-set _xil_root [file normalize "$projPath/../../.Xil"]
-set _bd_ip_dir_2bd [file normalize "$bdDir/$bdName/ip"]
-foreach _xci [glob -nocomplain "$_bd_ip_dir_2bd/*/*.xci"] {
-    set _ipn [file rootname [file tail $_xci]]
-    set _dst  [file normalize "$_stub_persist_dir/${_ipn}_stub.v"]
-    if {[file exists $_dst]} { continue }
-    # 先找 .Xil/realtime 里由 export_ip_user_files 写入的 stub
-    set _cands [glob -nocomplain "$_xil_root/Vivado-*/realtime/${_ipn}_stub.v"]
-    set _best ""
-    set _best_t 0
-    foreach _c $_cands {
-        set _t [file mtime $_c]
-        if {$_t > $_best_t} { set _best_t $_t; set _best $_c }
+set _stub_dir [file normalize "$projPath/ip_stubs"]
+file mkdir $_stub_dir
+# 合并 BD IP + 项目级 IP 的 xci 文件列表
+set _all_xcis [concat \
+    [glob -nocomplain "$bdDir/$bdName/ip/*/*.xci"] \
+    [glob -nocomplain "$projPath/${projName}.srcs/sources_1/ip/*/*.xci"] \
+]
+foreach _xci $_all_xcis {
+    set _ipn  [file rootname [file tail $_xci]]
+    # modRefIpTops 在顶层综合时以完整 RTL 参与，不需要（也不能）注入 stub
+    if {[lsearch -exact $modRefIpTops $_ipn] >= 0} { continue }
+    set _stub [file normalize "$_stub_dir/${_ipn}_stub.v"]
+    if {[file exists $_stub]} { continue }
+    # OOC run 目录: projPath/lite.runs/<ipn>_synth_1/<ipn>.dcp
+    set _dcp [file normalize "$projPath/${bdName}.runs/${_ipn}_synth_1/${_ipn}.dcp"]
+    if {![file exists $_dcp]} {
+        puts "WARNING: \[stub_gen\] DCP not found for $_ipn, skipping stub"
+        continue
     }
-    if {$_best ne ""} {
-        file copy -force $_best $_dst
-        puts "INFO: \[2_bd\] stub persisted: $_ipn"
+    # open_checkpoint 在已有设计的 session 里会打开第二个设计，
+    # close_design 后自动回到前一个（BD 设计），无需手动恢复。
+    set _prev [current_design -quiet]
+    if {[catch {
+        open_checkpoint $_dcp -quiet
+        write_verilog -force -mode synth_stub $_stub
+        close_design
+        if {$_prev ne ""} { catch {current_design $_prev} }
+    } _err]} {
+        puts "WARNING: \[stub_gen\] Failed for $_ipn: $_err"
+        catch {close_design}
+        if {$_prev ne ""} { catch {current_design $_prev} }
+        continue
     }
+    puts "INFO: \[stub_gen\] Generated stub for $_ipn"
 }
 
 # 确保 chip.xdc 已在 fileset（chip_timing.xdc 只走 reload_xdc 的 -unmanaged 路径）

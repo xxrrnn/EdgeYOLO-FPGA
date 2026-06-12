@@ -1,18 +1,11 @@
 # ==============================================================================
-# hbm.tcl - lite version: 1 stack, 4GB, interleaved via SAXI_00
+# hbm.tcl - chip-v2: DCIM + VPU + HBM + distributed tile_obuf + VPU_BUF
 #
-# VCU128 HBM2: 1 stack (4GB) with 8 MCs × 512MB = 4GB total.
-# Interleave 策略：SAXI_00 开启 USER_SWITCH_ENABLE，HBM 内部 switch 将
-# 地址哈希分发到所有 8 个 MC，使单端口能看到完整 4GB 地址空间，并充分
-# 利用多 MC 带宽。
-#
-# Address interleave 映射：
-#   SAXI_00 地址 [32:0] → HBM switch → MC00..MC07（各 512MB）
-#   单端口可寻址范围：0x0_0000_0000 ~ 0x0_FFFF_FFFF (4GB)
-#
-# Architecture:
-#   SmartConnect M05 → AXI Clock Converter (250→450 MHz)
-#       → HBM SAXI_00 (switch interleaved, full 4GB view)
+# chip-v2 变更:
+#   - 删除 dcim_obuf_smc / dcim_obuf_ctrl_0（共享 OBUF 已拆分）
+#   - 新增 4x tile_obuf_ctrl_N（per-Tile buffer, 256KB each）
+#   - 新增 vpu_buf_ctrl（VPU 本地 buffer, 4MB）
+#   - SmartConnect NUM_MI = 10
 # ==============================================================================
 
 # ==============================================================================
@@ -95,7 +88,7 @@ set_property -dict [list \
 ] [get_bd_cells hbm_axi_cc]
 
 # ==============================================================================
-# 5. DCIM Buffer Controllers (unchanged from before)
+# 5. DCIM IBUF Controller (unchanged: 2MB, 128-bit)
 # ==============================================================================
 
 # Sub-level SmartConnect for DCIM IBUF (1 slave → 1 master)
@@ -105,15 +98,6 @@ set_property -dict [list \
   CONFIG.NUM_MI {1} \
 ] [get_bd_cells dcim_ibuf_smc]
 
-# Sub-level SmartConnect for DCIM OBUF (1 slave → 1 master)
-create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 dcim_obuf_smc
-set_property -dict [list \
-  CONFIG.NUM_SI {1} \
-  CONFIG.NUM_MI {1} \
-] [get_bd_cells dcim_obuf_smc]
-
-# 1 IBUF controller (lite: 1 group, 2MB, 128-bit)
-# READ_LATENCY ← chip_defines.vh（config.tcl 已 chip_defines_load）
 if {![info exists ::DCIM_IBUF_AXI_BRAM_READ_LATENCY]} {
     error "DCIM_IBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
 }
@@ -125,22 +109,39 @@ set_property -dict [list \
   CONFIG.READ_LATENCY $::DCIM_IBUF_AXI_BRAM_READ_LATENCY \
 ] [get_bd_cells dcim_ibuf_ctrl_0]
 
-# 1 OBUF controller (lite: 1 group, 16MB, 128-bit)
-if {![info exists ::DCIM_OBUF_AXI_BRAM_READ_LATENCY]} {
-    error "DCIM_OBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
+# ==============================================================================
+# 5b. tile_obuf Controllers (chip-v2: 4x 256KB, 128-bit each)
+# ==============================================================================
+if {![info exists ::DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY]} {
+    error "DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
 }
-create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 dcim_obuf_ctrl_0
+for {set t 0} {$t < 4} {incr t} {
+  create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 tile_obuf_ctrl_${t}
+  set_property -dict [list \
+    CONFIG.DATA_WIDTH {128} \
+    CONFIG.SINGLE_PORT_BRAM {1} \
+    CONFIG.ECC_TYPE {0} \
+    CONFIG.READ_LATENCY $::DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY \
+  ] [get_bd_cells tile_obuf_ctrl_${t}]
+}
+
+# ==============================================================================
+# 5c. VPU_BUF Controller (chip-v2: 4MB, 128-bit)
+# ==============================================================================
+if {![info exists ::VPU_BUF_AXI_BRAM_READ_LATENCY]} {
+    error "VPU_BUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
+}
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_buf_ctrl
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
   CONFIG.SINGLE_PORT_BRAM {1} \
   CONFIG.ECC_TYPE {0} \
-  CONFIG.READ_LATENCY $::DCIM_OBUF_AXI_BRAM_READ_LATENCY \
-] [get_bd_cells dcim_obuf_ctrl_0]
+  CONFIG.READ_LATENCY $::VPU_BUF_AXI_BRAM_READ_LATENCY \
+] [get_bd_cells vpu_buf_ctrl]
 
 # ==============================================================================
 # 6. VPU Weight Buffer Controller (WB only; GB removed in lite)
 # ==============================================================================
-# READ_LATENCY = 1: global_buffer_bram LOW_LATENCY 模式, ram_data_a 直通 douta (1 cycle)
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_wb_ctrl
 set_property -dict [list \
   CONFIG.DATA_WIDTH {128} \
@@ -150,7 +151,7 @@ set_property -dict [list \
 ] [get_bd_cells vpu_wb_ctrl]
 
 # ==============================================================================
-# 6b. Instruction BRAM Controller (128KB, 32-bit, for INST_BRAM Port A)
+# 6b. Instruction BRAM Controller (128KB, 32-bit)
 # ==============================================================================
 if {![info exists ::INST_BRAM_READ_LATENCY]} {
     error "INST_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"

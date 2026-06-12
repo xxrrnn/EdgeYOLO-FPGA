@@ -8,5 +8,6 @@
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/fp_mac_array.v
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/fp_array/fp32_2_int8_array.sv
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/qa_unit.sv
-/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/DCIM_Macro/obuf.v
+/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/chip/obuf_bank.v
+/data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/vpu_buf.v
 /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-lite/rtl/vpu/tb/standalone/tb_qa_standalone.sv

@@ -76,25 +76,31 @@ def dcim_effective_out_ch(meta: 'ConvMeta', int16: bool = False) -> int:
 
 HBM_PHY_BASE = 0x0
 IBUF_PHY_BASE = 0x1000_0000_0
-OBUF_PHY_BASE = 0x1010_0000_0
+OBUF_PHY_BASE = 0x1020_0000_0   # chip-v2: VPU_BUF @ 0x1_0200_0000
 
 HBM_OFF_INPUT0 = 0x00000
 HBM_OFF_INPUT1 = 0x40000
 HBM_OFF_WEIGHT = 0x80000
 
 OBUF_SRC0 = 0x000000
-OBUF_SRC1 = 0x100000
-OBUF_DST = 0x200000
-OBUF_AUX = 0x300000
+OBUF_SRC1 = 0x080000    # 512KB apart (enough for unit tests)
+OBUF_DST = 0x100000
+OBUF_AUX = 0x180000
 IBUF_ACT = 0x000000
 IBUF_WEI = 0x080000
 WB_SCALE = 0x0000
 WB_BIAS = 0x1000
 WB_QSCALE = 0x2000
 
-# Fast-preload extra OBUF slots (concat src3/src4 beyond OBUF_AUX)
-OBUF_SRC2 = 0x400000
-OBUF_SRC3 = 0x500000
+# chip-v2: DCIM 输出写 tile_obuf (per-tile, 从 0 开始)，验证时从 tile_obuf 读
+# checks.txt 里 dst >= TILE_OBUF_CHK_SENTINEL 时 testbench 路由到 tile_obuf
+DCIM_OUT_BASE = 0x0           # tile_obuf 内字节偏移 (从 0 写)
+TILE_OBUF_CHK_SENTINEL = 0x400000  # bit22，超出 VPU_BUF (4MB=0x400000) 的哨兵，表示 tile_obuf 地址空间
+TILE_OBUF_DST = TILE_OBUF_CHK_SENTINEL + 0x0  # dcim_matmul checks.txt 用此值
+
+# Extra OBUF slots for multi-source tests (concat)
+OBUF_SRC2 = 0x200000
+OBUF_SRC3 = 0x280000
 
 IBUF_SIZE_BYTES = 0x200_000  # chip_defines: 2 MB DCIM IBUF
 
@@ -301,13 +307,14 @@ def write_checks_list(path: str, entries: Sequence[Tuple[str, str, int, int, int
 # ResNet / 多段网络：通用 OBUF 槽位 + numpy golden + 指令发射
 # ---------------------------------------------------------------------------
 class ObufSlots:
-    """1MB 槽位；IM2COL 专用槽在 im2col/DCIM 期间不得存放 live feature。"""
+    """VPU_BUF 槽位（chip-v2: 4MB total, 512KB per slot）。
+    IM2COL 专用槽在 im2col/DCIM 期间不得存放 live feature。"""
     FEAT0 = 0x000000
-    FEAT1 = 0x100000   # DCIM 累加输出 / ping-pong 特征
-    OUT = 0x200000
-    IM2COL = 0x300000
-    DQA = 0x400000
-    SHORT = 0x500000
+    FEAT1 = 0x080000   # ping-pong 特征
+    OUT = 0x100000     # DCIM 累加输出
+    IM2COL = 0x180000  # im2col scratch
+    DQA = 0x200000     # DQA output
+    SHORT = 0x280000   # shortcut / residual save
 
 
 @dataclass
@@ -1127,32 +1134,35 @@ def pack_weight_tile(meta: ConvMeta, weight_int8: np.ndarray, tile: int,
 
 
 def dcim_accum_words(accum: np.ndarray, num_tiles: int) -> List[str]:
-    """INT8 模式：每 tile 输出 DCIM_INT8_OUT_WORDS_PER_TILE 个 128-bit word。"""
+    """INT8 模式：固定按 NUM_TILES(4) 个 tile 输出，不足的 tile 补零。
+    格式与 tile_obuf 物理布局一致：px 外循环，每 px 内按 tile0..3 顺序各 DCIM_INT8_OUT_WORDS_PER_TILE 个 word。"""
     lines = []
     for px in range(accum.shape[0]):
-        for tile in range(num_tiles):
+        for tile in range(NUM_TILES):
             base = tile * DCIM_INT8_OUT_CH_PER_TILE
             for word_idx in range(DCIM_INT8_OUT_WORDS_PER_TILE):
                 blob = b''
                 for c in range(4):
                     oc = base + word_idx * 4 + c
-                    blob += struct.pack('<i', int(accum[px, oc]) if oc < accum.shape[1] else 0)
+                    v = int(accum[px, oc]) if (tile < num_tiles and oc < accum.shape[1]) else 0
+                    blob += struct.pack('<i', v)
                 lines.append(''.join(f'{b:02x}' for b in reversed(blob)))
     return lines
 
 
 def dcim_accum_words_int16(accum: np.ndarray, num_tiles: int) -> List[str]:
-    """INT16 模式：每 tile 输出 DCIM_INT16_OUT_WORDS_PER_TILE 个 128-bit word。
+    """INT16 模式：固定按 NUM_TILES(4) 个 tile 输出，不足的 tile 补零。
     accum shape: (M, num_tiles * DCIM_LOGICAL_OUT_PER_TILE)，每 tile 4 个逻辑输出通道。"""
     lines = []
     for px in range(accum.shape[0]):
-        for tile in range(num_tiles):
+        for tile in range(NUM_TILES):
             base = tile * DCIM_LOGICAL_OUT_PER_TILE   # 每 tile 4 个逻辑 oc
             for word_idx in range(DCIM_INT16_OUT_WORDS_PER_TILE):
                 blob = b''
                 for c in range(4):
                     oc = base + word_idx * 4 + c
-                    blob += struct.pack('<i', int(accum[px, oc]) if oc < accum.shape[1] else 0)
+                    v = int(accum[px, oc]) if (tile < num_tiles and oc < accum.shape[1]) else 0
+                    blob += struct.pack('<i', v)
                 lines.append(''.join(f'{b:02x}' for b in reversed(blob)))
     return lines
 
@@ -1315,7 +1325,7 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
         for t in range(NUM_TILES)
     ]
     out_base_words = [
-        (dcim_out_obuf // OBUF_WORD_BYTES) + t * words_per_tile_per_px if t < tiles_out else 0
+        (dcim_out_obuf // OBUF_WORD_BYTES) if t < tiles_out else 0
         for t in range(NUM_TILES)
     ]
     inst += dcim_layer_op(
@@ -1324,7 +1334,7 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
         tile_mask=(1 << tiles_out) - 1,
         act_base_word=ibuf_act // IBUF_WORD_BYTES,
         act_stride_words=acc * act_words_per_row,
-        out_stride_words=tiles_out * words_per_tile_per_px,
+        out_stride_words=words_per_tile_per_px,
         wei_base_words=wei_base_words,
         out_base_words=out_base_words,
     )
@@ -1441,7 +1451,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         act_words = bytes_to_128_words(cols16.astype(np.int16).tobytes())
         exp_words = dcim_accum_words_int16(accum, meta.num_tiles)
         write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
-        fast_inst = dcim_layer_inst(meta, matmul_m, 0, OBUF_DST, IBUF_ACT, IBUF_WEI,
+        fast_inst = dcim_layer_inst(meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI,
                                     skip_cdma=True, int16=True)
         mode_tag = 'int16'
         acc_info = acc
@@ -1464,7 +1474,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         act_words = bytes_to_128_words(cols.astype(np.int8).tobytes())
         exp_words = dcim_accum_words(accum, meta.num_tiles)
         write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
-        fast_inst = dcim_layer_inst(meta, matmul_m, 0, OBUF_DST, IBUF_ACT, IBUF_WEI, skip_cdma=True)
+        fast_inst = dcim_layer_inst(meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI, skip_cdma=True)
         mode_tag = 'int8'
         acc_info = acc
         weight_words = []
@@ -1485,7 +1495,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
     net_shape = shapes.get(spec['layer'])
     matmul_n = num_logical_oc if use_int16 else meta.out_ch
     return {
-        'module': 'dcim_matmul', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST,
+        'module': 'dcim_matmul', 'name': spec['name'], 'layer': meta.name, 'dst': TILE_OBUF_DST,
         'words': len(exp_words), 'fast_inst': fast_inst,
         'hbm': hbm, 'wb': bytes(WB_SIZE_BYTES),
         'matmul_m': matmul_m, 'matmul_k': meta.matmul_k, 'matmul_n': matmul_n,
@@ -1497,6 +1507,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
             f'[{mode_tag}] M={matmul_m} K={meta.matmul_k} N={matmul_n} acc_depth={acc_info} '
             f'in_hw={h}x{w}({hw_note})'
         ),
+        'wpt': DCIM_INT16_OUT_WORDS_PER_TILE if use_int16 else DCIM_INT8_OUT_WORDS_PER_TILE,
     }
 
 
@@ -2285,7 +2296,8 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
                 cw = words if verify_words == 0 else min(words, verify_words)
                 f.write(f'{name} {fname} {dst:06x} {cw} {fp32_flag}\n')
         else:
-            f.write(f'{meta["name"]} expected.hex {meta["dst"]:06x} {check_words} {is_fp32}\n')
+            wpt = meta.get('wpt', 0)
+            f.write(f'{meta["name"]} expected.hex {meta["dst"]:06x} {check_words} {is_fp32} {wpt}\n')
     with open(os.path.join(out_dir, 'manifest.txt'), 'w') as f:
         for k in ('module', 'name', 'layer', 'shape', 'words'):
             f.write(f'{k}: {meta[k]}\n')
@@ -2451,7 +2463,7 @@ def generate(args: argparse.Namespace) -> None:
     write_hex(os.path.join(out_dir, 'wb_init.hex'), bytes_to_128_words(meta['wb']))
     if module_needs_wb(meta['module']):
         with open(os.path.join(out_dir, 'preload.txt'), 'a') as f:
-            f.write(f'wb_init.hex {0x1020_0000_0:016x}\n')
+            f.write(f'wb_init.hex {0x1030_0000_0:016x}\n')
     write_inst(os.path.join(out_dir, 'inst.hex'), meta['fast_inst'])
     write_manifest(out_dir, meta, args.verify_words)
     print(f'Generated module_tb: module={meta["module"]} case={meta["name"]} layer={meta["layer"]}')

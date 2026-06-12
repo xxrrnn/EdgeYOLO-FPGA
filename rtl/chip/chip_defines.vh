@@ -129,15 +129,58 @@
 //   SLR1: Tile 1 + Tile 2 (共享) + arb              → 每 Tile 可用 ~1536
 //   SLR2: Tile 3 (独占)                              → Tile 可用 ~3000
 //
-//   位置        DSP_COL_NUM  PARTIAL  DSP/Tile  SLR总DSP  利用率
-//   独占(0,3)   9            0        2304      2304      77%
-//   共享(1,2)   5            2        1408      2816      92%
-//   总计: 2304+1408+1408+2304 = 7424 DSP (82% 芯片利用率)
+// ┌───────────────────────────────────────────────────────────────────────────────┐
+// │ DSP 用量四档方案（复制对应行替换下方 define 即可）                             │
+// │ 公式: 每 Tile DSP = (COL×4 + PARTIAL) × 64                                   │
+// │ xcvu37p: 9024 DSP, SLR cap ~3008/SLR, VPU/XDMA 固定 ~57 DSP                  │
+// │ 布局 1+2+1: SLR0=Tile0(solo), SLR1=Tile1+2(shared), SLR2=Tile3(solo)         │
+// ├───────┬───────────┬─────────┬──────────┬──────────┬────────┬──────────────────┤
+// │ 档位  │ SOLO_COL  │ SOLO_P  │ SHARE_COL│ SHARE_P  │ 总 DSP │ 芯片利用率       │
+// ├───────┼───────────┼─────────┼──────────┼──────────┼────────┼──────────────────┤
+// │ 少    │    5      │   0     │    3     │   0      │  4153  │  46%             │
+// │ 中    │    7      │   0     │    4     │   0      │  5689  │  63%             │
+// │ 多    │    9      │   0     │    5     │   2      │  7481  │  83%             │
+// │ 极多  │   11      │   2     │    5     │   3      │  8889  │  98.5%           │
+// ├───────┴───────────┴─────────┴──────────┴──────────┴────────┴──────────────────┤
+// │                                                                                │
+// │ 【少】route 友好，留足余量，适合初期验证                                       │
+// │   `define DCIM_DSP_COL_SOLO       5                                            │
+// │   `define DCIM_DSP_PARTIAL_SOLO   0                                            │
+// │   `define DCIM_DSP_COL_SHARED     3                                            │
+// │   `define DCIM_DSP_PARTIAL_SHARED 0                                            │
+// │   // Solo: 5×4×64=1280/tile, Shared: 3×4×64=768/tile                          │
+// │   // Total: 1280×2+768×2+57 = 4153 DSP                                        │
+// │                                                                                │
+// │ 【中】均衡方案，SLR 约 60% 填充                                                │
+// │   `define DCIM_DSP_COL_SOLO       7                                            │
+// │   `define DCIM_DSP_PARTIAL_SOLO   0                                            │
+// │   `define DCIM_DSP_COL_SHARED     4                                            │
+// │   `define DCIM_DSP_PARTIAL_SHARED 0                                            │
+// │   // Solo: 7×4×64=1792/tile, Shared: 4×4×64=1024/tile                          │
+// │   // Total: 1792×2+1024×2+57 = 5689 DSP                                       │
+// │                                                                                │
+// │ 【多】高性能方案，P&R 需关注拥塞                                               │
+// │   `define DCIM_DSP_COL_SOLO       9                                            │
+// │   `define DCIM_DSP_PARTIAL_SOLO   0                                            │
+// │   `define DCIM_DSP_COL_SHARED     5                                            │
+// │   `define DCIM_DSP_PARTIAL_SHARED 2                                            │
+// │   // Solo: 9×4×64=2304/tile, Shared: (5×4+2)×64=1408/tile                     │
+// │   // Total: 2304×2+1408×2+57 = 7481 DSP                                       │
+// │                                                                                │
+// │ 【极多】压满芯片，P&R 有挑战，可能需 directive 调优                            │
+// │   `define DCIM_DSP_COL_SOLO       11                                           │
+// │   `define DCIM_DSP_PARTIAL_SOLO   2                                            │
+// │   `define DCIM_DSP_COL_SHARED     5                                            │
+// │   `define DCIM_DSP_PARTIAL_SHARED 3                                            │
+// │   // Solo: (11×4+2)×64=2944/tile, Shared: (5×4+3)×64=1472/tile                │
+// │   // Total: 2944×2+1472×2+57 = 8889 DSP                                       │
+// │                                                                                │
+// └────────────────────────────────────────────────────────────────────────────────┘
 //
 `define DCIM_DSP_TILES          4
-`define DCIM_DSP_COL_SOLO       0       // 独占 SLR 的 Tile (Tile 0, 3)
+`define DCIM_DSP_COL_SOLO       7       // ← 替换为上方对应档位的值
 `define DCIM_DSP_PARTIAL_SOLO   0
-`define DCIM_DSP_COL_SHARED     0       // 共享 SLR 的 Tile (Tile 1, 2)
+`define DCIM_DSP_COL_SHARED     4       // ← 替换为上方对应档位的值
 `define DCIM_DSP_PARTIAL_SHARED 0
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
@@ -151,21 +194,46 @@
 // ── Buffer 容量 / 数据宽度（主旋钮）────────────────────────────────────────
 // 字地址位宽决定容量：SIZE_BYTES = (1<<ADDR_WIDTH) * BYTES_PER_WORD
 `define DCIM_IBUF_ADDR_WIDTH    17      // 2MB  IBUF（128K × 16B words）
-`define DCIM_OBUF_ADDR_WIDTH    20      // 16MB OBUF（1M  × 16B words）
-`define DCIM_BUF_DATA_WIDTH     128     // IBUF/OBUF 128-bit 字宽
+`define DCIM_BUF_DATA_WIDTH     128     // IBUF/tile_obuf/VPU_BUF 128-bit 字宽
+
+// ── chip-v2: 共享 OBUF 已拆分为 per-tile tile_obuf + VPU_BUF ──────────────
+// tile_obuf: 每 Tile 本地写 buffer，CDMA 可读。与 Tile 同 SLR，零跨越。
+`define DCIM_TILE_OBUF_ADDR_WIDTH  14   // 256KB per tile (16K × 16B words)
+`define DCIM_TILE_OBUF_NUM_BANKS    4   // 4 bank → cascade=2 → 8 URAM per tile
+`define DCIM_TILE_OBUF_NBPIPE       4   // 读流水级数（CDMA 读取用）
+
+// VPU_BUF: VPU 本地 R/W buffer，与 VPU 同在 SLR0，零跨越。
+`define VPU_BUF_ADDR_WIDTH         18   // 4MB (256K × 16B words)
+`define VPU_BUF_NUM_BANKS          16   // 16 bank → cascade=4 → 128 URAM
+`define VPU_BUF_NBPIPE              6   // 读流水级数
+`define VPU_BUF_IN_REG_STAGES       1   // 输入寄存级（同 SLR 不需要多级）
+
+// tile_obuf 写流水排空周期（Tile FSM ST_DONE 等待写入完成）
+// tile_obuf 输入寄存 1 级 + 安全余量 1 = 2 周期
+`define DCIM_OBUF_WR_DRAIN      2
+
+// 向后兼容: OBUF 地址宽度别名（用于 DCIM out_base_addr 字段宽度）
+// DCIM Tile 写 tile_obuf 时使用 tile_obuf 内部地址
+`define DCIM_OBUF_ADDR_WIDTH    `DCIM_TILE_OBUF_ADDR_WIDTH
 
 `define DCIM_BUF_COL_WIDTH      `CHIP_BYTE_WIDTH                        // 每列 8 bit = 1 byte
 `define DCIM_BUF_NUM_COL        (`DCIM_BUF_DATA_WIDTH / `DCIM_BUF_COL_WIDTH)  // 16 列 byte-enable
 `define DCIM_BUF_BYTES_PER_WORD (`DCIM_BUF_DATA_WIDTH / `CHIP_BYTE_WIDTH)    // 128b → 16B（勿用 NUM_COL*COL_WIDTH）
 `define DCIM_IBUF_SIZE_BYTES    ((1 << `DCIM_IBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
-`define DCIM_OBUF_SIZE_BYTES    ((1 << `DCIM_OBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
+`define DCIM_TILE_OBUF_SIZE_BYTES ((1 << `DCIM_TILE_OBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
+`define VPU_BUF_SIZE_BYTES      ((1 << `VPU_BUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
 
 // 向后兼容：BUF_ADDR_WIDTH 默认指向 IBUF（旧代码可能用到）
 `define DCIM_BUF_ADDR_WIDTH     `DCIM_IBUF_ADDR_WIDTH
 
 // AXI BRAM 字节地址 = 字地址左移 BYTE_ADDR_SHIFT
 `define DCIM_BYTE_ADDR_SHIFT    `CHIP_BYTE_ADDR_SHIFT
-`define DCIM_AXI_BRAM_ADDR_WIDTH (`DCIM_OBUF_ADDR_WIDTH + `DCIM_BYTE_ADDR_SHIFT)
+// tile_obuf 的 AXI 地址宽度
+`define DCIM_TILE_OBUF_AXI_ADDR_WIDTH (`DCIM_TILE_OBUF_ADDR_WIDTH + `DCIM_BYTE_ADDR_SHIFT)
+// VPU_BUF 的 AXI 地址宽度
+`define VPU_BUF_AXI_ADDR_WIDTH (`VPU_BUF_ADDR_WIDTH + `DCIM_BYTE_ADDR_SHIFT)
+// 向后兼容: DCIM_AXI_BRAM_ADDR_WIDTH 现指向 tile_obuf
+`define DCIM_AXI_BRAM_ADDR_WIDTH `DCIM_TILE_OBUF_AXI_ADDR_WIDTH
 
 // ============================================================================
 // IBUF / OBUF 流水线与多 bank — 仅改「主旋钮」，其余由表达式推导
@@ -187,34 +255,32 @@
 `define DCIM_IBUF_BANK_MUX_PIPE      (`DCIM_IBUF_NBPIPE + `DCIM_IBUF_BANK_SEL_PIPE_EXTRA)
 `define DCIM_IBUF_ARB_LATENCY_EXTRA  1       // ibuf_rd_arbiter grant/计数余量
 `define DCIM_IBUF_RD_LATENCY         (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE + `DCIM_IBUF_ARB_LATENCY_EXTRA)
-
-// ── OBUF 主旋钮 ───────────────────────────────────────────────────────────
-`define DCIM_OBUF_NUM_BANKS          4       // 2→4：减 URAM 级联；8 bank 过小会致 Synth 8-2914/8-6849
-`define DCIM_OBUF_URAM_RD_STAGES     1       // obuf_bank：单拍 mem[addra]→memreg（与 ibuf 同模板）；时序靠 XDC MCP
-`define DCIM_OBUF_NBPIPE             6       // obuf_bank：mem_rstage 之后到 dout 的流水级数
-`define DCIM_OBUF_IN_REG_STAGES      3       // obuf.v：中心 reg1 + per-bank reg2/reg3
-`define DCIM_OBUF_POST_URAM_PIPE     (`DCIM_OBUF_URAM_RD_STAGES + 1)  // URAM 读流水 + mem_rstage
-`define DCIM_OBUF_WR_URAM_DRAIN_EXTRA 5     // Tile 写：IN_REG 之后 URAM 写级联排空余量
-
-// ── OBUF 推导 ─────────────────────────────────────────────────────────────
-`define DCIM_OBUF_BANK_BITS          ($clog2(`DCIM_OBUF_NUM_BANKS))
-`define DCIM_OBUF_BANK_ADDR_WIDTH    (`DCIM_OBUF_ADDR_WIDTH - `DCIM_OBUF_BANK_BITS)
-`define DCIM_OBUF_BANK_RD_EN_DEPTH   (`DCIM_OBUF_NBPIPE + 1)
-`define DCIM_OBUF_BANK_MUX_PIPE      (`DCIM_OBUF_NBPIPE + `DCIM_OBUF_IN_REG_STAGES + `DCIM_OBUF_POST_URAM_PIPE)
-`define DCIM_OBUF_RD_TOTAL_PIPE      `DCIM_OBUF_BANK_MUX_PIPE
-`define DCIM_OBUF_WR_DRAIN           (`DCIM_OBUF_IN_REG_STAGES + `DCIM_OBUF_WR_URAM_DRAIN_EXTRA)
-
-// AXI BRAM Controller READ_LATENCY（CDMA/XDMA 经 Port A 读 obuf/ibuf）
-// IBUF 公式：IN_REG(1) + BANK_MUX_PIPE(9) + FINAL_MUX_REG(1) = 11
-//   FINAL_MUX_REG=1：ibuf.v 的 always @posedge douta<=bank_douta[sel_pipe[末尾]] 最终寄存拍
-// OBUF 公式：RD_TOTAL_PIPE(11) + EXTRA(2) = 13（concat 标定 EXTRA=2，通过仿真验证正确）
+// AXI BRAM Controller READ_LATENCY（CDMA/XDMA 经 Port A 读 IBUF）
+// 公式：IN_REG(1) + BANK_MUX_PIPE(9) + FINAL_MUX_REG(1) = 11
 `define DCIM_IBUF_AXI_BRAM_READ_LATENCY_FINAL_REG 1
-`define DCIM_OBUF_AXI_BRAM_READ_LATENCY_EXTRA 2
 `define DCIM_IBUF_AXI_BRAM_READ_LATENCY (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE + `DCIM_IBUF_AXI_BRAM_READ_LATENCY_FINAL_REG)
-`define DCIM_OBUF_AXI_BRAM_READ_LATENCY (`DCIM_OBUF_RD_TOTAL_PIPE + `DCIM_OBUF_AXI_BRAM_READ_LATENCY_EXTRA)
+// 向后兼容：DCIM_OBUF_AXI_BRAM_READ_LATENCY → tile_obuf
+`define DCIM_OBUF_AXI_BRAM_READ_LATENCY `DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY
 
-// ── OBUF 外部字节地址：无 group 选择位，字地址即 OBUF 内部地址 ───────────
-`define DCIM_OBUF_EXT_ADDR_BITS `DCIM_OBUF_ADDR_WIDTH  // = 20 bits
+// ── OBUF 已废弃（chip-v2: 拆分为 tile_obuf + VPU_BUF）─────────────────────
+// 以下保留推导宏供旧代码编译兼容（如 DCIM_Array.sv out_base_addrs 位宽）
+
+// ── tile_obuf 推导 ──────────────────────────────────────────────────────────
+`define DCIM_TILE_OBUF_BANK_BITS       ($clog2(`DCIM_TILE_OBUF_NUM_BANKS))
+`define DCIM_TILE_OBUF_BANK_ADDR_WIDTH (`DCIM_TILE_OBUF_ADDR_WIDTH - `DCIM_TILE_OBUF_BANK_BITS)
+`define DCIM_TILE_OBUF_BANK_RD_EN_DEPTH (`DCIM_TILE_OBUF_NBPIPE + 1)
+`define DCIM_TILE_OBUF_RD_LATENCY      6   // reg(1) + NBPIPE(4) + mux(1)
+`define DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY 6
+
+// ── VPU_BUF 推导 ────────────────────────────────────────────────────────────
+`define VPU_BUF_BANK_BITS              ($clog2(`VPU_BUF_NUM_BANKS))
+`define VPU_BUF_BANK_ADDR_WIDTH        (`VPU_BUF_ADDR_WIDTH - `VPU_BUF_BANK_BITS)
+`define VPU_BUF_BANK_RD_EN_DEPTH       (`VPU_BUF_NBPIPE + 1)
+`define VPU_BUF_BANK_MUX_PIPE          10   // NBPIPE(6) + IN_REG(1) + 3
+`define VPU_BUF_AXI_BRAM_READ_LATENCY  12  // BANK_MUX_PIPE(10) + 2
+
+// ── tile_obuf 外部字节地址：字地址即 tile 内部地址 ──────────────────────────
+`define DCIM_OBUF_EXT_ADDR_BITS `DCIM_TILE_OBUF_ADDR_WIDTH  // = 14 bits
 
 // ── DCIM 配置寄存器地址（与 INST_Decoder OP_DCIM_CFG 一致）─────────────────
 `define DCIM_REG_CTRL           12'h000  // [0] start (W1S, 自清)

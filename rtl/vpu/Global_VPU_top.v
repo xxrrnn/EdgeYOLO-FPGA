@@ -1,12 +1,11 @@
 `timescale 1ns/1ps
 `include "chip_defines.vh"
-`include "chip_defines.vh"
 
-// Global_VPU_top - VPU 顶层模块 (lite 版本)
-// lite 变更：
-//   - 删除 GB BRAM 接口（VPU 通过 obuf_* 直接访问 DCIM OBUF）
-//   - 保留 WB BRAM 接口（128-bit）
-//   - obuf_* 端口连接到 DCIM_Array_bd 的 VPU OBUF 端口
+// Global_VPU_top - VPU 顶层模块 (chip-v2)
+// chip-v2 变更：
+//   - 内置 vpu_buf（4MB），VPU 直接读写本地 buffer
+//   - 对外暴露 vpu_buf Port B 的 AXI BRAM 接口（CDMA/XDMA 读写）
+//   - 删除 obuf_* 端口（不再连接 DCIM OBUF）
 
 module Global_VPU_top #(
     parameter ADDR_WIDTH = `VPU_DATA_WIDTH,
@@ -24,7 +23,7 @@ module Global_VPU_top #(
     parameter Q_INT_WIDTH_OUT = `Q_INT_WIDTH_OUT
 )(
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 CLK.CLK CLK" *)
-    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.CLK, ASSOCIATED_BUSIF wb_bram, ASSOCIATED_RESET rst_n, FREQ_HZ 250000000, PHASE 0.0, INSERT_VIP 0" *)
+    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.CLK, ASSOCIATED_BUSIF wb_bram:vpu_buf_bram, ASSOCIATED_RESET rst_n, FREQ_HZ 250000000, PHASE 0.0, INSERT_VIP 0" *)
     input   wire                     clk,
     (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 RST.RST_N RST" *)
     (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME RST.RST_N, POLARITY ACTIVE_LOW, INSERT_VIP 0" *)
@@ -45,15 +44,25 @@ module Global_VPU_top #(
     input   wire [ADDR_WIDTH-1:0]    addr_break,
     input   wire [ADDR_WIDTH-1:0]    addr_s,
     input   wire [ADDR_WIDTH-1:0]    addr_t,
-    input   wire [3:0]               vpu_flags,   // flags[0]=relu_en（DQA 用）
+    input   wire [3:0]               vpu_flags,
 
-    // lite: OBUF 128-bit 端口（替代 GB，直连 DCIM OBUF）
-    output wire [`DCIM_OBUF_ADDR_WIDTH-1:0]  obuf_addr,
-    output wire                              obuf_en,
-    output wire [`DCIM_BUF_DATA_WIDTH/8-1:0] obuf_we,
-    output wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_din,
-    input  wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_dout,
-    input  wire                              obuf_rd_valid,
+    // VPU_BUF Port B: AXI BRAM 接口（CDMA/XDMA 访问 vpu_buf）
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram CLK" *)
+    (* X_INTERFACE_MODE = "Slave" *)
+    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME vpu_buf_bram, MEM_SIZE 4194304, MEM_WIDTH 128, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 12, READ_WRITE_MODE READ_WRITE" *)
+    input  wire                      vpu_buf_bram_clk,
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram RST" *)
+    input  wire                      vpu_buf_bram_rst,
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram EN" *)
+    input  wire                      vpu_buf_bram_en,
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram WE" *)
+    input  wire [15:0]               vpu_buf_bram_we,
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram ADDR" *)
+    input  wire [`VPU_BUF_AXI_ADDR_WIDTH-1:0] vpu_buf_bram_addr,
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram DIN" *)
+    input  wire [127:0]              vpu_buf_bram_din,
+    (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram DOUT" *)
+    output wire [127:0]              vpu_buf_bram_dout,
 
     // Weight Buffer (WB) BRAM 接口 - 128-bit
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 wb_bram CLK" *)
@@ -80,6 +89,47 @@ module Global_VPU_top #(
 
     wire [WB_ADDR_WIDTH-1:0] wb_bram_word_addr = wb_bram_addr >> BYTE_ADDR_SHIFT;
 
+    // -----------------------------------------------------------------------
+    // VPU → vpu_buf 内部连接
+    // -----------------------------------------------------------------------
+    wire [`VPU_BUF_ADDR_WIDTH-1:0]     vpu_obuf_addr;
+    wire                               vpu_obuf_en;
+    wire [`DCIM_BUF_DATA_WIDTH/8-1:0]  vpu_obuf_we;
+    wire [`DCIM_BUF_DATA_WIDTH-1:0]    vpu_obuf_din;
+    wire [`DCIM_BUF_DATA_WIDTH-1:0]    vpu_obuf_dout;
+    wire                               vpu_obuf_rd_valid;
+
+    // -----------------------------------------------------------------------
+    // vpu_buf Port B: AXI BRAM 字节地址 → 字地址
+    // -----------------------------------------------------------------------
+    wire [`VPU_BUF_ADDR_WIDTH-1:0] vpu_buf_portb_addr = vpu_buf_bram_addr[BYTE_ADDR_SHIFT +: `VPU_BUF_ADDR_WIDTH];
+
+    wire [`DCIM_BUF_DATA_WIDTH-1:0] vpu_buf_portb_dout;
+    assign vpu_buf_bram_dout = vpu_buf_portb_dout;
+
+    // -----------------------------------------------------------------------
+    // vpu_buf 实例化
+    // -----------------------------------------------------------------------
+    vpu_buf u_vpu_buf (
+        .clk(clk),
+        // Port A: VPU 读/写
+        .wea(vpu_obuf_we),
+        .mem_ena(vpu_obuf_en),
+        .dina(vpu_obuf_din),
+        .addra(vpu_obuf_addr),
+        .douta(vpu_obuf_dout),
+        .douta_valid(vpu_obuf_rd_valid),
+        // Port B: AXI BRAM（CDMA/XDMA）
+        .web(vpu_buf_bram_we),
+        .mem_enb(vpu_buf_bram_en),
+        .dinb(vpu_buf_bram_din),
+        .addrb(vpu_buf_portb_addr),
+        .doutb(vpu_buf_portb_dout)
+    );
+
+    // -----------------------------------------------------------------------
+    // Global_VPU 实例化
+    // -----------------------------------------------------------------------
     Global_VPU #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
@@ -113,13 +163,13 @@ module Global_VPU_top #(
         .addr_s(addr_s),
         .addr_t(addr_t),
         .vpu_flags(vpu_flags),
-        // lite: OBUF 端口
-        .obuf_addr(obuf_addr),
-        .obuf_en(obuf_en),
-        .obuf_we(obuf_we),
-        .obuf_din(obuf_din),
-        .obuf_dout(obuf_dout),
-        .obuf_rd_valid(obuf_rd_valid),
+        // VPU_BUF 端口（原 obuf 端口，现连接内部 vpu_buf）
+        .obuf_addr(vpu_obuf_addr),
+        .obuf_en(vpu_obuf_en),
+        .obuf_we(vpu_obuf_we),
+        .obuf_din(vpu_obuf_din),
+        .obuf_dout(vpu_obuf_dout),
+        .obuf_rd_valid(vpu_obuf_rd_valid),
         // WB 接口
         .wb_addra(wb_bram_word_addr[WB_ADDR_WIDTH-1:0]),
         .wb_dina(wb_bram_din),

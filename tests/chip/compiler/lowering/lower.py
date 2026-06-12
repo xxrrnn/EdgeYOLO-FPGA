@@ -278,7 +278,7 @@ def lower(
     plan["network"] = network["model_info"].get("name") or plan["network"]
     plan["host_io"] = {
         "input_obuf_off": 0x000000,
-        "output_obuf_off": 0x400000,
+        "output_obuf_off": 0x180000,
         "input_dtype": "uint8" if input_shape[1] == 3 else "int8",
         "output_dtype": "float32",
     }
@@ -461,11 +461,11 @@ def lower(
     plan["memory_plan"]["layers"] = layer_records
     plan["weights_layout"]["layers"] = weight_records
     plan["wb_layout"]["layers"] = wb_records
-    # Pre-assign OBUF wb-scratch byte offsets per layer.  The host uploads the
-    # WB section (scales + biases) for layer i to obuf_wb_scratch[lo + i*size]
+    # Pre-assign VPU_BUF wb-scratch byte offsets per layer.  The host uploads the
+    # WB section (scales + biases) for layer i to vpu_buf_skip[lo + i*size]
     # at boot time, then the program's CDMA copies it into VPU WB just-in-time.
     scratch_off_by_layer = {}
-    obuf_wb_lo = 0xFF0000     # MemoryPlanner.obuf_wb_scratch.lo
+    obuf_wb_lo = 0x3C0000     # MemoryPlanner.obuf_skip.lo (chip-v2: vpu_buf skip region)
     cur = obuf_wb_lo
     for w in wb_records:
         scratch_off_by_layer[w["name"]] = cur

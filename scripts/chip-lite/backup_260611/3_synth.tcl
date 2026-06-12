@@ -91,9 +91,9 @@ proc timing_gate {stage} {
 }
 
 # ==============================================================================
-# Step 1: 顶层综合（Project Mode — 自动处理 OOC IP stub/DCP）
+# Step 1: 顶层综合
 # ==============================================================================
-puts "\n========== Step 1: Synthesis (project mode) =========="
+puts "\n========== Step 1: Synthesis =========="
 
 set bdFile [file normalize "$bdDir/$bdName/$bdName.bd"]
 if {[llength [get_files -quiet $bdFile]] == 0} { add_files -norecurse $bdFile }
@@ -111,25 +111,68 @@ foreach xdcFile [glob -nocomplain [file normalize "$xdcDir/chip/*.xdc"]] {
     }
 }
 
-# 设置 synth_1 run 的 strategy/directive
-set_property strategy "Vivado Synthesis Defaults" [get_runs synth_1]
-set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} \
-    -value "-directive $synDirective -resource_sharing auto" \
-    -objects [get_runs synth_1]
+export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
-# Project-mode synth: Vivado 自动管理 OOC IP + stub + top-level
-launch_runs synth_1 -jobs $synthJobs
-wait_on_runs synth_1
+# 强制重新生成 BD targets（含 module reference stub），防止增量编译时
+# 自定义模块（如 lite_cdma_ctrl_0）的 stub 丢失导致 synth_design 报
+# "module not found" (Vivado realtime compilation 的已知问题)
+generate_target all [get_files $bdFile] -force -quiet
 
-# 检查 synth_1 是否成功
-set _synth_status [get_property STATUS [get_runs synth_1]]
-if {![regexp -nocase {synth_design complete} $_synth_status]} {
-    error "Synthesis failed: STATUS=$_synth_status"
+# -----------------------------------------------------------------------
+# 对 BD 内 Xilinx 原生 IP（非 modRef）注册黑盒 stub，确保 synth_design
+# 使用 OOC DCP 而非尝试重新综合 .vhd（.vhd 引用 IP 内部库，顶层不可见）。
+#
+# 根本原因：export_ip_user_files 会把 ip_cache 里的旧 stub 加入 fileset，
+# 可能带 USED_IN_SYNTHESIS=false；同时 read_verilog 对"已在 fileset 的相同
+# 路径文件"会静默失败（被 catch 掩盖），导致综合仍找不到模块。
+#
+# 正确做法：
+#   1. 先把 fileset 里所有同名 *_stub.v 标记 USED_IN_SYNTHESIS=false
+#   2. read_verilog 加入 ip_stubs/ 版本（如已存在则 get_files 直接引用）
+#   3. 显式 set_property USED_IN_SYNTHESIS true（绝不依赖默认值）
+#   4. 打印明确诊断信息，无任何静默失败
+# -----------------------------------------------------------------------
+set _stub_dir [file normalize "$projPath/ip_stubs"]
+foreach _stub [glob -nocomplain "$_stub_dir/*_stub.v"] {
+    set _base [file rootname [file tail $_stub]]
+    set _ipn  [string range $_base 0 end-5]               ;# strip "_stub"
+    if {[lsearch -exact $modRefIpTops $_ipn] >= 0} { continue }
+
+    # 1. 禁用 fileset 里已有的所有同名 stub（ip_cache 等来源）
+    foreach _sf [get_files -quiet -filter "NAME =~ *${_ipn}_stub.v"] {
+        catch {set_property USED_IN_SYNTHESIS false [get_files $_sf]}
+    }
+
+    # 2. 若对应 XCI 存在，尝试设 SYNTH_CHECKPOINT_MODE（只读时 catch 忽略）
+    set _xci_list [get_files -quiet -filter "NAME =~ *${_ipn}.xci"]
+    if {[llength $_xci_list]} {
+        catch {set_property SYNTH_CHECKPOINT_MODE Singular [get_files [lindex $_xci_list 0]]}
+    }
+
+    # 3. 禁用 BD 生成的 .vhd/.v synth wrapper（引用 IP 内部库，顶层不可见）
+    foreach _ext {.vhd .v .vho} {
+        set _wrap [get_files -quiet -filter "NAME =~ *${_ipn}/synth/${_ipn}${_ext}"]
+        if {[llength $_wrap]} {
+            catch {set_property USED_IN_SYNTHESIS false [get_files [lindex $_wrap 0]]}
+        }
+    }
+
+    # 4. 加入 ip_stubs/ 版本（若已在 fileset 则 read_verilog 会出错，catch 忽略）
+    catch {read_verilog $_stub}
+
+    # 5. 无论 read_verilog 是否成功，都显式按路径找到文件并强制 USED_IN_SYNTHESIS=true
+    set _sf_new [get_files -quiet [file normalize $_stub]]
+    if {[llength $_sf_new] == 0} {
+        puts "ERROR: \[synth_prep\] stub NOT in fileset after read_verilog: $_ipn ($_stub)"
+    } else {
+        catch {set_property USED_IN_SYNTHESIS true [get_files [lindex $_sf_new 0]]}
+        puts "INFO: \[synth_prep\] stub activated (USED_IN_SYNTHESIS=true): $_ipn"
+    }
 }
-puts "INFO: synth_1 completed: $_synth_status"
+update_compile_order -fileset sources_1
 
-# 打开综合结果（进入 non-project 实现流程）
-open_run synth_1 -name synth_1
+synth_design -top $topName -part $part -directive $synDirective \
+    -resource_sharing auto
 
 write_checkpoint -force [file normalize "$SynOutputDir/post_synth.dcp"]
 reload_xdc
@@ -168,17 +211,18 @@ report_utilization -file [file normalize "$ImplOutputDir/post_opt_util.rpt"]
 # ==============================================================================
 puts "\n========== Step 3: Place Design =========="
 
-# place_design 多线程说明：
-#   - Vivado 2024.2 的 ILR（Incremental Logic Replication）功能在多线程下
-#     有已知 SIGSEGV crash bug（AMD AR #1274840）。
-#   - 解决方案：用 set_param place.ILREnabled false 关闭 ILR，
-#     多线程本身完全安全，可以提速约 30-50%。
-#   - ILR 关闭的影响：timing 结果略微变差（约 0.05~0.1ns WNS 劣化），
-#     对已有 -1.1ns 违例的设计影响可忽略。
-catch {set_param place.ILREnabled false}  ;# 关闭触发 crash 的 ILR（Vivado 2024.2 已移除此参数，catch 防止报错）
-set_param general.maxThreads 8     ;# place 用 8 线程（内存占用适中）
+# place 参数由 config.tcl 的 placeMode 控制（fast / safe）。
+if {$placeMode eq "safe"} {
+    catch {set_param place.ILREnabled true}
+    set_param general.maxThreads 1
+    puts "INFO: \[place_mode\] safe — ILR=on, threads=1"
+} else {
+    catch {set_param place.ILREnabled false}
+    set_param general.maxThreads 32
+    puts "INFO: \[place_mode\] fast — ILR=off, threads=32"
+}
 place_design -directive $placeDirective
-set_param general.maxThreads 32   ;# 恢复最大线程供后续步骤使用
+set_param general.maxThreads 32
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]

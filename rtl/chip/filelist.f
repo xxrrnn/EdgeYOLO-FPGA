@@ -26,13 +26,16 @@
 ../../ref/DCIM/src/model/model_rf.sv
 ../../ref/DCIM/src/model/model_rf_bram.sv
 
-# IBUF/OBUF
+# IBUF + Buffer 模块 (chip-v2)
 ../../DCIM_Macro/ibuf.v
-../../DCIM_Macro/obuf.v
+../obuf_bank.v
+../tile_obuf.v
+
+# VPU buffer
+../../vpu/vpu_buf.v
 
 # DCIM Tile-Array
 ../DCIM_Tile.sv
 ../ibuf_rd_arbiter.sv
-../obuf_wr_arbiter.sv
 ../DCIM_Array.sv
 ../DCIM_Array_bd.v

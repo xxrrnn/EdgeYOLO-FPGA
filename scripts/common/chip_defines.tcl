@@ -26,21 +26,41 @@ proc chip_get {name {default ""}} {
     return [get_vpu_param $name $default]
 }
 
-# 将 DCIM IBUF/OBUF 的 axi_bram_ctrl READ_LATENCY 与 chip_defines 对齐
+# 将 DCIM IBUF / tile_obuf / VPU_BUF 的 axi_bram_ctrl READ_LATENCY 与 chip_defines 对齐
 proc apply_dcim_axi_bram_read_latency {} {
+    # IBUF controller
     foreach {cell_name macro_name} {
         dcim_ibuf_ctrl_0 DCIM_IBUF_AXI_BRAM_READ_LATENCY
-        dcim_obuf_ctrl_0 DCIM_OBUF_AXI_BRAM_READ_LATENCY
     } {
         set cells [get_bd_cells -quiet $cell_name]
-        if {[llength $cells] == 0} {
-            continue
-        }
+        if {[llength $cells] == 0} { continue }
         set lat [chip_get $macro_name]
         if {![string is integer -strict $lat]} {
             error "Invalid $macro_name=$lat (expected integer)"
         }
         set_property CONFIG.READ_LATENCY $lat $cells
         puts "INFO: $cell_name CONFIG.READ_LATENCY=$lat ($macro_name)"
+    }
+    # tile_obuf controllers
+    for {set t 0} {$t < 4} {incr t} {
+        set cell "tile_obuf_ctrl_${t}"
+        set cells [get_bd_cells -quiet $cell]
+        if {[llength $cells] == 0} { continue }
+        set lat [chip_get DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY]
+        if {![string is integer -strict $lat]} {
+            error "Invalid DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY=$lat"
+        }
+        set_property CONFIG.READ_LATENCY $lat $cells
+        puts "INFO: $cell CONFIG.READ_LATENCY=$lat (DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY)"
+    }
+    # VPU_BUF controller
+    set cells [get_bd_cells -quiet vpu_buf_ctrl]
+    if {[llength $cells] != 0} {
+        set lat [chip_get VPU_BUF_AXI_BRAM_READ_LATENCY]
+        if {![string is integer -strict $lat]} {
+            error "Invalid VPU_BUF_AXI_BRAM_READ_LATENCY=$lat"
+        }
+        set_property CONFIG.READ_LATENCY $lat $cells
+        puts "INFO: vpu_buf_ctrl CONFIG.READ_LATENCY=$lat (VPU_BUF_AXI_BRAM_READ_LATENCY)"
     }
 }

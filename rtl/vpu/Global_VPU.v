@@ -46,14 +46,13 @@ module Global_VPU #(
     input wire [ADDR_WIDTH-1:0]             addr_s,
     input wire [ADDR_WIDTH-1:0]             addr_t,
 
-    // lite: OBUF 128-bit 端口（与 DCIM OBUF 物理宽度一致）
-    // VPU 内部 unit 仍用 256-bit (GB_BANDWIDTH)，顶层做 256↔128 双拍适配
-    output wire [`DCIM_OBUF_ADDR_WIDTH-1:0]  obuf_addr,        // 20 (128-bit 字地址)
+    // chip-v2: VPU 通过 vpu_buf 本地 buffer 读写（ADDR_WIDTH=18, 128-bit 字地址）
+    output wire [`VPU_BUF_ADDR_WIDTH-1:0]   obuf_addr,        // 18 (128-bit 字地址, 4MB)
     output wire                              obuf_en,
     output wire [`DCIM_BUF_DATA_WIDTH/8-1:0] obuf_we,          // 16-byte strb
     output wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_din,         // 128-bit
     input  wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_dout,        // 128-bit
-    input  wire                              obuf_rd_valid,    // OBUF 读数据有效（ready/valid）
+    input  wire                              obuf_rd_valid,    // VPU_BUF 读数据有效
 
     // WB 端口保留
     input wire [WB_ADDR_WIDTH-1:0]          wb_addra,
@@ -654,7 +653,7 @@ assign fp_c_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_c_tdata  :
   //   但为了不修改所有 unit，这里根据 unit_choose_reg 选择性右移
   assign obuf_addr = (unit_active == UNIT_IM2COL) ?
                      gb_addrb[GB_ADDR_WIDTH-1 : 4] :  // im2col: 字节地址 >> 4
-                     gb_addrb[`DCIM_OBUF_ADDR_WIDTH-1 : 0];  // 其他 unit: 已是 word 地址
+                     gb_addrb[`VPU_BUF_ADDR_WIDTH-1 : 0];  // 其他 unit: 已是 word 地址
   assign obuf_en   = gb_enb;
   assign obuf_we   = gb_web;
   assign obuf_din  = gb_dinb;

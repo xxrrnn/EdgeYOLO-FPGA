@@ -1,4 +1,12 @@
-"""Static memory planner for OBUF / IBUF / WB allocations."""
+"""Static memory planner for VPU_BUF / IBUF / WB allocations (chip-v2).
+
+In chip-v2, the shared 16MB OBUF is replaced by:
+  - vpu_buf (4MB): VPU local read/write buffer
+  - tile_obuf (256KB × 4): per-tile DCIM output buffers
+
+VPU operations (im2col, dqa, qa, mp, us, ad) use vpu_buf exclusively.
+DCIM results land in tile_obuf and are copied to vpu_buf via CDMA.
+"""
 
 from __future__ import annotations
 
@@ -52,26 +60,25 @@ class Allocation:
 
 
 class MemoryPlanner:
-    """OBUF, IBUF, WB byte-region allocator.
+    """VPU_BUF, IBUF, WB byte-region allocator.
 
-    Strategy (from plan §4):
-      OBUF: ping (0..4MB) / pong (4..8MB) / im2col scratch (8..12MB) / skip (12..15.9375MB) /
-            wb_scratch (15.9375..16MB)
+    Strategy (chip-v2, 4MB vpu_buf):
+      VPU_BUF: ping (0..1.5MB) / pong (1.5..3MB) / im2col scratch (3..3.75MB) / skip (3.75..4MB)
       IBUF: bump-pointer for current-layer weights (reset before each layer)
       WB:   bump-pointer per layer (reset before each layer)
     """
 
     def __init__(self, address_map: Dict[str, int]):
-        obuf_size = int(address_map["obuf_size"])
+        obuf_size = int(address_map.get("vpu_buf_size", address_map.get("obuf_size")))
         ibuf_size = int(address_map["ibuf_size"])
         wb_size = int(address_map["wb_size"])
 
-        # OBUF regions (byte offsets relative to obuf_base)
-        self.obuf_ping = Region("obuf_ping", 0x000000, 0x400000)
-        self.obuf_pong = Region("obuf_pong", 0x400000, 0x800000)
-        self.obuf_im2col = Region("obuf_im2col", 0x800000, 0xC00000)
-        self.obuf_skip = Region("obuf_skip", 0xC00000, 0xFF0000)
-        self.obuf_wb_scratch = Region("obuf_wb_scratch", 0xFF0000, obuf_size)
+        # VPU_BUF regions (byte offsets relative to vpu_buf_base)
+        # 4MB = 0x400000: split into ping/pong/im2col/skip
+        self.obuf_ping = Region("vpu_buf_ping", 0x000000, 0x180000)       # 1.5MB
+        self.obuf_pong = Region("vpu_buf_pong", 0x180000, 0x300000)       # 1.5MB
+        self.obuf_im2col = Region("vpu_buf_im2col", 0x300000, 0x3C0000)   # 768KB
+        self.obuf_skip = Region("vpu_buf_skip", 0x3C0000, obuf_size)      # 256KB
 
         # IBUF whole region (byte offset relative to ibuf_base)
         self.ibuf = Region("ibuf", 0x000000, ibuf_size)
@@ -84,21 +91,21 @@ class MemoryPlanner:
         # per-tensor allocation table for the IR
         self.tensor_offset: Dict[str, Tuple[str, int, int]] = {}
 
-    # -- OBUF feature buffer (double-buffered) --
+    # -- VPU_BUF feature buffer (double-buffered) --
     def assign_layer_ping_pong(self, in_bytes: int, out_bytes: int) -> Tuple[int, int]:
-        """Return (in_offset_in_obuf, out_offset_in_obuf) for one layer.
+        """Return (in_offset_in_vpu_buf, out_offset_in_vpu_buf) for one layer.
 
         The two halves alternate so that consecutive layers can be chained
-        without copying.  Sizes must fit in 4MB each.
+        without copying.  Sizes must fit in 1.5MB each.
         """
         if in_bytes > (self.obuf_ping.hi - self.obuf_ping.lo):
             raise OutOfBuffer(
-                f"layer input {in_bytes} bytes exceeds OBUF ping/pong region "
+                f"layer input {in_bytes} bytes exceeds VPU_BUF ping/pong region "
                 f"{self.obuf_ping.hi - self.obuf_ping.lo} bytes"
             )
         if out_bytes > (self.obuf_ping.hi - self.obuf_ping.lo):
             raise OutOfBuffer(
-                f"layer output {out_bytes} bytes exceeds OBUF ping/pong region"
+                f"layer output {out_bytes} bytes exceeds VPU_BUF ping/pong region"
             )
         if self._ping_pong_toggle == 0:
             in_off = self.obuf_ping.lo
@@ -115,10 +122,6 @@ class MemoryPlanner:
 
     def alloc_skip(self, nbytes: int) -> int:
         return self.obuf_skip.lo + self.obuf_skip.alloc(nbytes)
-
-    def alloc_wb_scratch(self, nbytes: int) -> int:
-        self.obuf_wb_scratch.reset()
-        return self.obuf_wb_scratch.lo + self.obuf_wb_scratch.alloc(nbytes)
 
     # -- IBUF (weights for current layer) --
     def reset_ibuf(self):
