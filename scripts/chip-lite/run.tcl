@@ -130,7 +130,7 @@ if {$resumeFrom ne ""} {
 
     set_param general.maxThreads 32
     route_design -directive $routeDirective
-    phys_opt_design -hold_fix -directive AggressiveExplore
+    phys_opt_design -hold_fix
     write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
     report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
     report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \

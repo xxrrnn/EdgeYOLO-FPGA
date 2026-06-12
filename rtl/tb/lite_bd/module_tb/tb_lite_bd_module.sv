@@ -22,16 +22,9 @@ module tb_lite_bd_module;
     localparam int MAX_CHECKS = 1024;
     localparam int MAX_SUITE_CASES = 1024;
 
-    // chip-v2: VPU_BUF bank decode parameters (avoids $clog2 in bit-select)
-    localparam int VPU_BUF_AW       = `VPU_BUF_ADDR_WIDTH;     // 18
-    localparam int VPU_BUF_BANKS    = `VPU_BUF_NUM_BANKS;       // 16
-    localparam int VPU_BUF_BK_BITS  = $clog2(VPU_BUF_BANKS);   // 4
-    localparam int VPU_BUF_BK_AW    = VPU_BUF_AW - VPU_BUF_BK_BITS;  // 14
-    // chip-v2: tile_obuf bank decode parameters
+    // chip-v3 XPM: VPU_BUF 和 tile_obuf 为单一连续 XPM 阵列，无需 bank decode
+    localparam int VPU_BUF_AW       = `VPU_BUF_ADDR_WIDTH;     // 19 (8MB)
     localparam int TILE_OBUF_AW     = `DCIM_TILE_OBUF_ADDR_WIDTH;  // 14
-    localparam int TILE_OBUF_BANKS  = `DCIM_TILE_OBUF_NUM_BANKS;   // 4
-    localparam int TILE_OBUF_BK_BITS = $clog2(TILE_OBUF_BANKS);    // 2
-    localparam int TILE_OBUF_BK_AW  = TILE_OBUF_AW - TILE_OBUF_BK_BITS; // 12
 
     reg        cpu_reset;
     reg  [7:0] pci_rxn, pci_rxp;
@@ -207,44 +200,19 @@ module tb_lite_bd_module;
     endfunction
 
     task automatic backdoor_read_obuf_word(input int unsigned word_addr, output [127:0] word128);
-        int unsigned bank_sel, bank_addr;
         begin
-            bank_sel  = word_addr[VPU_BUF_AW-1 -: VPU_BUF_BK_BITS];
-            bank_addr = word_addr[VPU_BUF_BK_AW-1:0];
-            case (bank_sel)
-                0:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[0].u_bank.mem[bank_addr];
-                1:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[1].u_bank.mem[bank_addr];
-                2:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[2].u_bank.mem[bank_addr];
-                3:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[3].u_bank.mem[bank_addr];
-                4:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[4].u_bank.mem[bank_addr];
-                5:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[5].u_bank.mem[bank_addr];
-                6:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[6].u_bank.mem[bank_addr];
-                7:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[7].u_bank.mem[bank_addr];
-                8:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[8].u_bank.mem[bank_addr];
-                9:  word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[9].u_bank.mem[bank_addr];
-                10: word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[10].u_bank.mem[bank_addr];
-                11: word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[11].u_bank.mem[bank_addr];
-                12: word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[12].u_bank.mem[bank_addr];
-                13: word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[13].u_bank.mem[bank_addr];
-                14: word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[14].u_bank.mem[bank_addr];
-                15: word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[15].u_bank.mem[bank_addr];
-                default: begin
-                    $display("FATAL: VPU_BUF backdoor read bank out of range word_addr=0x%0h bank=%0d",
-                             word_addr, bank_sel);
-                    $finish(1);
-                end
-            endcase
+            word128 = dut.lite_i.vpu_0.inst.u_vpu_buf.u_uram.mem[word_addr];
         end
     endtask
 
-    // chip-v2: checks.txt dst bit22 set → 读 tile_obuf
+    // chip-v3: checks.txt dst bit23 set → 读 tile_obuf
     // expected.hex 格式: for px, for tile(0..3), for word[0..WPT-1]
     // DCIM硬件: 每个 tile 地址空间独立，px N 的数据写在 addr = px*WPT + intra_w
     //   WPT = DCIM_CH_OUT/8 = 8
     localparam int DCIM_WORDS_PER_TILE_PX = (`DCIM_CH_OUT / 8);  // INT8: 64ch/tile ÷ 4ch/word = 8 (32-bit acc)
     localparam int DCIM_NUM_TILES_LC      = `DCIM_NUM_TILES;      // 4
     localparam int DCIM_OUT_STRIDE        = DCIM_NUM_TILES_LC * DCIM_WORDS_PER_TILE_PX; // 32
-    localparam logic [23:0] TILE_OBUF_CHK_SENTINEL = 24'h40_0000; // bit22 = sentinel flag
+    localparam logic [23:0] TILE_OBUF_CHK_SENTINEL = 24'h80_0000; // bit23 = sentinel flag
 
     // 当前 check 使用的 wpt（words per tile per px），由 run_checks 写入，obuf_read_word128 读取
     int unsigned cur_wpt = 0;
@@ -256,12 +224,12 @@ module tb_lite_bd_module;
         reg [255:0] rdat;
         begin
             if (preload_mode == "backdoor") begin
-                if (obuf_byte_off[22]) begin
+                if (obuf_byte_off[23]) begin
                     // tile_obuf 路径：expected.hex 按 [px][tile][intra_w] 排列
                     // 每个 tile 地址空间独立：物理 tile_word_addr = px * WPT + intra_w
                     wpt    = (cur_wpt > 0) ? int'(cur_wpt) : DCIM_WORDS_PER_TILE_PX;
                     stride = DCIM_NUM_TILES_LC * wpt;
-                    word_addr    = int'((obuf_byte_off & 24'h3F_FFFF) >> 4);
+                    word_addr    = int'((obuf_byte_off & 24'h7F_FFFF) >> 4);
                     px           = int'(word_addr) / stride;
                     tile_idx     = (int'(word_addr) % stride) / wpt;
                     intra_w      = int'(word_addr) % wpt;
@@ -349,18 +317,15 @@ module tb_lite_bd_module;
         end
     endtask
 
-    task automatic backdoor_write_ibuf_word(input int unsigned word_addr, input [127:0] word128);
-        int unsigned bank_sel, bank_addr;
+    task automatic backdoor_write_ibuf_word(input int tile_idx, input int unsigned word_addr, input [127:0] word128);
         begin
-            bank_sel  = word_addr[`DCIM_IBUF_ADDR_WIDTH-1 -: `DCIM_IBUF_BANK_BITS];
-            bank_addr = word_addr[`DCIM_IBUF_BANK_ADDR_WIDTH-1:0];
-            case (bank_sel)
-                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
-                2: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
-                3: dut.lite_i.dcim_array_0.inst.u_dcim_array.u_ibuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
+            case (tile_idx)
+                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                2: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                3: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_ibuf.u_uram.mem[word_addr] = word128;
                 default: begin
-                    $display("FATAL: IBUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
+                    $display("FATAL: tile_ibuf backdoor tile=%0d out of range", tile_idx);
                     $finish(1);
                 end
             endcase
@@ -368,59 +333,20 @@ module tb_lite_bd_module;
     endtask
 
     task automatic backdoor_write_obuf_word(input int unsigned word_addr, input [127:0] word128);
-        int unsigned bank_sel, bank_addr;
         begin
-            bank_sel  = word_addr[VPU_BUF_AW-1 -: VPU_BUF_BK_BITS];
-            bank_addr = word_addr[VPU_BUF_BK_AW-1:0];
-            case (bank_sel)
-                0:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                1:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[1].u_bank.mem[bank_addr] = word128;
-                2:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[2].u_bank.mem[bank_addr] = word128;
-                3:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[3].u_bank.mem[bank_addr] = word128;
-                4:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[4].u_bank.mem[bank_addr] = word128;
-                5:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[5].u_bank.mem[bank_addr] = word128;
-                6:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[6].u_bank.mem[bank_addr] = word128;
-                7:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[7].u_bank.mem[bank_addr] = word128;
-                8:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[8].u_bank.mem[bank_addr] = word128;
-                9:  dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[9].u_bank.mem[bank_addr] = word128;
-                10: dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[10].u_bank.mem[bank_addr] = word128;
-                11: dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[11].u_bank.mem[bank_addr] = word128;
-                12: dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[12].u_bank.mem[bank_addr] = word128;
-                13: dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[13].u_bank.mem[bank_addr] = word128;
-                14: dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[14].u_bank.mem[bank_addr] = word128;
-                15: dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[15].u_bank.mem[bank_addr] = word128;
-                default: begin
-                    $display("FATAL: VPU_BUF backdoor bank out of range word_addr=0x%0h bank=%0d", word_addr, bank_sel);
-                    $finish(1);
-                end
-            endcase
+            dut.lite_i.vpu_0.inst.u_vpu_buf.u_uram.mem[word_addr] = word128;
         end
     endtask
 
     task automatic backdoor_write_tile_obuf_word(input int tile_idx, input int unsigned word_addr, input [127:0] word128);
-        int unsigned bank_sel, bank_addr;
         begin
-            bank_sel  = word_addr[TILE_OBUF_AW-1 -: TILE_OBUF_BK_BITS];
-            bank_addr = word_addr[TILE_OBUF_BK_AW-1:0];
-            case ({tile_idx[1:0], bank_sel[1:0]})
-                4'b00_00: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                4'b00_01: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
-                4'b00_10: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
-                4'b00_11: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
-                4'b01_00: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                4'b01_01: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
-                4'b01_10: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
-                4'b01_11: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
-                4'b10_00: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                4'b10_01: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
-                4'b10_10: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
-                4'b10_11: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
-                4'b11_00: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr] = word128;
-                4'b11_01: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr] = word128;
-                4'b11_10: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr] = word128;
-                4'b11_11: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr] = word128;
+            case (tile_idx)
+                0: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                2: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                3: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.u_uram.mem[word_addr] = word128;
                 default: begin
-                    $display("FATAL: tile_obuf backdoor tile=%0d bank=%0d out of range", tile_idx, bank_sel);
+                    $display("FATAL: tile_obuf backdoor tile=%0d out of range", tile_idx);
                     $finish(1);
                 end
             endcase
@@ -428,29 +354,14 @@ module tb_lite_bd_module;
     endtask
 
     task automatic backdoor_read_tile_obuf_word(input int tile_idx, input int unsigned word_addr, output [127:0] word128);
-        int unsigned bank_sel, bank_addr;
         begin
-            bank_sel  = word_addr[TILE_OBUF_AW-1 -: TILE_OBUF_BK_BITS];
-            bank_addr = word_addr[TILE_OBUF_BK_AW-1:0];
-            case ({tile_idx[1:0], bank_sel[1:0]})
-                4'b00_00: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr];
-                4'b00_01: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr];
-                4'b00_10: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr];
-                4'b00_11: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr];
-                4'b01_00: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr];
-                4'b01_01: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr];
-                4'b01_10: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr];
-                4'b01_11: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr];
-                4'b10_00: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr];
-                4'b10_01: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr];
-                4'b10_10: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr];
-                4'b10_11: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr];
-                4'b11_00: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[0].u_bank.mem[bank_addr];
-                4'b11_01: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[1].u_bank.mem[bank_addr];
-                4'b11_10: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[2].u_bank.mem[bank_addr];
-                4'b11_11: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.gen_banks[3].u_bank.mem[bank_addr];
+            case (tile_idx)
+                0: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[word_addr];
+                1: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.u_uram.mem[word_addr];
+                2: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.u_uram.mem[word_addr];
+                3: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.u_uram.mem[word_addr];
                 default: begin
-                    $display("FATAL: tile_obuf backdoor read tile=%0d bank=%0d out of range", tile_idx, bank_sel);
+                    $display("FATAL: tile_obuf backdoor read tile=%0d out of range", tile_idx);
                     $finish(1);
                 end
             endcase
@@ -475,18 +386,39 @@ module tb_lite_bd_module;
                     i = max_words;
             end
 
-            if (addr_in_range(base_addr, E2E_IBUF_BASE, E2E_IBUF_SIZE)) begin
-                word_addr = (base_addr - E2E_IBUF_BASE) >> 4;
+            if (addr_in_range(base_addr, E2E_IBUF_TILE0_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE0_BASE) >> 4;
                 for (i = 0; i < nwords; i = i + 1)
-                    backdoor_write_ibuf_word(word_addr + i, mem[i]);
+                    backdoor_write_ibuf_word(0, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE1_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE1_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(1, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE2_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE2_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(2, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE3_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE3_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(3, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_BASE, E2E_IBUF_SIZE)) begin
+                // Broadcast: address within 2MB range but not in specific tile → write ALL tiles
+                word_addr = (base_addr - E2E_IBUF_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1) begin
+                    backdoor_write_ibuf_word(0, word_addr + i, mem[i]);
+                    backdoor_write_ibuf_word(1, word_addr + i, mem[i]);
+                    backdoor_write_ibuf_word(2, word_addr + i, mem[i]);
+                    backdoor_write_ibuf_word(3, word_addr + i, mem[i]);
+                end
             end else if (addr_in_range(base_addr, E2E_VPU_BUF_BASE, E2E_VPU_BUF_SIZE)) begin
                 word_addr = (base_addr - E2E_VPU_BUF_BASE) >> 4;
                 for (i = 0; i < nwords; i = i + 1)
                     backdoor_write_obuf_word(word_addr + i, mem[i]);
 `ifdef SIMULATION
-                $display("[%0t] DBG: VPU_BUF preload word_addr=0x%0h nwords=%0d bank2_addr0=0x%0h",
+                $display("[%0t] DBG: VPU_BUF preload word_addr=0x%0h nwords=%0d mem[0]=0x%0h",
                          $time, word_addr, nwords,
-                         dut.lite_i.vpu_0.inst.u_vpu_buf.gen_banks[2].u_bank.mem[0]);
+                         dut.lite_i.vpu_0.inst.u_vpu_buf.u_uram.mem[0]);
 `endif
             end else if (addr_in_range(base_addr, E2E_TILE_OBUF0_BASE, E2E_TILE_OBUF_SIZE)) begin
                 word_addr = (base_addr - E2E_TILE_OBUF0_BASE) >> 4;
@@ -572,14 +504,33 @@ module tb_lite_bd_module;
                 rc = $fscanf(fd, "%s %s %h %d %d %d\n", check_name, expected_fname, dst_obuf, check_words, is_fp32, wpt);
                 if (rc >= 5) begin
                     cur_wpt = wpt;  // 设置当前 wpt（0 表示使用 INT8 默认值）
-                    if (dst_obuf[22]) begin
-                        $display("[%0t] DEBUG tile_obuf[0] bank[0]: mem[0]=%h mem[1]=%h mem[4]=%h mem[7]=%h mem[8]=%h",
+                    if (dst_obuf[23]) begin
+                        $display("[%0t] DEBUG tile_obuf[0] mem: [0]=%h [1]=%h [4]=%h [7]=%h [8]=%h",
                             $time,
-                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[0],
-                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[1],
-                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[4],
-                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[7],
-                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.gen_banks[0].u_bank.mem[8]);
+                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[0],
+                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[1],
+                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[4],
+                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[7],
+                            dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.u_uram.mem[8]);
+                    end else begin
+                        // VPU_BUF 路径：dump dst word 附近
+                        begin : _vpu_dbg
+                            int _w, _scan;
+                            int _nonzero_w;
+                            _w = int'(dst_obuf >> 4);
+                            // scan first 4096 words for non-zero
+                            _nonzero_w = -1;
+                            for (_scan = 0; _scan < 4096; _scan++) begin
+                                if (dut.lite_i.vpu_0.inst.u_vpu_buf.u_uram.mem[_scan] !== 0) begin
+                                    if (_nonzero_w == -1) _nonzero_w = _scan;
+                                end
+                            end
+                            $display("[%0t] DEBUG VPU_BUF mem[0]=%h mem[%0d]=%h first_nonzero_w=%0d",
+                                $time,
+                                dut.lite_i.vpu_0.inst.u_vpu_buf.u_uram.mem[0],
+                                _w, dut.lite_i.vpu_0.inst.u_vpu_buf.u_uram.mem[_w],
+                                _nonzero_w);
+                        end
                     end
                     compare_expected(check_name, expected_fname, dst_obuf, check_words, is_fp32);
                     n++;
@@ -789,9 +740,10 @@ module tb_lite_bd_module;
         end
         if (dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.mem_enb &&
             |dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.web) begin
-            $display("[%0t] TILE_OBUF[0] PortB WRITE: addr=%0h",
+            $display("[%0t] TILE_OBUF[0] PortB WRITE: addr=%0h dinb[31:0]=%08h",
                 $time,
-                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.addrb);
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.addrb,
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.dinb[31:0]);
         end
     end
 

@@ -335,16 +335,16 @@ module qa_unit #(
             qa_dbg_cycle_cnt <= '0;
         else begin
             qa_dbg_cycle_cnt <= qa_dbg_cycle_cnt + 1'b1;
+            // 无条件 debug（临时，找到 bug 后删除）
             if (c_state == QA_SAVE_HOLD && qa_done) begin
-`ifdef PROBE_QA
-                $display("[qa] DONE iter=%0d/%0d out_words=%0d",
-                         qa_iter_cnt, qa_total_iters_reg, qa_out_word_idx);
-`endif
-            end else if (c_state == QA_WAIT_X && qa_rd_wait_cnt[3:0] == 4'h0) begin
-`ifdef PROBE_QA
-                $display("[qa] WAIT_X in_word=0x%0h slot=%0d/%0d valid=%0b",
-                         qa_x_load_addr, pack_slot, saves_per_word_active, gb_doutb_valid);
-`endif
+                $display("[%0t][qa] DONE iter=%0d/%0d out_words=%0d",
+                         $time, qa_iter_cnt, qa_total_iters_reg, qa_out_word_idx);
+            end else if (c_state == QA_LOAD_X) begin
+                $display("[%0t][qa] LOAD_X addr=0x%0h iter=%0d/%0d",
+                         $time, qa_x_load_addr, qa_iter_cnt, qa_total_iters_reg);
+            end else if (c_state == QA_WAIT_X) begin
+                $display("[%0t][qa] WAIT_X addr=0x%0h valid=%0b iter=%0d",
+                         $time, qa_x_load_addr, gb_doutb_valid, qa_iter_cnt);
             end
         end
     end

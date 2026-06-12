@@ -1,19 +1,22 @@
 # ==============================================================================
-# address.tcl - chip-v2: distributed tile_obuf + VPU_BUF address map
+# address.tcl - chip-v3: distributed tile_ibuf + tile_obuf + VPU_BUF address map
 # ==============================================================================
 # 地址空间 (64-bit):
 #   0x0_0000_0000 ~ 0x0_FFFF_FFFF  HBM (4GB, interleaved, SAXI_00)
-#   0x1_0000_0000 ~ 0x1_001F_FFFF  DCIM IBUF (2MB)
+#   0x1_0000_0000 ~ 0x1_0007_FFFF  tile_ibuf_0 (512KB)
+#   0x1_0008_0000 ~ 0x1_000F_FFFF  tile_ibuf_1 (512KB)
+#   0x1_0010_0000 ~ 0x1_0017_FFFF  tile_ibuf_2 (512KB)
+#   0x1_0018_0000 ~ 0x1_001F_FFFF  tile_ibuf_3 (512KB)
 #   0x1_0100_0000 ~ 0x1_0103_FFFF  tile_obuf_0 (256KB)
 #   0x1_0104_0000 ~ 0x1_0107_FFFF  tile_obuf_1 (256KB)
 #   0x1_0108_0000 ~ 0x1_010B_FFFF  tile_obuf_2 (256KB)
 #   0x1_010C_0000 ~ 0x1_010F_FFFF  tile_obuf_3 (256KB)
-#   0x1_0200_0000 ~ 0x1_023F_FFFF  VPU_BUF (4MB)
+#   0x1_0200_0000 ~ 0x1_020F_FFFF  VPU_BUF (1MB)
 #   0x1_0300_0000 ~ 0x1_0307_FFFF  VPU WB (32KB)
 #   0x1_0400_0000 ~ 0x1_041F_FFFF  INST_BRAM (128KB)
 #   0x1_0500_0000 ~ 0x1_0500_0FFF  VPU_AXI_Regs (4KB)
 #
-# CDMA 可访问: HBM + IBUF + tile_obuf[0..3] + VPU_BUF + WB
+# CDMA 可访问: HBM + tile_ibuf[0..3] + tile_obuf[0..3] + VPU_BUF + WB
 # XDMA 可访问: 上述全部 + INST_BRAM + VPU_AXI_Regs
 # ==============================================================================
 
@@ -44,29 +47,35 @@ proc mv {pattern offset range_bytes} {
 # XDMA M_AXI: Phase 1 临时高位 → Phase 2 最终地址
 # ==============================================================================
 # Phase 1: 全部搬到临时高位（互不重叠）
-mv "xdma_0/M_AXI/SEG_dcim_ibuf_ctrl_0_Mem0"   0x1E0000000  2M
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_0_Mem0"   0x1E2000000  256K
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_1_Mem0"   0x1E2100000  256K
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_2_Mem0"   0x1E2200000  256K
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_3_Mem0"   0x1E2300000  256K
-mv "xdma_0/M_AXI/SEG_vpu_buf_ctrl_Mem0"       0x1E4000000  4M
-mv "xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0"        0x1F0000000  32K
-mv "xdma_0/M_AXI/SEG_inst_bram_ctrl_Mem0"     0x1F2000000  128K
-mv "xdma_0/M_AXI/SEG_vpu_regs_reg0"           0x1F4000000  4K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_0_Mem0"  0x1E0000000  512K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_1_Mem0"  0x1E0100000  512K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_2_Mem0"  0x1E0200000  512K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_3_Mem0"  0x1E0300000  512K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_0_Mem0"  0x1E2000000  256K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_1_Mem0"  0x1E2100000  256K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_2_Mem0"  0x1E2200000  256K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_3_Mem0"  0x1E2300000  256K
+mv "xdma_0/M_AXI/SEG_vpu_buf_ctrl_Mem0"      0x1E4000000  8M
+mv "xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0"       0x1F0000000  32K
+mv "xdma_0/M_AXI/SEG_inst_bram_ctrl_Mem0"    0x1F2000000  128K
+mv "xdma_0/M_AXI/SEG_vpu_regs_reg0"          0x1F4000000  4K
 
 # Phase 2: 最终目标地址
-mv "xdma_0/M_AXI/SEG_dcim_ibuf_ctrl_0_Mem0"   0x100000000  2M
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_0_Mem0"   0x101000000  256K
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_1_Mem0"   0x101040000  256K
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_2_Mem0"   0x101080000  256K
-mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_3_Mem0"   0x1010C0000  256K
-mv "xdma_0/M_AXI/SEG_vpu_buf_ctrl_Mem0"       0x102000000  4M
-mv "xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0"        0x103000000  32K
-mv "xdma_0/M_AXI/SEG_inst_bram_ctrl_Mem0"     0x104000000  128K
-mv "xdma_0/M_AXI/SEG_vpu_regs_reg0"           0x105000000  4K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_0_Mem0"  0x100000000  512K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_1_Mem0"  0x100080000  512K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_2_Mem0"  0x100100000  512K
+mv "xdma_0/M_AXI/SEG_tile_ibuf_ctrl_3_Mem0"  0x100180000  512K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_0_Mem0"  0x101000000  256K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_1_Mem0"  0x101040000  256K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_2_Mem0"  0x101080000  256K
+mv "xdma_0/M_AXI/SEG_tile_obuf_ctrl_3_Mem0"  0x1010C0000  256K
+mv "xdma_0/M_AXI/SEG_vpu_buf_ctrl_Mem0"      0x102000000  8M
+mv "xdma_0/M_AXI/SEG_vpu_wb_ctrl_Mem0"       0x103000000  32K
+mv "xdma_0/M_AXI/SEG_inst_bram_ctrl_Mem0"    0x104000000  128K
+mv "xdma_0/M_AXI/SEG_vpu_regs_reg0"          0x105000000  4K
 
 # ==============================================================================
-# CDMA M_AXI Data: IBUF + tile_obuf[0..3] + VPU_BUF + WB
+# CDMA M_AXI Data: tile_ibuf[0..3] + tile_obuf[0..3] + VPU_BUF + WB
 # Exclude inst_bram_ctrl and vpu_regs from CDMA
 # ==============================================================================
 set _cdma_inst_seg [get_bd_addr_segs -quiet "axi_cdma_0/Data/SEG_inst_bram_ctrl_Mem0"]
@@ -79,22 +88,28 @@ if {[llength $_cdma_regs_seg]} {
 }
 
 # Phase 1: 临时高位
-mv "axi_cdma_0/Data/SEG_dcim_ibuf_ctrl_0_Mem0"   0x1E0000000  2M
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_0_Mem0"   0x1E2000000  256K
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_1_Mem0"   0x1E2100000  256K
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_2_Mem0"   0x1E2200000  256K
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_3_Mem0"   0x1E2300000  256K
-mv "axi_cdma_0/Data/SEG_vpu_buf_ctrl_Mem0"       0x1E4000000  4M
-mv "axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0"        0x1F0000000  32K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_0_Mem0"  0x1E0000000  512K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_1_Mem0"  0x1E0100000  512K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_2_Mem0"  0x1E0200000  512K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_3_Mem0"  0x1E0300000  512K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_0_Mem0"  0x1E2000000  256K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_1_Mem0"  0x1E2100000  256K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_2_Mem0"  0x1E2200000  256K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_3_Mem0"  0x1E2300000  256K
+mv "axi_cdma_0/Data/SEG_vpu_buf_ctrl_Mem0"      0x1E4000000  8M
+mv "axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0"       0x1F0000000  32K
 
 # Phase 2: 最终地址（与 XDMA 一致）
-mv "axi_cdma_0/Data/SEG_dcim_ibuf_ctrl_0_Mem0"   0x100000000  2M
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_0_Mem0"   0x101000000  256K
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_1_Mem0"   0x101040000  256K
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_2_Mem0"   0x101080000  256K
-mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_3_Mem0"   0x1010C0000  256K
-mv "axi_cdma_0/Data/SEG_vpu_buf_ctrl_Mem0"       0x102000000  4M
-mv "axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0"        0x103000000  32K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_0_Mem0"  0x100000000  512K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_1_Mem0"  0x100080000  512K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_2_Mem0"  0x100100000  512K
+mv "axi_cdma_0/Data/SEG_tile_ibuf_ctrl_3_Mem0"  0x100180000  512K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_0_Mem0"  0x101000000  256K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_1_Mem0"  0x101040000  256K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_2_Mem0"  0x101080000  256K
+mv "axi_cdma_0/Data/SEG_tile_obuf_ctrl_3_Mem0"  0x1010C0000  256K
+mv "axi_cdma_0/Data/SEG_vpu_buf_ctrl_Mem0"      0x102000000  8M
+mv "axi_cdma_0/Data/SEG_vpu_wb_ctrl_Mem0"       0x103000000  32K
 
 # ==============================================================================
 # HBM @ 0x0_0000_0000 (4GB)

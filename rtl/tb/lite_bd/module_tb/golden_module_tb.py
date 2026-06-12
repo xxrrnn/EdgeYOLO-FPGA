@@ -49,6 +49,10 @@ from chip_config import (  # noqa: E402
 )
 require_consistent()
 
+# vpu_buf read pipeline depth（与 chip_defines.vh `VPU_BUF_RD_LATENCY` 保持一致）
+# 在两个连续 vpu_exec 之间插入这么多 NOP，避免上一个 unit 的 douta_valid 残留污染下一个 unit
+VPU_BUF_RD_LATENCY = 10
+
 NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'network.json')
 WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'weights')
 RESNET18_NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_qdq', 'network.json')
@@ -75,34 +79,89 @@ def dcim_effective_out_ch(meta: 'ConvMeta', int16: bool = False) -> int:
     return meta.num_tiles * DCIM_INT8_OUT_CH_PER_TILE
 
 HBM_PHY_BASE = 0x0
-IBUF_PHY_BASE = 0x1000_0000_0
-OBUF_PHY_BASE = 0x1020_0000_0   # chip-v2: VPU_BUF @ 0x1_0200_0000
+OBUF_PHY_BASE = 0x1020_0000_0   # chip-v3 XPM: VPU_BUF 8MB @ 0x1_0200_0000
+
+# Per-tile IBUF architecture: 4 tile_ibufs, 512KB each
+NUM_TILE_IBUFS = 4
+TILE_IBUF_SIZE_BYTES = 0x80_000   # 512KB per tile
+TILE_IBUF_PHY_BASES = [
+    0x1_0000_0000,  # tile_ibuf[0]
+    0x1_0008_0000,  # tile_ibuf[1]
+    0x1_0010_0000,  # tile_ibuf[2]
+    0x1_0018_0000,  # tile_ibuf[3]
+]
+IBUF_PHY_BASE = TILE_IBUF_PHY_BASES[0]  # backward compat (tile 0 base)
+IBUF_SIZE_BYTES = TILE_IBUF_SIZE_BYTES   # per-tile capacity (not total!)
+
+# Per-tile OBUF architecture: 4 tile_obufs, 256KB each
+# DCIM 把 INT32 accumulator 结果写到各自的 tile_obuf（与 VPU_BUF 物理独立）
+NUM_TILE_OBUFS = 4
+TILE_OBUF_SIZE_BYTES = 0x40_000  # 256KB per tile
+TILE_OBUF_PHY_BASES = [
+    0x1_0100_0000,  # tile_obuf[0]
+    0x1_0104_0000,  # tile_obuf[1]
+    0x1_0108_0000,  # tile_obuf[2]
+    0x1_010C_0000,  # tile_obuf[3]
+]
+
+# Activation and weight offsets WITHIN each tile_ibuf (512KB split: 256KB act + 256KB wei)
+IBUF_ACT = 0x000000            # activation start within each tile_ibuf
+IBUF_WEI = 0x040000            # weight start (256KB offset within 512KB)
 
 HBM_OFF_INPUT0 = 0x00000
 HBM_OFF_INPUT1 = 0x40000
 HBM_OFF_WEIGHT = 0x80000
 
+# ---------------------------------------------------------------------------
+# VPU_BUF flat-scratchpad 地址分配
+# ---------------------------------------------------------------------------
+# 旧版固定 slot 常量保留作为向后兼容别名（mini_network/concat 等仍使用）。
+# 新的单算子 make_*_case 函数使用 alloc_flat() 动态计算 src/dst 地址，
+# 任意时刻只有一个算子在处理（serial execution），所以全 8MB 都可自由使用。
+VPU_BUF_SIZE_BYTES = 1 << 23          # 8MB
+OBUF_WORD_ALIGN    = BYTES_PER_WORD   # 16-byte 对齐
+
+
+def align_up(n: int, align: int = OBUF_WORD_ALIGN) -> int:
+    """将 n 向上对齐到 align 字节。"""
+    return (n + align - 1) & ~(align - 1)
+
+
+def alloc_flat(*sizes: int) -> List[int]:
+    """在 VPU_BUF 内连续分配多个区域，每个 16-byte 对齐。
+    返回各区域起始字节偏移列表（不含 OBUF_PHY_BASE）。
+
+    用法示例：
+      src, dst = alloc_flat(src_bytes, dst_bytes)
+    """
+    offsets: List[int] = []
+    cur = 0
+    for sz in sizes:
+        offsets.append(cur)
+        cur += align_up(sz)
+    assert cur <= VPU_BUF_SIZE_BYTES, \
+        f'alloc_flat overflow: {cur//1024}KB needed > 8MB VPU_BUF'
+    return offsets
+
+
+# 旧版固定 slot（向后兼容，mini_network/concat_by_cdma 仍引用）
 OBUF_SRC0 = 0x000000
 OBUF_SRC1 = 0x080000    # 512KB apart (enough for unit tests)
-OBUF_DST = 0x100000
-OBUF_AUX = 0x180000
-IBUF_ACT = 0x000000
-IBUF_WEI = 0x080000
-WB_SCALE = 0x0000
+OBUF_DST  = 0x100000
+OBUF_AUX  = 0x180000
+WB_SCALE  = 0x0000
 WB_BIAS = 0x1000
 WB_QSCALE = 0x2000
 
 # chip-v2: DCIM 输出写 tile_obuf (per-tile, 从 0 开始)，验证时从 tile_obuf 读
 # checks.txt 里 dst >= TILE_OBUF_CHK_SENTINEL 时 testbench 路由到 tile_obuf
 DCIM_OUT_BASE = 0x0           # tile_obuf 内字节偏移 (从 0 写)
-TILE_OBUF_CHK_SENTINEL = 0x400000  # bit22，超出 VPU_BUF (4MB=0x400000) 的哨兵，表示 tile_obuf 地址空间
+TILE_OBUF_CHK_SENTINEL = 0x800000  # bit23, above all VPU_BUF slot offsets (max ~0x400000)
 TILE_OBUF_DST = TILE_OBUF_CHK_SENTINEL + 0x0  # dcim_matmul checks.txt 用此值
 
 # Extra OBUF slots for multi-source tests (concat)
 OBUF_SRC2 = 0x200000
 OBUF_SRC3 = 0x280000
-
-IBUF_SIZE_BYTES = 0x200_000  # chip_defines: 2 MB DCIM IBUF
 
 OP_NOP = 0x0
 OP_CDMA_COPY = 0x1
@@ -307,13 +366,17 @@ def write_checks_list(path: str, entries: Sequence[Tuple[str, str, int, int, int
 # ResNet / 多段网络：通用 OBUF 槽位 + numpy golden + 指令发射
 # ---------------------------------------------------------------------------
 class ObufSlots:
-    """VPU_BUF 槽位（chip-v2: 4MB total, 512KB per slot）。
-    IM2COL 专用槽在 im2col/DCIM 期间不得存放 live feature。"""
+    """VPU_BUF 多层网络段 ping-pong 槽位（chip-v3: VPU_BUF 8MB）。
+
+    适用于 SegmentBuilder（多层链式网络），需要同时保留多个中间张量。
+    单算子 case (make_*_case) 不使用此类，改用 alloc_flat() 动态分配。
+    总占用约 3MB，VPU_BUF 8MB 足够容纳。
+    """
     FEAT0 = 0x000000
     FEAT1 = 0x080000   # ping-pong 特征
-    OUT = 0x100000     # DCIM 累加输出
-    IM2COL = 0x180000  # im2col scratch
-    DQA = 0x200000     # DQA output
+    OUT   = 0x100000   # DCIM 累加输出
+    IM2COL= 0x180000   # im2col scratch
+    DQA   = 0x200000   # DQA output
     SHORT = 0x280000   # shortcut / residual save
 
 
@@ -448,7 +511,8 @@ class ResnetSegmentBuilder:
 
     fast_inst: List[int] = field(default_factory=list)
     wb_data: bytearray = field(default_factory=lambda: bytearray(WB_SIZE_BYTES))
-    all_weight_words: List[str] = field(default_factory=list)
+    all_weight_words_per_tile: List[List[str]] = field(
+        default_factory=lambda: [[] for _ in range(NUM_TILES)])
     ibuf_weight_offsets: List[int] = field(default_factory=list)
     ibuf_byte_cursor: int = 0
     wb_layer_i: int = 0
@@ -469,11 +533,12 @@ class ResnetSegmentBuilder:
     def _pack_weights(self, meta: ConvMeta, weights: np.ndarray, acc_eff: int) -> int:
         off = self.ibuf_byte_cursor
         self.ibuf_weight_offsets.append(off)
-        tile_words = []
+        tile_word_count = 0
         for t in range(meta.num_tiles):
-            tile_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, acc_override=acc_eff)]
-        self.all_weight_words.extend(tile_words)
-        self.ibuf_byte_cursor += len(tile_words) * IBUF_WORD_BYTES
+            tw = [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, acc_override=acc_eff)]
+            self.all_weight_words_per_tile[t].extend(tw)
+            tile_word_count = len(tw)
+        self.ibuf_byte_cursor += tile_word_count * IBUF_WORD_BYTES
         return len(self.ibuf_weight_offsets) - 1
 
     def _pack_wb(self, npz: np.lib.npyio.NpzFile, meta: ConvMeta) -> int:
@@ -543,6 +608,7 @@ class ResnetSegmentBuilder:
             feat = FeatureTensor(
                 np.clip(np.round(feat.fp32_hwc() * qscale), -128, 127).astype(np.int8),
                 'int8', feat.slot)
+            self.fast_inst += vpu_pipe_nop()  # 排空 QA 残留（后续 im2col 读同一块内存）
 
         oh, ow = out_hw(feat.h, feat.w, meta)
         eff_ch = dcim_effective_out_ch(meta, False)
@@ -551,7 +617,9 @@ class ResnetSegmentBuilder:
             0, 0, ObufSlots.IM2COL, encode_addr_break(meta), oh, ow, flags=self._im2col_flags)
         self.fast_inst += dcim_layer_inst(
             meta, oh * ow, ObufSlots.IM2COL, ObufSlots.FEAT1,
-            IBUF_ACT, IBUF_WEI + self.ibuf_weight_offsets[widx], int16=False, acc_override=acc_eff)
+            IBUF_ACT, IBUF_WEI + self.ibuf_weight_offsets[widx], int16=False, acc_override=acc_eff,
+            collect_to_vpubuf=True)
+        self.fast_inst += vpu_pipe_nop()  # 排空 im2col 残留
         self.fast_inst += vpu_exec(
             UNIT_DQA, ObufSlots.FEAT1, 0, eff_ch, oh, ow,
             self.WB_BIAS_BASE + self.WB_LAYER_STRIDE * wb_i,
@@ -564,6 +632,7 @@ class ResnetSegmentBuilder:
             self.append_check(checkpoint_tag, dqa_hwc, dqa_slot, is_fp32=True)
 
         if qa_dst_slot is not None:
+            self.fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
             self.fast_inst += vpu_exec(
                 UNIT_QA, dqa_slot, 0, eff_ch, oh, ow,
                 0, self.WB_QSCALE_BASE + 4 * wb_i, qa_dst_slot, flags=self._qa_flags)
@@ -661,13 +730,16 @@ class ResnetSegmentBuilder:
         write_hex(os.path.join(self.out_dir, 'expected.hex'),
                   fp32_hwc_words(exp) if output_feat.storage == 'fp32' else int8_hwc_words(exp))
         write_hex(os.path.join(self.out_dir, 'src0.hex'), src_words)
-        write_hex(os.path.join(self.out_dir, 'weight.hex'), self.all_weight_words)
-        loads = [('src0.hex', OBUF_PHY_BASE + input_feat.slot),
-                 ('weight.hex', IBUF_PHY_BASE + IBUF_WEI)]
+        loads = [('src0.hex', OBUF_PHY_BASE + input_feat.slot)]
+        for t in range(NUM_TILES):
+            fname = f'weight_tile{t}.hex'
+            write_hex(os.path.join(self.out_dir, fname), self.all_weight_words_per_tile[t])
+            loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
         loads.extend(self.fast_preloads)
         make_fast_svh(loads, self.out_dir)
         write_checks_list(os.path.join(self.out_dir, 'checks.txt'), self.checks)
         self.fast_inst += [header(OP_END, 0, 0)]
+        all_weight_words = [w for tw in self.all_weight_words_per_tile for w in tw]
         return {
             'module': 'resnet_partial',
             'name': name,
@@ -677,7 +749,7 @@ class ResnetSegmentBuilder:
             'fast_inst': self.fast_inst,
             'hbm': hbm_blob([
                 (HBM_OFF_INPUT0, words_to_blob(src_words)),
-                (HBM_OFF_WEIGHT, words_to_blob(self.all_weight_words)),
+                (HBM_OFF_WEIGHT, words_to_blob(all_weight_words)),
             ]),
             'wb': bytes(self.wb_data),
             'shape': shape,
@@ -814,7 +886,8 @@ def propagate_conv_im2col_shapes(network: dict) -> Dict[str, ConvIm2colShape]:
 
 
 def dcim_ibuf_weight_bytes(meta: ConvMeta) -> int:
-    return meta.num_tiles * meta.acc_depth * DCIM_CYCLE * OBUF_WORD_BYTES
+    """Weight bytes per tile (each tile_ibuf holds its own weight partition)."""
+    return meta.acc_depth * DCIM_CYCLE * OBUF_WORD_BYTES
 
 
 def dcim_ibuf_act_bytes(meta: ConvMeta, matmul_m: int) -> int:
@@ -822,22 +895,22 @@ def dcim_ibuf_act_bytes(meta: ConvMeta, matmul_m: int) -> int:
 
 
 def max_matmul_m_for_ibuf(meta: ConvMeta) -> int:
-    """Largest im2col row count M=OH*OW that fits activation + weight in IBUF."""
+    """Largest im2col row count M=OH*OW that fits activation + weight in one tile_ibuf."""
     weight = dcim_ibuf_weight_bytes(meta)
-    if weight >= IBUF_SIZE_BYTES:
+    if weight >= TILE_IBUF_SIZE_BYTES:
         return 1
     per_row = meta.acc_depth * OBUF_WORD_BYTES
     if per_row == 0:
         return 1
-    return max(1, (IBUF_SIZE_BYTES - weight) // per_row)
+    return max(1, (TILE_IBUF_SIZE_BYTES - weight) // per_row)
 
 
 def ibuf_fits_dcim_matmul(meta: ConvMeta, matmul_m: int) -> bool:
-    return dcim_ibuf_act_bytes(meta, matmul_m) + dcim_ibuf_weight_bytes(meta) <= IBUF_SIZE_BYTES
+    return dcim_ibuf_act_bytes(meta, matmul_m) + dcim_ibuf_weight_bytes(meta) <= TILE_IBUF_SIZE_BYTES
 
 
 def scale_in_hw_to_fit_ibuf(meta: ConvMeta, in_h: int, in_w: int) -> Tuple[int, int, int, int, str]:
-    """Shrink input H/W until M=OH*OW fits IBUF; return (h,w,oh,ow,note)."""
+    """Shrink input H/W until M=OH*OW fits one tile_ibuf; return (h,w,oh,ow,note)."""
     h, w = in_h, in_w
     oh, ow = out_hw(h, w, meta)
     m = oh * ow
@@ -851,7 +924,7 @@ def scale_in_hw_to_fit_ibuf(meta: ConvMeta, in_h: int, in_w: int) -> Tuple[int, 
         m = oh * ow
     if not ibuf_fits_dcim_matmul(meta, m):
         raise AssertionError(
-            f'{meta.name}: cannot fit DCIM matmul in IBUF even at 1x1 input '
+            f'{meta.name}: cannot fit DCIM matmul in tile_ibuf (512KB) even at 1x1 input '
             f'(M={m} acc_depth={meta.acc_depth} weight_bytes={dcim_ibuf_weight_bytes(meta)})'
         )
     return h, w, oh, ow, 'scaled'
@@ -1199,6 +1272,15 @@ def header(op: int, flags: int, length: int) -> int:
     return ((op & 0xF) << 28) | ((flags & 0xF) << 24) | (length & 0xFFFFFF)
 
 
+def vpu_pipe_nop(n: int = None) -> List[int]:
+    """插入 n 条 NOP 指令，让 vpu_buf 读有效 pipeline（深度=VPU_BUF_AXI_BRAM_READ_LATENCY=10）
+    在两个 vpu_exec 之间完全排空，避免跨 unit 的 douta_valid 残留污染。
+    n 默认取 READ_LATENCY（从 chip_config 导入），不在乎性能时直接调用无参数版本。"""
+    if n is None:
+        n = VPU_BUF_RD_LATENCY
+    return [header(OP_NOP, 0, 0)] * n
+
+
 def split64(addr: int) -> Tuple[int, int]:
     return (addr >> 32) & 0xFFFFFFFF, addr & 0xFFFFFFFF
 
@@ -1275,7 +1357,7 @@ def make_fast_svh(fast_loads: List[Tuple[str, int]], out_dir: str) -> None:
     compiled simv can run different generated cases.  The SVH is kept as a
     compatibility artifact for old build directories and manual inspection.
     """
-    max_entries = 4
+    max_entries = max(16, len(fast_loads))
     lines = ['// Auto-generated fast preload — do not edit',
              f'localparam integer NUM_FAST_LOADS = {len(fast_loads)};']
     for i in range(max_entries):
@@ -1293,11 +1375,40 @@ def make_fast_svh(fast_loads: List[Tuple[str, int]], out_dir: str) -> None:
             f.write(f'{fname} {addr:016x}\n')
 
 
+def ibuf_preload_per_tile(
+    out_dir: str,
+    act_words: List[str],
+    weight_words_per_tile: List[List[str]],
+    num_tiles: int,
+    ibuf_wei_offset: int = IBUF_WEI,
+) -> List[Tuple[str, int]]:
+    """Generate per-tile IBUF preload files and return (fname, addr) pairs.
+
+    - Activation: same data broadcast to all active tile_ibufs at IBUF_ACT offset.
+    - Weight: per-tile data, each written to its own tile_ibuf at ibuf_wei_offset.
+
+    Returns a list suitable for make_fast_svh().
+    """
+    fast_loads: List[Tuple[str, int]] = []
+    write_hex(os.path.join(out_dir, 'act.hex'), act_words)
+    for t in range(num_tiles):
+        fast_loads.append(('act.hex', TILE_IBUF_PHY_BASES[t] + IBUF_ACT))
+    for t in range(num_tiles):
+        fname = f'weight_tile{t}.hex'
+        write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
+        fast_loads.append((fname, TILE_IBUF_PHY_BASES[t] + ibuf_wei_offset))
+    return fast_loads
+
 
 def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_obuf: int,
                     ibuf_act: int, ibuf_wei: int, skip_cdma: bool = False,
-                    int16: bool = False, acc_override: int = None) -> List[int]:
+                    int16: bool = False, acc_override: int = None,
+                    collect_to_vpubuf: bool = False) -> List[int]:
     """生成 DCIM 指令序列。
+
+    Per-tile IBUF: CDMA broadcasts activation to all active tile_ibufs.
+    Each tile reads activation from the same offset within its own tile_ibuf.
+
     int16=True 时：
       - mode = MODE_INT16，acc_depth = acc_depth_int16
       - 每像素 ACT_BASE 步进 acc_depth_int16 * INT16_ACT_WORDS
@@ -1306,6 +1417,10 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
     acc_override: 当 im2col_in_ch > meta.in_ch 时，有效 acc_depth =
       ceil(kH*kW*im2col_in_ch / DCIM_CH_IN)，需通过此参数传入。
       额外 acc steps 对应的权重补零（zero-padded in pack_weight_tile）。
+
+    collect_to_vpubuf=True: DCIM 完成后，通过 pixel-interleaved CDMA 把
+      各 tile_obuf 的 INT32 结果搬运到 VPU_BUF[dcim_out_obuf]，供 DQA 读取。
+      VPU_BUF 布局：[px0_tile0..tileN, px1_tile0..tileN, ...]（pixel-interleaved）。
     """
     inst = []
     if acc_override is not None:
@@ -1315,17 +1430,22 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
     act_words_per_row = DCIM_INT16_ACT_WORDS if int16 else DCIM_INT8_ACT_WORDS
     im2col_bytes = num_pixels * acc * OBUF_WORD_BYTES * act_words_per_row
     if not skip_cdma:
-        inst += cdma_copy(OBUF_PHY_BASE + im2col_obuf, IBUF_PHY_BASE + ibuf_act, im2col_bytes)
+        for t in range(meta.num_tiles):
+            inst += cdma_copy(OBUF_PHY_BASE + im2col_obuf, TILE_IBUF_PHY_BASES[t] + ibuf_act, im2col_bytes)
     mode_val = MODE_INT16 if int16 else MODE_INT8
     mode_reg = ((acc & 0xFF) << 8) | mode_val
     tiles_out = meta.num_tiles
     words_per_tile_per_px = DCIM_INT16_OUT_WORDS_PER_TILE if int16 else DCIM_INT8_OUT_WORDS_PER_TILE
+    wpt_bytes = words_per_tile_per_px * OBUF_WORD_BYTES  # 8*16=128 B per tile per pixel (INT8)
     wei_base_words = [
-        (ibuf_wei // IBUF_WORD_BYTES) + t * acc * DCIM_CYCLE
+        ibuf_wei // IBUF_WORD_BYTES
         for t in range(NUM_TILES)
     ]
+    # 当 collect_to_vpubuf=True 时，DCIM 输出固定写到 tile_obuf 起始（word 0），
+    # 避免 dcim_out_obuf（可能 >= 256KB tile_obuf 容量）溢出 tile_obuf。
+    tile_obuf_write_base = 0 if collect_to_vpubuf else (dcim_out_obuf // OBUF_WORD_BYTES)
     out_base_words = [
-        (dcim_out_obuf // OBUF_WORD_BYTES) if t < tiles_out else 0
+        tile_obuf_write_base if t < tiles_out else 0
         for t in range(NUM_TILES)
     ]
     inst += dcim_layer_op(
@@ -1339,6 +1459,18 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
         out_base_words=out_base_words,
     )
     inst += [header(OP_NOP, 0, 0)] * 16
+    if collect_to_vpubuf:
+        # Pixel-interleaved CDMA: tile_obuf_t[px*wpt] → VPU_BUF[dcim_out_obuf + (px*tiles+t)*wpt]
+        # DCIM 把结果写到 tile_obuf_t[out_base_words + px*wpt]（相对 tile_obuf 起始）。
+        # 当 collect_to_vpubuf=True 时，out_base_words 已被固定为 0（见下方 tile_obuf_write_off），
+        # 所以 pixel px 的 tile t 数据在 tile_obuf_t[px*wpt_bytes]。
+        # 结果：VPU_BUF[dcim_out_obuf] = [px0_t0[wpt], px0_t1[wpt], ..., px1_t0[wpt], ...]
+        # 与 int32_to_words(accum_padded) 格式一致（pixel-major, channel-minor）。
+        for px in range(num_pixels):
+            for t in range(tiles_out):
+                src_phy = TILE_OBUF_PHY_BASES[t] + px * wpt_bytes
+                dst_phy = OBUF_PHY_BASE + dcim_out_obuf + (px * tiles_out + t) * wpt_bytes
+                inst += cdma_copy(src_phy, dst_phy, wpt_bytes)
     return inst
 
 
@@ -1457,10 +1589,10 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         acc_info = acc
 
         # 权重打包：每个 tile 独立的 INT16 权重
-        weight_words = []
+        weight_words_per_tile: List[List[str]] = []
         for t in range(meta.num_tiles):
             tile_w16 = w16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE]
-            weight_words += [f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)]
+            weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)])
     else:
         acc = meta.acc_depth
         num_logical_oc = meta.out_ch  # INT8 模式：实际物理输出通道数
@@ -1477,21 +1609,17 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         fast_inst = dcim_layer_inst(meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI, skip_cdma=True)
         mode_tag = 'int8'
         acc_info = acc
-        weight_words = []
+        weight_words_per_tile: List[List[str]] = []
         for t in range(meta.num_tiles):
-            weight_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t)]
+            weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile(meta, weights, t)])
 
     fast_inst += [header(OP_END, 0, 0)]
 
-    write_hex(os.path.join(out_dir, 'act.hex'), act_words)
-    write_hex(os.path.join(out_dir, 'weight.hex'), weight_words)
-    fast_loads = [
-        ('act.hex', IBUF_PHY_BASE + IBUF_ACT),
-        ('weight.hex', IBUF_PHY_BASE + IBUF_WEI),
-    ]
+    fast_loads = ibuf_preload_per_tile(out_dir, act_words, weight_words_per_tile, meta.num_tiles)
     make_fast_svh(fast_loads, out_dir)
 
-    hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(act_words)), (HBM_OFF_WEIGHT, words_to_blob(weight_words))])
+    all_weight_words = [w for tw in weight_words_per_tile for w in tw]
+    hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(act_words)), (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
     net_shape = shapes.get(spec['layer'])
     matmul_n = num_logical_oc if use_int16 else meta.out_ch
     return {
@@ -1521,12 +1649,16 @@ def make_im2col_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.ran
     exp_words = bytes_to_128_words(cols.astype(np.int8).tobytes())
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_DST,
+    # 动态地址：src=0，dst=src+align(src_size)
+    # src 以 16B 对齐槽存放（in_col_stride=16），实际占 h*w*ceil(in_ch/16)*16 字节
+    src_bytes_aligned = h * w * (((meta.in_ch + 15) // 16) * 16)
+    src_off, dst_off = alloc_flat(src_bytes_aligned, len(exp_words) * OBUF_WORD_ALIGN)
+    fast_inst = vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, dst_off,
                          encode_addr_break(meta), oh, ow)
     fast_inst += [header(OP_END, 0, 0)]
-    fast_loads = [('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)]
+    fast_loads = [('src0.hex', OBUF_PHY_BASE + src_off)]
     make_fast_svh(fast_loads, out_dir)
-    return {'module': 'im2col', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST, 'words': len(exp_words),
+    return {'module': 'im2col', 'name': spec['name'], 'layer': meta.name, 'dst': dst_off, 'words': len(exp_words),
             'fast_inst': fast_inst, 'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
             'wb': bytes(WB_SIZE_BYTES),
             'shape': f'{h}x{w}x{meta.in_ch} k={meta.kh} s={meta.stride} p={meta.pad} -> rows={oh * ow} acc_depth={meta.acc_depth}'}
@@ -1560,34 +1692,49 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         dqa = np.maximum(accum16.astype(np.float32) * scale[:num_logical_oc][None, :] + bias[:num_logical_oc][None, :], 0.0)
         qa = np.clip(np.round(dqa * qscale), -32768, 32767).astype(np.int16).reshape(oh, ow, num_logical_oc)
         exp_words = int16_hwc_words(qa.reshape(1, 1, oh * ow * num_logical_oc))
-        weight_words = []
+        weight_words_per_tile: List[List[str]] = []
         for t in range(meta.num_tiles):
             tile_w16 = w16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE]
-            weight_words += [f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)]
+            weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)])
         src_words = bytes_to_128_words(feat.astype(np.int16).tobytes())
         # INT16 im2col 需要 2× INT8 的 OBUF_AUX 空间；在 suite 中前 case 可能只写了一半，
         # 须用全零清空整个 AUX 区，避免残留数据影响后半段激活搬运结果
         im2col_aux_bytes = oh * ow * acc * DCIM_CH_IN * 2
-        aux_zero_words = bytes_to_128_words(bytes(im2col_aux_bytes))
-        write_hex(os.path.join(out_dir, 'aux_zero.hex'), aux_zero_words)
         write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
         write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-        write_hex(os.path.join(out_dir, 'weight.hex'), weight_words)
-        # Instructions: im2col(INT16) → DCIM(INT16) → DQA(INT32 accum→fp32) → QA(fp32→int16)
-        # DCIM MODE_INT16 still writes 32-bit logical-channel accumulators; DQA int16 mode is only for synthetic INT16 accumulator inputs.
-        fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_AUX,
+        # 动态地址（INT16 路径的 fast_inst 在 weight_loads 块中统一生成）
+        fast_inst = []  # placeholder，实际在 weight_loads 块中覆盖
+        weight_loads: List[Tuple[str, int]] = []
+        for t in range(meta.num_tiles):
+            fname = f'weight_tile{t}.hex'
+            write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
+            weight_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
+        # 动态地址：src(INT16 feat) → im2col_aux → dcim_out → qa_out
+        src16_bytes  = h * w * meta.in_ch * 2
+        im2col_bytes = im2col_aux_bytes
+        dcim_bytes   = oh * ow * meta.num_tiles * DCIM_INT16_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
+        qa_bytes     = oh * ow * num_logical_oc * 2  # INT16 out
+        src_off, im2col_off, dcim_off, qa_off = alloc_flat(
+            src16_bytes, im2col_bytes, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
+        fast_inst = vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
                              encode_addr_break(meta), oh, ow, flags=0x2)
-        fast_inst += dcim_layer_inst(meta, oh * ow, OBUF_AUX, OBUF_SRC1, IBUF_ACT, IBUF_WEI, int16=True)
-        fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, num_logical_oc, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x1)
-        fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, OBUF_DST, flags=0x2)
+        fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
+                                     int16=True, collect_to_vpubuf=True)
+        fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
+        fast_inst += vpu_exec(UNIT_DQA, dcim_off, 0, num_logical_oc, oh, ow, WB_BIAS, WB_SCALE, im2col_off, flags=0x1)
+        fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
+        fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, qa_off, flags=0x2)
         fast_inst += [header(OP_END, 0, 0)]
-        make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0),
-                       ('aux_zero.hex', OBUF_PHY_BASE + OBUF_AUX),
-                       ('weight.hex', IBUF_PHY_BASE + IBUF_WEI)], out_dir)
+        # aux_zero：清空 im2col_off 区域（INT16 残留保护）
+        aux_zero_words = bytes_to_128_words(bytes(im2col_aux_bytes))
+        write_hex(os.path.join(out_dir, 'aux_zero.hex'), aux_zero_words)
+        make_fast_svh([('src0.hex', OBUF_PHY_BASE + src_off),
+                       ('aux_zero.hex', OBUF_PHY_BASE + im2col_off)] + weight_loads, out_dir)
+        all_weight_words = [w for tw in weight_words_per_tile for w in tw]
         wb = wb_blob([(WB_SCALE, fp32_blob(scale[:num_logical_oc])), (WB_BIAS, fp32_blob(bias[:num_logical_oc])),
                       (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
-        hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(weight_words))])
-        return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST, 'words': len(exp_words),
+        hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
+        return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': qa_off, 'words': len(exp_words),
                 'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
                 'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{num_logical_oc} INT16 acc={acc} tiles={meta.num_tiles}'}
     # INT8 path (original)
@@ -1609,26 +1756,39 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         qa_padded = qa
     src_words = int8_hwc_words(feat)
     exp_words = int8_hwc_words(qa_padded)
-    weight_words = []
+    weight_words_per_tile: List[List[str]] = []
     for t in range(meta.num_tiles):
-        weight_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t)]
+        weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile(meta, weights, t)])
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    write_hex(os.path.join(out_dir, 'weight.hex'), weight_words)
-    fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, meta.in_ch, h, w, 0, 0, OBUF_AUX,
+    # 动态地址：src(INT8) → im2col scratch → dcim_out → qa_out
+    src_bytes    = h * w * meta.in_ch
+    im2col_bytes = oh * ow * meta.acc_depth * DCIM_CH_IN
+    dcim_bytes   = oh * ow * meta.num_tiles * DCIM_INT8_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
+    src_off, im2col_off, dcim_off, dst_off = alloc_flat(
+        src_bytes, im2col_bytes, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
+    fast_inst = vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
                          encode_addr_break(meta), oh, ow)
-    fast_inst += dcim_layer_inst(meta, oh * ow, OBUF_AUX, OBUF_SRC1, IBUF_ACT, IBUF_WEI)
-    fast_inst += vpu_exec(UNIT_DQA, OBUF_SRC1, 0, eff_ch, oh, ow, WB_BIAS, WB_SCALE, OBUF_AUX, flags=0x1)
-    fast_inst += vpu_exec(UNIT_QA, OBUF_AUX, 0, eff_ch, oh, ow, 0, WB_QSCALE, OBUF_DST)
+    fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
+                                 collect_to_vpubuf=True)
+    fast_inst += vpu_pipe_nop()  # 排空 im2col 最后几拍留在 douta_valid pipeline 中的残留
+    fast_inst += vpu_exec(UNIT_DQA, dcim_off, 0, eff_ch, oh, ow, WB_BIAS, WB_SCALE, im2col_off, flags=0x1)
+    fast_inst += vpu_pipe_nop()  # 排空 DQA 残留，避免污染 QA 的 douta_valid
+    fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, eff_ch, oh, ow, 0, WB_QSCALE, dst_off)
     fast_inst += [header(OP_END, 0, 0)]
+    weight_loads: List[Tuple[str, int]] = []
+    for t in range(meta.num_tiles):
+        fname = f'weight_tile{t}.hex'
+        write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
+        weight_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
     fast_loads = [
-        ('src0.hex', OBUF_PHY_BASE + OBUF_SRC0),
-        ('weight.hex', IBUF_PHY_BASE + IBUF_WEI),
-    ]
+        ('src0.hex', OBUF_PHY_BASE + src_off),
+    ] + weight_loads
     make_fast_svh(fast_loads, out_dir)
-    hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(weight_words))])
+    all_weight_words = [w for tw in weight_words_per_tile for w in tw]
+    hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
     wb = wb_blob([(WB_SCALE, fp32_blob(scale)), (WB_BIAS, fp32_blob(bias)), (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
-    return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST, 'words': len(exp_words),
+    return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': dst_off, 'words': len(exp_words),
             'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
             'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{meta.out_ch}(eff={eff_ch}) acc={meta.acc_depth} tiles={meta.num_tiles}'}
 
@@ -1659,7 +1819,7 @@ def make_cdma_memtest_case(out_dir: str, spec: dict, rng: np.random.Generator) -
     assert nbytes % OBUF_WORD_BYTES == 0, 'nbytes must be 128-bit aligned'
     nwords = nbytes // OBUF_WORD_BYTES
     assert obuf_dst + nbytes <= 0x100_0000, 'OBUF dst overflow'
-    assert ibuf_mid + nbytes <= 0x20_0000, 'IBUF overflow (2MB)'
+    assert ibuf_mid + nbytes <= TILE_IBUF_SIZE_BYTES, f'IBUF overflow (512KB per tile)'
     if not ibuf_preload:
         assert obuf_src + nbytes <= 0x100_0000, 'OBUF src overflow'
         assert obuf_src + nbytes <= obuf_dst or obuf_dst + nbytes <= obuf_src, \
@@ -1765,11 +1925,15 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
     relu_flag = 0x1 if relu_en else 0x0
     int16_flag = 0x2 if use_int16 else 0x0
     flags = relu_flag | int16_flag
-    fast_inst = vpu_exec(UNIT_DQA, OBUF_SRC0, 0, c, h, w, WB_BIAS, WB_SCALE, OBUF_DST, flags=flags)
+    # 动态地址：src → dst
+    src_bytes = len(src_words) * OBUF_WORD_ALIGN
+    dst_bytes = len(fp32_to_words(y)) * OBUF_WORD_ALIGN
+    src_off, dst_off = alloc_flat(src_bytes, dst_bytes)
+    fast_inst = vpu_exec(UNIT_DQA, src_off, 0, c, h, w, WB_BIAS, WB_SCALE, dst_off, flags=flags)
     fast_inst += [header(OP_END, 0, 0)]
-    make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
+    make_fast_svh([('src0.hex', OBUF_PHY_BASE + src_off)], out_dir)
     wb = wb_blob([(WB_SCALE, fp32_blob(scale)), (WB_BIAS, fp32_blob(bias))])
-    return {'module': 'dqa', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST,
+    return {'module': 'dqa', 'name': spec['name'], 'layer': meta.name, 'dst': dst_off,
             'words': len(fp32_to_words(y)), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
             'wb': wb, 'shape': f'hwc={h}x{w}x{c} relu_en={relu_en} int16={use_int16}',
@@ -1811,9 +1975,15 @@ def make_qa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.
     src_words = fp32_to_words(x)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
     flags = 0x2 if use_int16 else 0x0
-    fast_inst = vpu_exec(UNIT_QA, OBUF_SRC0, 0, c, h, w, 0, WB_QSCALE, OBUF_DST, flags=flags)
+    # 动态地址：src(FP32) → dst(INT8 or INT16)
+    # 先估算 dst 字节数，再分配
+    dst_elem_bytes = 2 if use_int16 else 1
+    dst_bytes = align_up(h * w * c * dst_elem_bytes)
+    src_off, dst_off = alloc_flat(
+        len(src_words) * OBUF_WORD_ALIGN, dst_bytes)
+    fast_inst = vpu_exec(UNIT_QA, src_off, 0, c, h, w, 0, WB_QSCALE, dst_off, flags=flags)
     fast_inst += [header(OP_END, 0, 0)]
-    make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
+    make_fast_svh([('src0.hex', OBUF_PHY_BASE + src_off)], out_dir)
     wb = wb_blob([(WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
     if use_int16:
         y = np.clip(np.round(x * qscale), -32768, 32767).astype(np.int16).reshape(h * w, c)
@@ -1822,7 +1992,7 @@ def make_qa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.
         y = np.clip(np.round(x * qscale), -128, 127).astype(np.int8).reshape(h, w, c)
         exp_words = int8_hwc_words(y)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
-    return {'module': 'qa', 'name': spec['name'], 'layer': meta.name, 'dst': OBUF_DST,
+    return {'module': 'qa', 'name': spec['name'], 'layer': meta.name, 'dst': dst_off,
             'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
             'wb': wb, 'shape': f'hwc={h}x{w}x{c} out_int16={use_int16}'}
@@ -1836,10 +2006,14 @@ def make_us_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
     exp_words = fp32_hwc_words(y)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    fast_inst = vpu_exec(UNIT_US, OBUF_SRC0, 0, c, h, w, 0, 0, OBUF_DST)
+    # 动态地址：src(FP32) → dst(FP32 2×H 2×W)
+    src_off, dst_off = alloc_flat(
+        len(src_words) * OBUF_WORD_ALIGN,
+        len(exp_words) * OBUF_WORD_ALIGN)
+    fast_inst = vpu_exec(UNIT_US, src_off, 0, c, h, w, 0, 0, dst_off)
     fast_inst += [header(OP_END, 0, 0)]
-    make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
-    return {'module': 'us', 'name': spec['name'], 'layer': spec['source'], 'dst': OBUF_DST,
+    make_fast_svh([('src0.hex', OBUF_PHY_BASE + src_off)], out_dir)
+    return {'module': 'us', 'name': spec['name'], 'layer': spec['source'], 'dst': dst_off,
             'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
             'wb': bytes(WB_SIZE_BYTES), 'shape': f'{h}x{w}x{c}-> {h*2}x{w*2}x{c}'}
@@ -1869,10 +2043,14 @@ def make_mp_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
     exp_words = fp32_hwc_words(y)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    fast_inst = vpu_exec(UNIT_MP, OBUF_SRC0, 0, c, h, w, 0, 0, OBUF_DST, addr_break_cfg)
+    # 动态地址：src → dst（FP32 in/out，maxpool/GAP）
+    src_off, dst_off = alloc_flat(
+        len(src_words) * OBUF_WORD_ALIGN,
+        len(exp_words) * OBUF_WORD_ALIGN)
+    fast_inst = vpu_exec(UNIT_MP, src_off, 0, c, h, w, 0, 0, dst_off, addr_break_cfg)
     fast_inst += [header(OP_END, 0, 0)]
-    make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0)], out_dir)
-    return {'module': 'mp', 'name': spec['name'], 'layer': spec['source'], 'dst': OBUF_DST,
+    make_fast_svh([('src0.hex', OBUF_PHY_BASE + src_off)], out_dir)
+    return {'module': 'mp', 'name': spec['name'], 'layer': spec['source'], 'dst': dst_off,
             'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
             'wb': bytes(WB_SIZE_BYTES),
@@ -1890,10 +2068,13 @@ def make_add_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), a_words)
     write_hex(os.path.join(out_dir, 'src1.hex'), b_words)
-    fast_inst = vpu_exec(UNIT_AD, OBUF_SRC0, OBUF_SRC1, c, h, w, 0, 0, OBUF_DST)
+    # 动态地址：src0, src1 → dst（FP32 element-wise add）
+    elem_bytes = len(a_words) * OBUF_WORD_ALIGN
+    src0_off, src1_off, dst_off = alloc_flat(elem_bytes, elem_bytes, len(exp_words) * OBUF_WORD_ALIGN)
+    fast_inst = vpu_exec(UNIT_AD, src0_off, src1_off, c, h, w, 0, 0, dst_off)
     fast_inst += [header(OP_END, 0, 0)]
-    make_fast_svh([('src0.hex', OBUF_PHY_BASE + OBUF_SRC0), ('src1.hex', OBUF_PHY_BASE + OBUF_SRC1)], out_dir)
-    return {'module': 'add', 'name': spec['name'], 'layer': spec['source'], 'dst': OBUF_DST,
+    make_fast_svh([('src0.hex', OBUF_PHY_BASE + src0_off), ('src1.hex', OBUF_PHY_BASE + src1_off)], out_dir)
+    return {'module': 'add', 'name': spec['name'], 'layer': spec['source'], 'dst': dst_off,
             'words': len(exp_words), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(a_words)), (HBM_OFF_INPUT1, words_to_blob(b_words))]),
             'wb': bytes(WB_SIZE_BYTES), 'shape': f'hwc={h}x{w}x{c}'}
@@ -1957,7 +2138,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
     feat = random_int8(rng, (h0, w0, metas[0].in_ch))
     current_int8 = feat.copy()
     wb_data = bytearray(WB_SIZE_BYTES)
-    all_weight_words: List[str] = []
+    all_weight_words_per_tile: List[List[str]] = [[] for _ in range(NUM_TILES)]
     ibuf_weight_offsets: List[int] = []
     layer_dqa_fp32 = []   # FP32 DQA outputs (for residual)
     layer_oh_ow = []      # output h,w per layer
@@ -2036,15 +2217,16 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         # Weight packing for IBUF (use acc_eff_i so DCIM reads the correct
         # number of acc steps including zero-padded extra steps from eff_ch propagation).
         ibuf_weight_offsets.append(ibuf_byte_cursor)
-        tile_words = []
+        tile_word_count = 0
         for t in range(meta.num_tiles):
             if use_int16:
                 w16_tile = w16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE, :]
-                tile_words += [f'{e:032x}' for e in pack_weight_tile_int16(w16_tile, t, acc_eff_i)]
+                tw = [f'{e:032x}' for e in pack_weight_tile_int16(w16_tile, t, acc_eff_i)]
             else:
-                tile_words += [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, acc_override=acc_eff_i)]
-        all_weight_words += tile_words
-        ibuf_byte_cursor += len(tile_words) * IBUF_WORD_BYTES
+                tw = [f'{e:032x}' for e in pack_weight_tile(meta, weights, t, acc_override=acc_eff_i)]
+            all_weight_words_per_tile[t] += tw
+            tile_word_count = len(tw)
+        ibuf_byte_cursor += tile_word_count * IBUF_WORD_BYTES
 
     # --- Compute final expected output ---
     # The DCIM tile always writes eff_ch channels per pixel (rounded up to tile boundary).
@@ -2100,13 +2282,16 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         fast_inst += vpu_exec(UNIT_IM2COL, src_slot, 0, im2col_in_ch, lh, lw,
                               0, 0, SLOT_D, encode_addr_break(meta), oh_i, ow_i, flags=_im2col_flags)
         fast_inst += dcim_layer_inst(meta, oh_i * ow_i, SLOT_D, SLOT_DCIM_OUT,
-                                     IBUF_ACT, ibuf_wei_off, int16=use_int16, acc_override=acc_eff)
+                                     IBUF_ACT, ibuf_wei_off, int16=use_int16, acc_override=acc_eff,
+                                     collect_to_vpubuf=True)
+        fast_inst += vpu_pipe_nop()  # 排空 im2col 残留
 
         if has_residual:
             dqa_dst = SLOT_E if i == 0 else SLOT_F
             fast_inst += vpu_exec(UNIT_DQA, SLOT_DCIM_OUT, 0, dqa_ch, oh_i, ow_i,
                                   wb_b, wb_s, dqa_dst, flags=_dqa_flags)
             if i < num_layers - 1:
+                fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
                 fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, dqa_ch, oh_i, ow_i,
                                       0, wb_q, SLOT_B, flags=_qa_flags)
         else:
@@ -2119,6 +2304,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
                 qa_dst = SLOT_B
             else:
                 qa_dst = final_dst
+            fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
             fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, dqa_ch, oh_i, ow_i,
                                   0, wb_q, qa_dst, flags=_qa_flags)
 
@@ -2132,6 +2318,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         # Final QA: SLOT_D → SLOT_C
         wb_q_final = WB_QSCALE_BASE + 4 * (num_layers - 1)
         qa_ch_final = ad_ch
+        fast_inst += vpu_pipe_nop()  # 排空 AD 残留
         fast_inst += vpu_exec(UNIT_QA, SLOT_D, 0, qa_ch_final, oh_f, ow_f,
                               0, wb_q_final, final_dst, flags=_qa_flags)
 
@@ -2145,11 +2332,13 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         src_words = int8_hwc_words(feat)
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
-    write_hex(os.path.join(out_dir, 'weight.hex'), all_weight_words)
     fast_loads = [
         ('src0.hex', OBUF_PHY_BASE + SLOT_A),
-        ('weight.hex', IBUF_PHY_BASE + IBUF_WEI),
     ]
+    for t in range(NUM_TILES):
+        fname = f'weight_tile{t}.hex'
+        write_hex(os.path.join(out_dir, fname), all_weight_words_per_tile[t])
+        fast_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
     if use_int16:
         max_aux_bytes = max(
             mini_int16_im2col_bytes(layer_oh_ow[i][0], layer_oh_ow[i][1], layer_acc_eff[i])
@@ -2159,6 +2348,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
         write_hex(os.path.join(out_dir, 'aux_zero.hex'), aux_zero_words)
         fast_loads.append(('aux_zero.hex', OBUF_PHY_BASE + SLOT_D))
     make_fast_svh(fast_loads, out_dir)
+    all_weight_words = [w for tw in all_weight_words_per_tile for w in tw]
     hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)),
                      (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
 
@@ -2206,6 +2396,7 @@ def make_resnet_partial_case(out_dir: str, net: Dict[str, dict], network: dict, 
             checkpoint_tag='conv0_dqa')
         mp_out = maxpool_generic(dqa_hwc.astype(np.float32), kernel=3, stride=2, pad=1)
         eff_ch = dqa_hwc.shape[2]
+        bld.fast_inst += vpu_pipe_nop()  # 排空 DQA 残留（emit_conv 内部已加 im2col→DQA NOP，这里是 DQA→MP）
         bld.fast_inst += vpu_exec(
             UNIT_MP, ObufSlots.FEAT1, 0, eff_ch, cur.h, cur.w,
             0, 0, ObufSlots.OUT, addr_break=1)
@@ -2242,6 +2433,7 @@ def make_resnet_partial_case(out_dir: str, net: Dict[str, dict], network: dict, 
         npz_last = load_layer_npz_checked(last_meta, net, require_activation=True)
         out_i8 = golden_qa_int8_from_fp32(cur.fp32_hwc(), float(npz_last['act_scale']))
         wb_i = max(0, bld.wb_layer_i - 1)
+        bld.fast_inst += vpu_pipe_nop()  # 排空上一个 unit 残留
         bld.fast_inst += vpu_exec(
             UNIT_QA, cur.slot, 0, out_i8.shape[2], out_i8.shape[0], out_i8.shape[1],
             0, bld.WB_QSCALE_BASE + 4 * wb_i, cur.slot, flags=bld._qa_flags)

@@ -3,7 +3,7 @@
 
 // Global_VPU_top - VPU 顶层模块 (chip-v2)
 // chip-v2 变更：
-//   - 内置 vpu_buf（4MB），VPU 直接读写本地 buffer
+//   - 内置 vpu_buf（8MB XPM），VPU 直接读写本地 buffer
 //   - 对外暴露 vpu_buf Port B 的 AXI BRAM 接口（CDMA/XDMA 读写）
 //   - 删除 obuf_* 端口（不再连接 DCIM OBUF）
 
@@ -49,7 +49,7 @@ module Global_VPU_top #(
     // VPU_BUF Port B: AXI BRAM 接口（CDMA/XDMA 访问 vpu_buf）
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram CLK" *)
     (* X_INTERFACE_MODE = "Slave" *)
-    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME vpu_buf_bram, MEM_SIZE 4194304, MEM_WIDTH 128, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 12, READ_WRITE_MODE READ_WRITE" *)
+    (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME vpu_buf_bram, MEM_SIZE 8388608, MEM_WIDTH 128, MEM_ECC NONE, MASTER_TYPE BRAM_CTRL, READ_LATENCY 10, READ_WRITE_MODE READ_WRITE" *)
     input  wire                      vpu_buf_bram_clk,
     (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 vpu_buf_bram RST" *)
     input  wire                      vpu_buf_bram_rst,
@@ -126,6 +126,19 @@ module Global_VPU_top #(
         .addrb(vpu_buf_portb_addr),
         .doutb(vpu_buf_portb_dout)
     );
+
+`ifdef SIMULATION
+    always @(posedge clk) begin
+        if (|vpu_obuf_we && vpu_obuf_en) begin
+            $display("[%0t] VPU_BUF_WRITE addr=0x%0h din[127:0]=%h",
+                $time, vpu_obuf_addr, vpu_obuf_din);
+        end
+        if (~|vpu_obuf_we && vpu_obuf_en && vpu_obuf_rd_valid) begin
+            $display("[%0t] VPU_BUF_READ_VALID addr(delayed) douta=%h",
+                $time, vpu_obuf_dout);
+        end
+    end
+`endif
 
     // -----------------------------------------------------------------------
     // Global_VPU 实例化

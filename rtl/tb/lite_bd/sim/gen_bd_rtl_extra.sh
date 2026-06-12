@@ -49,8 +49,8 @@ $REPO_ROOT/rtl/ref/DCIM/src/dcim/postProcess.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/act_nibble_converter.sv
 $REPO_ROOT/rtl/ref/DCIM/src/model/model_rf.sv
 $REPO_ROOT/rtl/ref/DCIM/src/model/model_rf_bram.sv
-$REPO_ROOT/rtl/DCIM_Macro/ibuf.v
-$REPO_ROOT/rtl/chip/obuf_bank.v
+$REPO_ROOT/rtl/common/uram_tdp_bytewrite.v
+$REPO_ROOT/rtl/chip/tile_ibuf.v
 $REPO_ROOT/rtl/chip/tile_obuf.v
 $REPO_ROOT/rtl/vpu/vpu_buf.v
 $REPO_ROOT/rtl/chip/DCIM_Tile.sv

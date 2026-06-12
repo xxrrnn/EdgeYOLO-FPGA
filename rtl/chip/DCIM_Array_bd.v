@@ -2,12 +2,12 @@
 `include "chip_defines.vh"
 
 // ============================================================================
-// DCIM_Array_bd - Vivado Block Design 顶层封装 (chip-v2)
+// DCIM_Array_bd - Vivado Block Design 顶层封装 (chip-v3 XPM)
 // ============================================================================
-// chip-v2 变更：
-//   - 删除 vpu_obuf_* 端口（VPU 使用独立 vpu_buf）
-//   - 删除 obuf_ext_* 端口（共享 OBUF 已拆分）
-//   - 新增 4 组 tile_obuf_ext_* AXI BRAM 端口（CDMA 读取各 Tile 结果）
+// chip-v3 变更：
+//   - 删除单个 ibuf_ext_* 端口（旧共享 IBUF）
+//   - 新增 4 组 tile_ibuf*_ext_* AXI BRAM 端口（per-tile IBUF）
+//   - 4 组 tile_obuf*_ext_* AXI BRAM 端口（CDMA 读取各 Tile 结果）
 // ============================================================================
 
 module DCIM_Array_bd #(
@@ -18,7 +18,7 @@ module DCIM_Array_bd #(
     parameter SRAM_DP             = `DCIM_SRAM_DP,
     parameter CYCLE               = `DCIM_CYCLE,
     parameter ACC                 = `DCIM_ACC_MAX,
-    parameter IBUF_ADDR_WIDTH     = `DCIM_IBUF_ADDR_WIDTH,
+    parameter IBUF_ADDR_WIDTH     = `DCIM_TILE_IBUF_ADDR_WIDTH,
     parameter TILE_OBUF_ADDR_WIDTH = `DCIM_TILE_OBUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH      = `DCIM_BUF_DATA_WIDTH,
     parameter BUF_ADDR_WIDTH      = IBUF_ADDR_WIDTH
@@ -31,12 +31,33 @@ module DCIM_Array_bd #(
     input  wire [11:0]                   cfg_wr_addr,
     input  wire [31:0]                   cfg_wr_data,
 
-    // IBUF 外部端口（XDMA/CDMA）
-    input  wire [BUF_DATA_WIDTH/8-1:0]   ibuf_ext_wea,
-    input  wire                          ibuf_ext_ena,
-    input  wire [IBUF_ADDR_WIDTH+3:0]    ibuf_ext_addra,
-    input  wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_douta,
+    // tile_ibuf[0] 外部端口（XDMA/CDMA write + read）
+    input  wire [BUF_DATA_WIDTH/8-1:0]   tile_ibuf0_ext_wea,
+    input  wire                          tile_ibuf0_ext_ena,
+    input  wire [IBUF_ADDR_WIDTH+3:0]    tile_ibuf0_ext_addra,
+    input  wire [BUF_DATA_WIDTH-1:0]     tile_ibuf0_ext_dina,
+    output wire [BUF_DATA_WIDTH-1:0]     tile_ibuf0_ext_douta,
+
+    // tile_ibuf[1] 外部端口
+    input  wire [BUF_DATA_WIDTH/8-1:0]   tile_ibuf1_ext_wea,
+    input  wire                          tile_ibuf1_ext_ena,
+    input  wire [IBUF_ADDR_WIDTH+3:0]    tile_ibuf1_ext_addra,
+    input  wire [BUF_DATA_WIDTH-1:0]     tile_ibuf1_ext_dina,
+    output wire [BUF_DATA_WIDTH-1:0]     tile_ibuf1_ext_douta,
+
+    // tile_ibuf[2] 外部端口
+    input  wire [BUF_DATA_WIDTH/8-1:0]   tile_ibuf2_ext_wea,
+    input  wire                          tile_ibuf2_ext_ena,
+    input  wire [IBUF_ADDR_WIDTH+3:0]    tile_ibuf2_ext_addra,
+    input  wire [BUF_DATA_WIDTH-1:0]     tile_ibuf2_ext_dina,
+    output wire [BUF_DATA_WIDTH-1:0]     tile_ibuf2_ext_douta,
+
+    // tile_ibuf[3] 外部端口
+    input  wire [BUF_DATA_WIDTH/8-1:0]   tile_ibuf3_ext_wea,
+    input  wire                          tile_ibuf3_ext_ena,
+    input  wire [IBUF_ADDR_WIDTH+3:0]    tile_ibuf3_ext_addra,
+    input  wire [BUF_DATA_WIDTH-1:0]     tile_ibuf3_ext_dina,
+    output wire [BUF_DATA_WIDTH-1:0]     tile_ibuf3_ext_douta,
 
     // tile_obuf[0] 外部端口
     input  wire [BUF_DATA_WIDTH/8-1:0]   tile_obuf0_ext_wea,
@@ -75,7 +96,7 @@ module DCIM_Array_bd #(
     localparam TILE_IDX_W = (NUM_TILES <= 1) ? 1 : $clog2(NUM_TILES);
 
     // -----------------------------------------------------------------------
-    // 配置寄存器逻辑（保留不变）
+    // 配置寄存器逻辑
     // -----------------------------------------------------------------------
     (* shreg_extract = "no" *) reg        cfg_wr_en_d;
     (* shreg_extract = "no" *) reg [11:0] cfg_wr_addr_d;
@@ -157,13 +178,36 @@ module DCIM_Array_bd #(
     // -----------------------------------------------------------------------
     // AXI 字节地址 → 字地址 转换
     // -----------------------------------------------------------------------
-    wire [IBUF_ADDR_WIDTH-1:0] ibuf_word_addr = ibuf_ext_addra[ADDR_SHIFT +: IBUF_ADDR_WIDTH];
+    // tile_ibuf 外部地址转换
+    wire [IBUF_ADDR_WIDTH-1:0] tibuf0_word_addr = tile_ibuf0_ext_addra[ADDR_SHIFT +: IBUF_ADDR_WIDTH];
+    wire [IBUF_ADDR_WIDTH-1:0] tibuf1_word_addr = tile_ibuf1_ext_addra[ADDR_SHIFT +: IBUF_ADDR_WIDTH];
+    wire [IBUF_ADDR_WIDTH-1:0] tibuf2_word_addr = tile_ibuf2_ext_addra[ADDR_SHIFT +: IBUF_ADDR_WIDTH];
+    wire [IBUF_ADDR_WIDTH-1:0] tibuf3_word_addr = tile_ibuf3_ext_addra[ADDR_SHIFT +: IBUF_ADDR_WIDTH];
 
-    // tile_obuf 外部地址转换（去掉低 4bit 字节偏移）
+    // tile_obuf 外部地址转换
     wire [TILE_OBUF_ADDR_WIDTH-1:0] tobuf0_word_addr = tile_obuf0_ext_addra[ADDR_SHIFT +: TILE_OBUF_ADDR_WIDTH];
     wire [TILE_OBUF_ADDR_WIDTH-1:0] tobuf1_word_addr = tile_obuf1_ext_addra[ADDR_SHIFT +: TILE_OBUF_ADDR_WIDTH];
     wire [TILE_OBUF_ADDR_WIDTH-1:0] tobuf2_word_addr = tile_obuf2_ext_addra[ADDR_SHIFT +: TILE_OBUF_ADDR_WIDTH];
     wire [TILE_OBUF_ADDR_WIDTH-1:0] tobuf3_word_addr = tile_obuf3_ext_addra[ADDR_SHIFT +: TILE_OBUF_ADDR_WIDTH];
+
+    // -----------------------------------------------------------------------
+    // 组装 tile_ibuf 外部端口向量
+    // -----------------------------------------------------------------------
+    wire [NUM_TILES*STRB_WIDTH-1:0]          tile_ibuf_ext_wea_vec;
+    wire [NUM_TILES-1:0]                     tile_ibuf_ext_ena_vec;
+    wire [NUM_TILES*IBUF_ADDR_WIDTH-1:0]     tile_ibuf_ext_addra_vec;
+    wire [NUM_TILES*BUF_DATA_WIDTH-1:0]      tile_ibuf_ext_dina_vec;
+    wire [NUM_TILES*BUF_DATA_WIDTH-1:0]      tile_ibuf_ext_douta_vec;
+
+    assign tile_ibuf_ext_wea_vec   = {tile_ibuf3_ext_wea,  tile_ibuf2_ext_wea,  tile_ibuf1_ext_wea,  tile_ibuf0_ext_wea};
+    assign tile_ibuf_ext_ena_vec   = {tile_ibuf3_ext_ena,  tile_ibuf2_ext_ena,  tile_ibuf1_ext_ena,  tile_ibuf0_ext_ena};
+    assign tile_ibuf_ext_addra_vec = {tibuf3_word_addr, tibuf2_word_addr, tibuf1_word_addr, tibuf0_word_addr};
+    assign tile_ibuf_ext_dina_vec  = {tile_ibuf3_ext_dina, tile_ibuf2_ext_dina, tile_ibuf1_ext_dina, tile_ibuf0_ext_dina};
+
+    assign tile_ibuf0_ext_douta = tile_ibuf_ext_douta_vec[0*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    assign tile_ibuf1_ext_douta = tile_ibuf_ext_douta_vec[1*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    assign tile_ibuf2_ext_douta = tile_ibuf_ext_douta_vec[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+    assign tile_ibuf3_ext_douta = tile_ibuf_ext_douta_vec[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
 
     // -----------------------------------------------------------------------
     // 组装 tile_obuf 外部端口向量
@@ -198,6 +242,7 @@ module DCIM_Array_bd #(
         .ACC             (ACC),
         .BUF_ADDR_WIDTH  (IBUF_ADDR_WIDTH),
         .BUF_DATA_WIDTH  (BUF_DATA_WIDTH),
+        .TILE_IBUF_ADDR_WIDTH(IBUF_ADDR_WIDTH),
         .TILE_OBUF_ADDR_WIDTH(TILE_OBUF_ADDR_WIDTH)
     ) u_dcim_array (
         .clk             (clk),
@@ -211,11 +256,13 @@ module DCIM_Array_bd #(
         .wei_base_addrs  (cfg_wei_base_addrs),
         .out_base_addrs  (cfg_out_base_addrs),
         .tile_mask       (cfg_tile_mask),
-        .ibuf_ext_wea    (ibuf_ext_wea),
-        .ibuf_ext_ena    (ibuf_ext_ena),
-        .ibuf_ext_addra  (ibuf_word_addr),
-        .ibuf_ext_dina   (ibuf_ext_dina),
-        .ibuf_ext_douta  (ibuf_ext_douta),
+        // per-tile IBUF
+        .tile_ibuf_ext_wea    (tile_ibuf_ext_wea_vec),
+        .tile_ibuf_ext_ena    (tile_ibuf_ext_ena_vec),
+        .tile_ibuf_ext_addra  (tile_ibuf_ext_addra_vec),
+        .tile_ibuf_ext_dina   (tile_ibuf_ext_dina_vec),
+        .tile_ibuf_ext_douta  (tile_ibuf_ext_douta_vec),
+        // per-tile OBUF
         .tile_obuf_ext_wea         (tile_obuf_ext_wea_vec),
         .tile_obuf_ext_ena         (tile_obuf_ext_ena_vec),
         .tile_obuf_ext_addra       (tile_obuf_ext_addra_vec),

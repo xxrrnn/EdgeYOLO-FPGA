@@ -147,6 +147,7 @@ compile_simv() {
   inc=(
     "+incdir+$REPO_ROOT/rtl/chip"
     "+incdir+$REPO_ROOT/rtl/vpu"
+    "+incdir+$REPO_ROOT/rtl/common"
     "+incdir+$LITE_BD_DIR"
     "+incdir+$MODULE_TB_DIR"
     "+incdir+$LITE_BUILD_DIR/lite.ip_user_files/bd/lite/ip/lite_xdma_0_0/ip_0/source"

@@ -219,7 +219,7 @@ set_param general.maxThreads 32
 #   是真实的物理修复，不是绕过约束。
 # 注意：必须在 route_design 之后、checkpoint 之前执行，
 #   因为需要已知的物理布局来选择 hold fix 位置。
-phys_opt_design -hold_fix -directive AggressiveExplore
+phys_opt_design -hold_fix
 puts "INFO: Post-route hold phys_opt done"
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]

@@ -2,25 +2,25 @@
 `include "chip_defines.vh"
 
 // ============================================================================
-// DCIM_Array - Tile-Array 结构 (chip-v2)
+// DCIM_Array - Tile-Array 结构 (chip-v3)
 // ============================================================================
-// chip-v2 变更：
-//   - 删除共享 OBUF 和 obuf_wr_arbiter
-//   - 每 Tile 内置 tile_obuf（256KB），Tile 直写，零仲裁延迟
-//   - tile_obuf Port A 暴露给外部（CDMA 读取 Tile 结果）
-//   - VPU 使用独立 vpu_buf（在 Global_VPU_top 中实例化）
+// chip-v3 变更（在 chip-v2 基础上）：
+//   - 共享 IBUF 拆分为 per-tile tile_ibuf（512KB XPM）
+//   - 删除 ibuf_rd_arbiter（每 Tile 直读本地 tile_ibuf Port B，零仲裁延迟）
+//   - 外部接口：4 个独立 tile_ibuf_ext_* AXI BRAM 端口（CDMA/XDMA 写入各 Tile IBUF）
 // ============================================================================
 
 module DCIM_Array #(
-    parameter NUM_TILES       = `DCIM_NUM_TILES,
-    parameter WD1             = `DCIM_WD1,
-    parameter CH_IN           = `DCIM_CH_IN,
-    parameter CH_OUT          = `DCIM_CH_OUT,
-    parameter SRAM_DP         = `DCIM_SRAM_DP,
-    parameter CYCLE           = `DCIM_CYCLE,
-    parameter ACC             = `DCIM_ACC_MAX,
-    parameter BUF_ADDR_WIDTH  = `DCIM_BUF_ADDR_WIDTH,
-    parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH,
+    parameter NUM_TILES            = `DCIM_NUM_TILES,
+    parameter WD1                  = `DCIM_WD1,
+    parameter CH_IN                = `DCIM_CH_IN,
+    parameter CH_OUT               = `DCIM_CH_OUT,
+    parameter SRAM_DP              = `DCIM_SRAM_DP,
+    parameter CYCLE                = `DCIM_CYCLE,
+    parameter ACC                  = `DCIM_ACC_MAX,
+    parameter BUF_ADDR_WIDTH       = `DCIM_BUF_ADDR_WIDTH,
+    parameter BUF_DATA_WIDTH       = `DCIM_BUF_DATA_WIDTH,
+    parameter TILE_IBUF_ADDR_WIDTH = `DCIM_TILE_IBUF_ADDR_WIDTH,
     parameter TILE_OBUF_ADDR_WIDTH = `DCIM_TILE_OBUF_ADDR_WIDTH,
 
     localparam ACC_UBD_WD = $clog2(ACC+1),
@@ -40,12 +40,12 @@ module DCIM_Array #(
     input  wire [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] out_base_addrs,
     input  wire [NUM_TILES-1:0]          tile_mask,
 
-    // IBUF 外部端口（XDMA/CDMA 写入 IBUF）
-    input  wire [STRB_WIDTH-1:0]         ibuf_ext_wea,
-    input  wire                          ibuf_ext_ena,
-    input  wire [BUF_ADDR_WIDTH-1:0]     ibuf_ext_addra,
-    input  wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_dina,
-    output wire [BUF_DATA_WIDTH-1:0]     ibuf_ext_douta,
+    // tile_ibuf[0..3] 外部端口（CDMA/XDMA 写入各 Tile IBUF）
+    input  wire [NUM_TILES*STRB_WIDTH-1:0]               tile_ibuf_ext_wea,
+    input  wire [NUM_TILES-1:0]                          tile_ibuf_ext_ena,
+    input  wire [NUM_TILES*TILE_IBUF_ADDR_WIDTH-1:0]     tile_ibuf_ext_addra,
+    input  wire [NUM_TILES*BUF_DATA_WIDTH-1:0]           tile_ibuf_ext_dina,
+    output wire [NUM_TILES*BUF_DATA_WIDTH-1:0]           tile_ibuf_ext_douta,
 
     // tile_obuf[0..3] 外部端口（CDMA 读取 Tile 结果）
     input  wire [NUM_TILES*STRB_WIDTH-1:0]              tile_obuf_ext_wea,
@@ -78,25 +78,7 @@ module DCIM_Array #(
     assign ready = ready_r;
 
     // -----------------------------------------------------------------------
-    // IBUF 仲裁（保留不变：所有 Tile 共享 IBUF 读取）
-    // -----------------------------------------------------------------------
-    wire [NUM_TILES-1:0]                tile_ibuf_rd_valid;
-    wire [NUM_TILES-1:0]                tile_ibuf_rd_ready;
-    wire [NUM_TILES*BUF_ADDR_WIDTH-1:0] tile_ibuf_rd_addr;
-    wire [NUM_TILES-1:0]                tile_ibuf_rd_data_valid;
-    wire [BUF_DATA_WIDTH-1:0]           tile_ibuf_rd_data;
-
-    wire                          ibuf_int_en;
-    wire [BUF_ADDR_WIDTH-1:0]     ibuf_int_addr;
-    wire [BUF_DATA_WIDTH-1:0]     ibuf_int_dout_raw;
-    (* shreg_extract = "no", max_fanout = 32 *) reg [BUF_DATA_WIDTH-1:0] ibuf_int_dout;
-
-    always @(posedge clk) begin
-        ibuf_int_dout <= ibuf_int_dout_raw;
-    end
-
-    // -----------------------------------------------------------------------
-    // Tile + tile_obuf 实例化
+    // Tile + tile_ibuf + tile_obuf 实例化
     // -----------------------------------------------------------------------
     // Tile 写 tile_obuf：直连，无仲裁器
     wire [NUM_TILES-1:0]                tile_obuf_wr_valid;
@@ -121,6 +103,12 @@ module DCIM_Array #(
             assign tile_obuf_wr_addr[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH] = t_wr_addr_full[TILE_OBUF_ADDR_WIDTH-1:0];
             assign tile_obuf_wr_data[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = t_wr_data;
             assign tile_obuf_wr_strb[i*STRB_WIDTH +: STRB_WIDTH] = t_wr_strb;
+
+            // tile_ibuf Port B → Tile IBUF 读接口（无仲裁器，直连）
+            wire                      t_ibuf_rd_valid;  // Tile → tile_ibuf: 读请求
+            wire [BUF_ADDR_WIDTH-1:0] t_ibuf_rd_addr;   // Tile → tile_ibuf: 读地址
+            wire                      t_ibuf_rd_data_valid; // tile_ibuf → Tile: 数据有效
+            wire [BUF_DATA_WIDTH-1:0] t_ibuf_rd_data;   // tile_ibuf → Tile: 读数据
 
             (* keep_hierarchy = "yes" *)
             DCIM_Tile #(
@@ -148,11 +136,10 @@ module DCIM_Array #(
                 .wei_base_addr(wei_base_addrs[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
                 .act_base_addr(act_base_addr),
                 .out_base_addr({{(BUF_ADDR_WIDTH-TILE_OBUF_ADDR_WIDTH){1'b0}}, out_base_addrs[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]}),
-                .ibuf_rd_valid(tile_ibuf_rd_valid[i]),
-                .ibuf_rd_ready(tile_ibuf_rd_ready[i]),
-                .ibuf_rd_addr(tile_ibuf_rd_addr[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
-                .ibuf_rd_data_valid(tile_ibuf_rd_data_valid[i]),
-                .ibuf_rd_data(tile_ibuf_rd_data),
+                .ibuf_rd_en(t_ibuf_rd_valid),
+                .ibuf_rd_addr(t_ibuf_rd_addr),
+                .ibuf_rd_data_valid(t_ibuf_rd_data_valid),
+                .ibuf_rd_data(t_ibuf_rd_data),
                 .obuf_wr_valid(t_wr_valid),
                 .obuf_wr_ready(1'b1),
                 .obuf_wr_addr(t_wr_addr_full),
@@ -160,7 +147,28 @@ module DCIM_Array #(
                 .obuf_wr_strb(t_wr_strb)
             );
 
+            // Per-tile tile_ibuf 实例（chip-v3: 512KB XPM, Port B 直连 Tile）
+            (* keep_hierarchy = "yes" *)
+            tile_ibuf u_tile_ibuf (
+                .clk(clk),
+                // Port A: 外部 CDMA/XDMA 写入
+                .wea(tile_ibuf_ext_wea[i*STRB_WIDTH +: STRB_WIDTH]),
+                .mem_ena(tile_ibuf_ext_ena[i]),
+                .dina(tile_ibuf_ext_dina[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .addra(tile_ibuf_ext_addra[i*TILE_IBUF_ADDR_WIDTH +: TILE_IBUF_ADDR_WIDTH]),
+                .douta(tile_ibuf_ext_douta[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .douta_valid(),  // 外部读验证未使用
+                // Port B: Tile 内部读（直连，无仲裁器）
+                .web({STRB_WIDTH{1'b0}}),
+                .mem_enb(t_ibuf_rd_valid),
+                .dinb({BUF_DATA_WIDTH{1'b0}}),
+                .addrb(t_ibuf_rd_addr[TILE_IBUF_ADDR_WIDTH-1:0]),
+                .doutb(t_ibuf_rd_data),
+                .doutb_valid(t_ibuf_rd_data_valid)
+            );
+
             // Per-tile tile_obuf 实例
+            (* keep_hierarchy = "yes" *)
             tile_obuf u_tile_obuf (
                 .clk(clk),
                 // Port A: 外部 CDMA 读/写
@@ -178,42 +186,5 @@ module DCIM_Array #(
             );
         end
     endgenerate
-
-    // -----------------------------------------------------------------------
-    // IBUF 仲裁器（保持不变）
-    // -----------------------------------------------------------------------
-    ibuf_rd_arbiter #(
-        .NUM_TILES(NUM_TILES),
-        .ADDR_WIDTH(BUF_ADDR_WIDTH),
-        .DATA_WIDTH(BUF_DATA_WIDTH)
-    ) u_ibuf_arb (
-        .clk(clk),
-        .rst_n(rst_n),
-        .tile_rd_valid(tile_ibuf_rd_valid),
-        .tile_rd_ready(tile_ibuf_rd_ready),
-        .tile_rd_addr(tile_ibuf_rd_addr),
-        .tile_rd_data_valid(tile_ibuf_rd_data_valid),
-        .tile_rd_data(tile_ibuf_rd_data),
-        .ibuf_en(ibuf_int_en),
-        .ibuf_addr(ibuf_int_addr),
-        .ibuf_dout(ibuf_int_dout)
-    );
-
-    // -----------------------------------------------------------------------
-    // IBUF（共享，保留不变）
-    // -----------------------------------------------------------------------
-    ibuf u_ibuf (
-        .clk(clk),
-        .wea(ibuf_ext_wea),
-        .mem_ena(ibuf_ext_ena),
-        .dina(ibuf_ext_dina),
-        .addra(ibuf_ext_addra[`DCIM_IBUF_ADDR_WIDTH-1:0]),
-        .douta(ibuf_ext_douta),
-        .web({STRB_WIDTH{1'b0}}),
-        .mem_enb(ibuf_int_en),
-        .dinb({BUF_DATA_WIDTH{1'b0}}),
-        .addrb(ibuf_int_addr[`DCIM_IBUF_ADDR_WIDTH-1:0]),
-        .doutb(ibuf_int_dout_raw)
-    );
 
 endmodule

@@ -116,16 +116,8 @@ if {[llength $_accum_cells] && [llength $_post_cells]} {
   set_multicycle_path -hold 1  -from $_accum_cells -to $_post_cells
 }
 
-# --- 4.2 DCIM Arbiter MCP ---
-# IBUF arbiter
-set _mcp_ib_from [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_ibuf_arb/tile_rd_valid_q*}]
-set _mcp_ib_to   [get_pins -quiet -hierarchical -filter {NAME =~ *u_dcim_array/u_ibuf_arb/grant_idx*}]
-if {[llength $_mcp_ib_from] && [llength $_mcp_ib_to]} {
-  set_multicycle_path -setup 2 -from $_mcp_ib_from -to $_mcp_ib_to
-  set_multicycle_path -hold 1 -from $_mcp_ib_from -to $_mcp_ib_to
-}
-
-# OBUF arbiter: 已删除 (chip-v2: tile 直写 tile_obuf，无仲裁器)
+# --- 4.2 (已废弃: chip-v3 per-tile IBUF, 无 arbiter) ---
+# IBUF arbiter MCP 已删除: per-tile IBUF 消除仲裁器
 
 # --- 4.3 SLR 穿越流水 MCP ---
 # ready_r -> inst_decoder FSM
@@ -140,17 +132,8 @@ if {[llength $_mcp_ready_r_from] && [llength $_mcp_ready_r_to]} {
   set_multicycle_path 1 -hold  -from $_mcp_ready_r_from -to $_mcp_ready_r_to
 }
 
-# start_r -> tile FSM
-set _mcp_start_r_from [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/start_r_reg/C}]
-set _mcp_start_r_to [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/FSM_onehot_state_reg*/CE ||
-           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/*state_reg*/CE           ||
-           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/*state_reg*/D}]
-if {[llength $_mcp_start_r_from] && [llength $_mcp_start_r_to]} {
-  set_multicycle_path 2 -setup -from $_mcp_start_r_from -to $_mcp_start_r_to
-  set_multicycle_path 1 -hold  -from $_mcp_start_r_from -to $_mcp_start_r_to
-}
+# start_rr -> tile FSM (chip-v3: start 多打两拍 start_r→start_rr，路径已足够短)
+# 不再需要 MCP，保留注释供参考
 
 # cfg_* -> tile FSM (配置寄存器在 FSM 启动前已稳定)
 set _mcp_cfg_from [get_cells -quiet -hierarchical \
@@ -164,58 +147,9 @@ if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
   set_multicycle_path 1 -hold  -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
 }
 
-# --- 4.4 IBUF URAM 延迟 MCP ---
-# chip-v2: 共享 OBUF 已删除，tile_obuf 同 SLR 无跨越，cascade=2 不需要 MCP
-# 仅保留 IBUF MCP（cascade 较深，仍需要）
-set _buf_mcp_setup 4
-
-# IBUF 写侧寄存器 -> URAM
-set _ibuf_lat_src {}
-foreach _f {
-  {NAME =~ *u_ibuf*gen_banks*wea_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*web_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*mem_ena_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*mem_enb_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*dina_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*dinb_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*addra_reg2*}
-  {NAME =~ *u_ibuf*gen_banks*addrb_reg2*}
-  {NAME =~ *u_ibuf/wea_reg*}
-  {NAME =~ *u_ibuf/web_reg*}
-} {
-  set _c [get_cells -quiet -hierarchical -filter $_f]
-  if {[llength $_c]} { set _ibuf_lat_src [concat $_ibuf_lat_src $_c] }
-}
-set _ibuf_uram [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_reg_uram*}]
-if {[llength $_ibuf_lat_src] && [llength $_ibuf_uram]} {
-  set_multicycle_path -setup $_buf_mcp_setup -from $_ibuf_lat_src -to $_ibuf_uram
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -from $_ibuf_lat_src -to $_ibuf_uram
-}
-
-# IBUF URAM cascade 读路径
-set _ibuf_memreg   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*memreg*_reg*}]
-set _ibuf_rstage   [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_rstage_reg*_reg*}]
-set _ibuf_pipe_dst [get_cells -quiet -hierarchical -filter {NAME =~ *u_ibuf*mem_pipe_reg*_reg*}]
-if {[llength $_ibuf_uram] && [llength $_ibuf_memreg]} {
-  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram -to $_ibuf_memreg
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram -to $_ibuf_memreg
-}
-if {[llength $_ibuf_uram] && [llength $_ibuf_rstage]} {
-  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram -to $_ibuf_rstage
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram -to $_ibuf_rstage
-}
-if {[llength $_ibuf_memreg] && [llength $_ibuf_rstage]} {
-  set_multicycle_path -setup 2 -from $_ibuf_memreg -to $_ibuf_rstage
-  set_multicycle_path -hold 1 -from $_ibuf_memreg -to $_ibuf_rstage
-}
-if {[llength $_ibuf_rstage] && [llength $_ibuf_pipe_dst]} {
-  set_multicycle_path -setup 1 -from $_ibuf_rstage -to $_ibuf_pipe_dst
-  set_multicycle_path -hold 0 -from $_ibuf_rstage -to $_ibuf_pipe_dst
-}
-if {[llength $_ibuf_uram] && [llength $_ibuf_pipe_dst]} {
-  set_multicycle_path -setup $_buf_mcp_setup -through $_ibuf_uram -to $_ibuf_pipe_dst
-  set_multicycle_path -hold [expr {$_buf_mcp_setup - 1}] -through $_ibuf_uram -to $_ibuf_pipe_dst
-}
+# --- 4.4 (已废弃: chip-v3 XPM 实现, READ_LATENCY=10 不需要 MCP) ---
+# 所有 URAM buffer (tile_ibuf/tile_obuf/vpu_buf) 已替换为 XPM xpm_memory_tdpram,
+# CASCADE_HEIGHT=2, READ_LATENCY=10, 彻底消除 timing 风险，无需 MCP。
 
 # ############################################################################
 # Section 5: 扇出优化 (MAX_FANOUT)
@@ -277,18 +211,7 @@ if {[llength $_tile3]} {
   set_property IS_SOFT TRUE [get_pblocks pblock_tile_3]
 }
 
-# IBUF arbiter -> SLR1 (居中)
-set _c [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf_arb}]
-if {[llength $_c]} { set_property USER_SLR_ASSIGNMENT SLR1 $_c }
-
-# IBUF -> SLR0 (靠近 XDMA AXI 写通路)
-set _ibuf_top [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/u_ibuf}]
-if {[llength $_ibuf_top]} {
-  create_pblock pblock_ibuf
-  add_cells_to_pblock [get_pblocks pblock_ibuf] $_ibuf_top
-  resize_pblock [get_pblocks pblock_ibuf] -add {SLR0}
-  set_property IS_SOFT TRUE [get_pblocks pblock_ibuf]
-}
+# tile_ibuf/tile_obuf 已随 Tile pblock 分配（XPM 实例与 Tile 同 SLR）
 
 # AXI 互连 + VPU + INST_Decoder + CDMA -> SLR0
 create_pblock pblock_axi_vpu
@@ -305,6 +228,48 @@ foreach _f {
 }
 resize_pblock [get_pblocks pblock_axi_vpu] -add {SLR0}
 set_property IS_SOFT TRUE [get_pblocks pblock_axi_vpu]
+
+# --------------------------------------------------------------------------
+# 方案 B: URAM Pblock + VPU 逻辑 Pblock（解决 obuf_din_r → URAM 长距离布线违例）
+#
+# 问题: obuf_din_r_reg(CR X2Y3) → URAM288_X4Y0(CR X6Y0) 路由 3.579ns, slack=-0.710ns
+# 根因: Placer 把 VPU 逻辑放在 SLR0 左侧(CRX2), URAM 散到最右列(CRX6), 对角距离7个CR
+#
+# VU37P SLR0 URAM 列布局 (from DCP query):
+#   X=0 → CRX1 (SLICE 31~56)     X=1 → CRX3 (SLICE 95~116)
+#   X=2 → CRX4 (SLICE 117~145)   X=3 → CRX5 (SLICE 146~175)
+#   X=4 → CRX6 (SLICE 176~205)   ← 最远, 排除
+# SLR0 总 URAM: 5列 × 64 = 320 sites, vpu_buf 需要 256 (80%)
+# --------------------------------------------------------------------------
+
+# (B-1) 将 vpu_buf 的 256 个 URAM 约束到 X=0~3（排除最远的 X=4 列/CRX6）
+set _vpu_buf_uram [get_cells -quiet -hierarchical \
+  -filter {PRIMITIVE_TYPE =~ BLOCKRAM.URAM.* && NAME =~ *u_vpu_buf*}]
+if {[llength $_vpu_buf_uram]} {
+  create_pblock pblock_vpu_buf_uram
+  add_cells_to_pblock [get_pblocks pblock_vpu_buf_uram] $_vpu_buf_uram
+  resize_pblock [get_pblocks pblock_vpu_buf_uram] -add {URAM288_X0Y0:URAM288_X3Y63}
+  set_property IS_SOFT FALSE [get_pblocks pblock_vpu_buf_uram]
+  puts "INFO: pblock_vpu_buf_uram: [llength $_vpu_buf_uram] cells -> URAM288 X0~3, Y0~63"
+}
+
+# (B-2) 将 Global_VPU 逻辑（含 obuf_din_r_reg）约束到 CRX1~CRX3
+# obuf_regs 当前分布: SLICE X=56~132 (CRX2~CRX3)
+# 约束到 CRX1(SL31~56) + CRX2(SL57~94) + CRX3(SL95~116) 覆盖区域
+# 这样 obuf_regs 到 URAM X=0(CRX1)/X=1(CRX3) 最大水平距离 ≤ 2 个 CR
+set _vpu_logic [get_cells -quiet -hierarchical \
+  -filter {NAME =~ lite_i/vpu_0/inst/u_global_vpu/*}]
+if {[llength $_vpu_logic]} {
+  create_pblock pblock_vpu_logic
+  add_cells_to_pblock [get_pblocks pblock_vpu_logic] $_vpu_logic
+  resize_pblock [get_pblocks pblock_vpu_logic] -add {CLOCKREGION_X1Y0:CLOCKREGION_X3Y3}
+  set_property IS_SOFT TRUE [get_pblocks pblock_vpu_logic]
+  set_property PARENT pblock_axi_vpu [get_pblocks pblock_vpu_logic]
+  puts "INFO: pblock_vpu_logic: [llength $_vpu_logic] cells -> CR X1Y0:X3Y3"
+}
+
+# 方案B end--------------------------------------------------------------------------
+
 
 # SLR 分配 (层次 cell)
 foreach _cell {lite_i/vpu_0 lite_i/inst_decoder lite_i/cdma_ctrl lite_i/inst_bram} {

@@ -46,8 +46,8 @@ module Global_VPU #(
     input wire [ADDR_WIDTH-1:0]             addr_s,
     input wire [ADDR_WIDTH-1:0]             addr_t,
 
-    // chip-v2: VPU 通过 vpu_buf 本地 buffer 读写（ADDR_WIDTH=18, 128-bit 字地址）
-    output wire [`VPU_BUF_ADDR_WIDTH-1:0]   obuf_addr,        // 18 (128-bit 字地址, 4MB)
+    // chip-v3: VPU 通过 vpu_buf 本地 buffer 读写（VPU_BUF_ADDR_WIDTH=19, 128-bit 字地址）
+    output wire [`VPU_BUF_ADDR_WIDTH-1:0]   obuf_addr,        // 19 (128-bit 字地址, 8MB)
     output wire                              obuf_en,
     output wire [`DCIM_BUF_DATA_WIDTH/8-1:0] obuf_we,          // 16-byte strb
     output wire [`DCIM_BUF_DATA_WIDTH-1:0]   obuf_din,         // 128-bit
@@ -511,14 +511,6 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
     assign ad_unit_start  = (unit_active == UNIT_AD ) ? start : 1'b0;
     assign im2col_unit_start = (unit_active == UNIT_IM2COL) ? start : 1'b0;
 
-`ifdef SIMULATION
-    always @(posedge clk) begin
-        if (start)
-            $display("[%0t] Global_VPU: start pulse unit_choose=%0d unit_active=%0d vpu_running=%0b",
-                     $time, unit_choose, unit_active, vpu_running);
-    end
-`endif
-
 
  // GB Address (Output from Unit to BRAM) → 通过 obuf_addr 输出到 OBUF
 assign gb_addrb = (unit_active == UNIT_DQA) ? dqa_gb_addrb : 
@@ -637,26 +629,32 @@ assign fp_c_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_c_tdata  :
 );
 
   // --------------------------------------------------
-  // lite: VPU 原生 128-bit。VPU 内部 gb_* 信号直通到 OBUF 端口
-  //   - gb_addrb 是 GB_ADDR_WIDTH (24) 位字节地址 → obuf_addr 是 OBUF_ADDR_WIDTH (20) 位 128-bit 字地址
-  //   - gb_addrb[GB_ADDR_WIDTH-1 : 4] = obuf_addr (24-4 = 20 bits)
+  // chip-v3: VPU 内部 gb_* 信号经 1 级 pipeline 输出到 vpu_buf（8MB, ADDR_WIDTH=19）
+  //   - 加 pipeline 是为了打断 addr 计算 + MUX → URAM 的组合路径，消除 setup violation
+  //   - gb_addrb 是 GB_ADDR_WIDTH (24) 位字节地址 → obuf_addr 是 VPU_BUF_ADDR_WIDTH (19) 位 128-bit 字地址
   //   - gb_dinb/gb_doutb 128-bit 直通 obuf_din/obuf_dout
   //   - gb_web (NB_COL=16 bit byte enable) 直通 obuf_we
   //   - gb_enb 直通 obuf_en
+  //   - 总读延迟: 1 (此 pipeline) + READ_LATENCY (XPM) = 11 cycles
   // --------------------------------------------------
-  // lite 地址适配：
-  //   im2col_unit 的 gb_addrb 是 24-bit 字节地址 → 需要 >> 4 得到 word 地址
-  //   dqa/qa/nn/mp/us/ad 的 gb_addrb 已经在内部做过 >> BYTE_ADDR_SHIFT，
-  //   输出的是 word 地址（不需要再右移）
-  //   统一处理：由于 im2col 输出字节地址，其他 unit 输出 word 地址，
-  //   改为不在这里做右移，而是让 im2col 也输出 word 地址（在 im2col_unit 内部处理）
-  //   但为了不修改所有 unit，这里根据 unit_choose_reg 选择性右移
-  assign obuf_addr = (unit_active == UNIT_IM2COL) ?
+  reg [`VPU_BUF_ADDR_WIDTH-1:0]    obuf_addr_r;
+  reg                               obuf_en_r;
+  reg [`DCIM_BUF_DATA_WIDTH/8-1:0]  obuf_we_r;
+  reg [`DCIM_BUF_DATA_WIDTH-1:0]    obuf_din_r;
+
+  always @(posedge clk) begin
+      obuf_addr_r <= (unit_active == UNIT_IM2COL) ?
                      gb_addrb[GB_ADDR_WIDTH-1 : 4] :  // im2col: 字节地址 >> 4
                      gb_addrb[`VPU_BUF_ADDR_WIDTH-1 : 0];  // 其他 unit: 已是 word 地址
-  assign obuf_en   = gb_enb;
-  assign obuf_we   = gb_web;
-  assign obuf_din  = gb_dinb;
+      obuf_en_r   <= gb_enb;
+      obuf_we_r   <= gb_web;
+      obuf_din_r  <= gb_dinb;
+  end
+
+  assign obuf_addr = obuf_addr_r;
+  assign obuf_en   = obuf_en_r;
+  assign obuf_we   = obuf_we_r;
+  assign obuf_din  = obuf_din_r;
   assign gb_doutb  = obuf_dout;
 
   // --------------------------------------------------

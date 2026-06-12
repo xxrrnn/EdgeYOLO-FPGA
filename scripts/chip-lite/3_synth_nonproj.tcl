@@ -154,6 +154,7 @@ foreach ipTop $modRefIpTops {
 # 定义 include 搜索路径和宏（与 2_bd.tcl 保持一致）
 set inclDirs [list \
     [file normalize "$srcDir/chip"] \
+    [file normalize "$srcDir/common"] \
     [file normalize "$srcDir/ref/DCIM/src/inc"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim"] \
     [file normalize "$srcDir/ref/DCIM/src/model"] \
@@ -185,11 +186,11 @@ foreach stubFile [glob -nocomplain "$stubDir/*_stub.v"] {
 # 读入设计 RTL 源文件
 # chip 顶层
 set chipRtlFiles [list \
+    [file normalize "$srcDir/common/uram_tdp_bytewrite.v"] \
     [file normalize "$srcDir/chip/DCIM_Array.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
-    [file normalize "$srcDir/chip/ibuf_rd_arbiter.sv"] \
-    [file normalize "$srcDir/chip/obuf_bank.v"] \
+    [file normalize "$srcDir/chip/tile_ibuf.v"] \
     [file normalize "$srcDir/chip/tile_obuf.v"] \
 ]
 
@@ -216,9 +217,8 @@ set dcimRtlFiles [list \
     [file normalize "$srcDir/ref/DCIM/src/model/model_rf_bram.sv"] \
 ]
 
-# Buffer
+# Buffer (shared ibuf removed; per-tile ibuf is in chipRtlFiles)
 set bufferRtlFiles [list \
-    [file normalize "$srcDir/DCIM_Macro/ibuf.v"] \
 ]
 
 # VPU（自动收集，排除 testbench 和备份文件）
@@ -387,8 +387,8 @@ puts "\n========== Step 5: Route Design =========="
 set_param general.maxThreads 32
 route_design -directive $routeDirective
 
-# Post-route hold fix
-phys_opt_design -hold_fix -directive AggressiveExplore
+# Post-route hold fix (Vivado 2024.2: -hold_fix 和 -directive 互斥)
+phys_opt_design -hold_fix
 puts "INFO: Post-route hold phys_opt done"
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]

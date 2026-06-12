@@ -1,12 +1,12 @@
 # ==============================================================================
-# connect.tcl - chip-v2: distributed tile_obuf + VPU_BUF system connections
+# connect.tcl - chip-v3: distributed tile_ibuf + tile_obuf + VPU_BUF system connections
 #
-# chip-v2 变更:
-#   - 删除 dcim_obuf_smc / dcim_obuf_ctrl → dcim_array_0 OBUF 连接
-#   - 删除 VPU→dcim_array OBUF 直连端口
-#   - 新增 4x tile_obuf_ctrl → dcim_array_0 tile_obufN 连接
-#   - 新增 vpu_buf_ctrl → vpu_0 vpu_buf_bram 连接
-#   - SmartConnect NUM_MI = 10
+# chip-v3 变更:
+#   - 删除 dcim_ibuf_smc / dcim_ibuf_ctrl_0 → dcim_array_0 IBUF 连接
+#   - 新增 4x tile_ibuf_ctrl → dcim_array_0 tile_ibufN 连接
+#   - 保留 4x tile_obuf_ctrl → dcim_array_0 tile_obufN 连接
+#   - 保留 vpu_buf_ctrl → vpu_0 vpu_buf_bram 连接
+#   - SmartConnect NUM_MI = 13
 # ==============================================================================
 
 # ==============================================================================
@@ -42,50 +42,56 @@ connect_bd_net [get_bd_pins util_ds_buf/IBUF_DS_ODIV2] [get_bd_pins xdma_0/sys_c
 connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 
 # ==============================================================================
-# SmartConnect: NUM_SI=2, NUM_MI=10
+# SmartConnect: NUM_SI=2, NUM_MI=13
 #   S00 = XDMA M_AXI
 #   S01 = CDMA M_AXI
-#   M00 = dcim_ibuf_smc (→ 1 IBUF controller, 2MB)
-#   M01 = tile_obuf_ctrl_0 (256KB)
-#   M02 = tile_obuf_ctrl_1 (256KB)
-#   M03 = tile_obuf_ctrl_2 (256KB)
-#   M04 = tile_obuf_ctrl_3 (256KB)
-#   M05 = vpu_buf_ctrl (4MB)
-#   M06 = vpu_wb_ctrl (32KB)
-#   M07 = inst_bram/s_axi
-#   M08 = vpu_regs/s_axi
-#   M09 = hbm_axi_cc (→ HBM SAXI_00, interleaved 4GB)
+#   M00 = tile_ibuf_ctrl_0 (512KB)
+#   M01 = tile_ibuf_ctrl_1 (512KB)
+#   M02 = tile_ibuf_ctrl_2 (512KB)
+#   M03 = tile_ibuf_ctrl_3 (512KB)
+#   M04 = tile_obuf_ctrl_0 (256KB)
+#   M05 = tile_obuf_ctrl_1 (256KB)
+#   M06 = tile_obuf_ctrl_2 (256KB)
+#   M07 = tile_obuf_ctrl_3 (256KB)
+#   M08 = vpu_buf_ctrl (8MB)
+#   M09 = vpu_wb_ctrl (32KB)
+#   M10 = inst_bram/s_axi
+#   M11 = vpu_regs/s_axi
+#   M12 = hbm_axi_cc (→ HBM SAXI_00, interleaved 4GB)
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_mem_smc
 set_property -dict [list \
   CONFIG.NUM_SI {2} \
-  CONFIG.NUM_MI {10} \
+  CONFIG.NUM_MI {13} \
 ] [get_bd_cells axi_mem_smc]
 
 # Slave ports
 connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_mem_smc/S01_AXI]
 
-# M00: DCIM IBUF sub-SmartConnect
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M00_AXI] [get_bd_intf_pins dcim_ibuf_smc/S00_AXI]
+# M00~M03: tile_ibuf_ctrl_0..3
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M00_AXI] [get_bd_intf_pins tile_ibuf_ctrl_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins tile_ibuf_ctrl_1/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins tile_ibuf_ctrl_2/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins tile_ibuf_ctrl_3/S_AXI]
 
-# M01~M04: tile_obuf_ctrl_0..3 (直连，不需要 sub-SmartConnect)
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M01_AXI] [get_bd_intf_pins tile_obuf_ctrl_0/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M02_AXI] [get_bd_intf_pins tile_obuf_ctrl_1/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M03_AXI] [get_bd_intf_pins tile_obuf_ctrl_2/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M04_AXI] [get_bd_intf_pins tile_obuf_ctrl_3/S_AXI]
+# M04~M07: tile_obuf_ctrl_0..3
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M04_AXI] [get_bd_intf_pins tile_obuf_ctrl_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M05_AXI] [get_bd_intf_pins tile_obuf_ctrl_1/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M06_AXI] [get_bd_intf_pins tile_obuf_ctrl_2/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M07_AXI] [get_bd_intf_pins tile_obuf_ctrl_3/S_AXI]
 
-# M05: VPU_BUF controller
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M05_AXI] [get_bd_intf_pins vpu_buf_ctrl/S_AXI]
+# M08: VPU_BUF controller
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M08_AXI] [get_bd_intf_pins vpu_buf_ctrl/S_AXI]
 
-# M06: VPU Weight Buffer BRAM controller
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M06_AXI] [get_bd_intf_pins vpu_wb_ctrl/S_AXI]
+# M09: VPU Weight Buffer BRAM controller
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M09_AXI] [get_bd_intf_pins vpu_wb_ctrl/S_AXI]
 
-# M07: Instruction BRAM controller
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M07_AXI] [get_bd_intf_pins inst_bram_ctrl/S_AXI]
+# M10: Instruction BRAM controller
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M10_AXI] [get_bd_intf_pins inst_bram_ctrl/S_AXI]
 
-# M08: VPU AXI Register interface
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M08_AXI] [get_bd_intf_pins vpu_regs/S_AXI]
+# M11: VPU AXI Register interface
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M11_AXI] [get_bd_intf_pins vpu_regs/S_AXI]
 
 # ==============================================================================
 # CDMA_Controller → CDMA S_AXI_LITE
@@ -100,17 +106,17 @@ connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins main_rst/ext_reset_in]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins main_rst/dcm_locked]
 
 # ==============================================================================
-# DCIM IBUF: AXI BRAM Controller → dcim_array_0
+# tile_ibuf[0..3]: AXI BRAM Controller → dcim_array_0
 # ==============================================================================
-connect_bd_intf_net [get_bd_intf_pins dcim_ibuf_smc/M00_AXI] \
-                    [get_bd_intf_pins dcim_ibuf_ctrl_0/S_AXI]
-connect_bd_net [get_bd_pins dcim_ibuf_ctrl_0/bram_en_a]     [get_bd_pins dcim_array_0/ibuf_ext_ena]
-connect_bd_net [get_bd_pins dcim_ibuf_ctrl_0/bram_we_a]     [get_bd_pins dcim_array_0/ibuf_ext_wea]
-connect_bd_net [get_bd_pins dcim_ibuf_ctrl_0/bram_addr_a]   [get_bd_pins dcim_array_0/ibuf_ext_addra]
-connect_bd_net [get_bd_pins dcim_ibuf_ctrl_0/bram_wrdata_a] [get_bd_pins dcim_array_0/ibuf_ext_dina]
-connect_bd_net [get_bd_pins dcim_array_0/ibuf_ext_douta]    [get_bd_pins dcim_ibuf_ctrl_0/bram_rddata_a]
-connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins dcim_ibuf_ctrl_0/s_axi_aclk]
-connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins dcim_ibuf_ctrl_0/s_axi_aresetn]
+foreach t {0 1 2 3} {
+  connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_en_a]     [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_ena]
+  connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_we_a]     [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_wea]
+  connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_addr_a]   [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_addra]
+  connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_wrdata_a] [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_dina]
+  connect_bd_net [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_douta] [get_bd_pins tile_ibuf_ctrl_${t}/bram_rddata_a]
+  connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aclk]
+  connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aresetn]
+}
 
 # ==============================================================================
 # tile_obuf[0..3]: AXI BRAM Controller → dcim_array_0
@@ -124,10 +130,6 @@ foreach t {0 1 2 3} {
   connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aclk]
   connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aresetn]
 }
-
-# Sub-SmartConnect clock/reset (IBUF only; OBUF sub-smc removed in chip-v2)
-connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins dcim_ibuf_smc/aclk]
-connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins dcim_ibuf_smc/aresetn]
 
 # ==============================================================================
 # VPU_BUF: AXI BRAM Controller → vpu_0/vpu_buf_bram (BRAM interface)
@@ -282,6 +284,6 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins hbm_axi_cc/s_axi_ar
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_axi_cc/m_axi_aclk]
 connect_bd_net [get_bd_pins hbm_rst/peripheral_aresetn] [get_bd_pins hbm_axi_cc/m_axi_aresetn]
 
-# SmartConnect M09 → AXI Clock Converter → HBM SAXI_00 (interleaved, full 4GB)
-connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M09_AXI] [get_bd_intf_pins hbm_axi_cc/S_AXI]
+# SmartConnect M12 → AXI Clock Converter → HBM SAXI_00 (interleaved, full 4GB)
+connect_bd_intf_net [get_bd_intf_pins axi_mem_smc/M12_AXI] [get_bd_intf_pins hbm_axi_cc/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hbm_axi_cc/M_AXI] [get_bd_intf_pins hbm_0/SAXI_00]

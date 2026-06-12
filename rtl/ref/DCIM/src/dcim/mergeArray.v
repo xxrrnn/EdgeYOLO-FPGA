@@ -93,7 +93,6 @@ module merge#(
 	assign sub_sign[2] = (w_s1 | w_s2[2]) ? up_data_split[2][WD2-1] : 1'b0;
 	assign sub_sign[3] = (w_s1 | w_s2[3]) ? up_data_split[3][WD2-1] : 1'b0;
 
-	// 为 psum2_s 预留的二级符号判定
 	wire psum1_sign0, psum1_sign1;
 	assign psum1_sign0 = (w_s1 | w_s2[1] | w_s2[0]) ? psum1_s[0][WD_PS1-1] : 1'b0;
 	assign psum1_sign1 = (w_s1 | w_s2[3] | w_s2[2]) ? psum1_s[1][WD_PS1-1] : 1'b0;
@@ -117,6 +116,48 @@ module merge#(
 	assign psum2_s_ext_2WD_TEMP = { {(2*WD_TEMP-WD_PS2){psum2_s[WD_PS2-1]}}, psum2_s };
 	assign psum2_u_ext_2WD_TEMP = { {(2*WD_TEMP-WD_PS2){1'b0}}, psum2_u };
 
+	// ---- Pipeline register: break path from psum computation to tempH/tempL ----
+	reg [WD_TEMP-1: 0] psum1_s_ext_d [1:0];
+	reg [WD_TEMP-1: 0] psum1_u_ext_d [1:0];
+	reg [2*WD_TEMP-1:0] psum2_s_ext_d;
+	reg [2*WD_TEMP-1:0] psum2_u_ext_d;
+	reg refresh_d;
+	reg ena_d;
+
+	always @(posedge clk or negedge rstn) begin
+		if (~rstn) begin
+			psum1_s_ext_d[0] <= 0;
+			psum1_s_ext_d[1] <= 0;
+			psum1_u_ext_d[0] <= 0;
+			psum1_u_ext_d[1] <= 0;
+			psum2_s_ext_d    <= 0;
+			psum2_u_ext_d    <= 0;
+			refresh_d        <= 0;
+			ena_d            <= 0;
+		end else begin
+			if (clr) begin
+				psum1_s_ext_d[0] <= 0;
+				psum1_s_ext_d[1] <= 0;
+				psum1_u_ext_d[0] <= 0;
+				psum1_u_ext_d[1] <= 0;
+				psum2_s_ext_d    <= 0;
+				psum2_u_ext_d    <= 0;
+				refresh_d        <= 0;
+				ena_d            <= 0;
+			end else begin
+				psum1_s_ext_d[0] <= psum1_s_ext_WD_TEMP[0];
+				psum1_s_ext_d[1] <= psum1_s_ext_WD_TEMP[1];
+				psum1_u_ext_d[0] <= psum1_u_ext_WD_TEMP[0];
+				psum1_u_ext_d[1] <= psum1_u_ext_WD_TEMP[1];
+				psum2_s_ext_d    <= psum2_s_ext_2WD_TEMP;
+				psum2_u_ext_d    <= psum2_u_ext_2WD_TEMP;
+				refresh_d        <= refresh;
+				ena_d            <= ena;
+			end
+		end
+	end
+	// ---- End pipeline register ----
+
 	reg [WD_TEMP-1: 0] n_tempH, n_tempL;
 	reg [2*WD_TEMP-1: 0] n_temp;
 	reg [2*WD_TEMP-1: 0] temp;
@@ -125,37 +166,37 @@ module merge#(
 		temp = {tempH, tempL};
 		case(mode)
 			`MODE_INT8: begin
-				if(refresh) begin
-					n_tempH = psum1_s_ext_WD_TEMP[1];
-					n_tempL = psum1_s_ext_WD_TEMP[0];
+				if(refresh_d) begin
+					n_tempH = psum1_s_ext_d[1];
+					n_tempL = psum1_s_ext_d[0];
 				end else begin
-					n_tempH = psum1_s_ext_WD_TEMP[1] + (tempH<<<WD1);
-					n_tempL = psum1_s_ext_WD_TEMP[0] + (tempL<<<WD1);
+					n_tempH = psum1_s_ext_d[1] + (tempH<<<WD1);
+					n_tempL = psum1_s_ext_d[0] + (tempL<<<WD1);
 				end
 			end
 			`MODE_UINT8: begin
-				if(refresh) begin
-					n_tempH = psum1_u_ext_WD_TEMP[1];
-					n_tempL = psum1_u_ext_WD_TEMP[0];
+				if(refresh_d) begin
+					n_tempH = psum1_u_ext_d[1];
+					n_tempL = psum1_u_ext_d[0];
 				end else begin
-					n_tempH = psum1_u_ext_WD_TEMP[1] + (tempH<<WD1);
-					n_tempL = psum1_u_ext_WD_TEMP[0] + (tempL<<WD1);
+					n_tempH = psum1_u_ext_d[1] + (tempH<<WD1);
+					n_tempL = psum1_u_ext_d[0] + (tempL<<WD1);
 				end
 			end
 			`MODE_INT16: begin
-				if(refresh) begin
-					n_temp = psum2_s_ext_2WD_TEMP;
+				if(refresh_d) begin
+					n_temp = psum2_s_ext_d;
 				end else begin
-					n_temp = psum2_s_ext_2WD_TEMP + (temp<<<WD1);
+					n_temp = psum2_s_ext_d + (temp<<<WD1);
 				end
 				n_tempH = n_temp[WD_TEMP+: WD_TEMP];
 				n_tempL = n_temp[0      +: WD_TEMP];
 			end
 			`MODE_UINT16: begin
-				if(refresh) begin
-					n_temp = psum2_u_ext_2WD_TEMP;
+				if(refresh_d) begin
+					n_temp = psum2_u_ext_d;
 				end else begin
-					n_temp = psum2_u_ext_2WD_TEMP + (temp<<WD1);
+					n_temp = psum2_u_ext_d + (temp<<WD1);
 				end
 				n_tempH = n_temp[WD_TEMP+: WD_TEMP];
 				n_tempL = n_temp[0      +: WD_TEMP];
@@ -175,7 +216,7 @@ module merge#(
 			if(clr) begin
 				tempH <= 0;
 				tempL <= 0;
-			end else if(ena) begin
+			end else if(ena_d) begin
 				tempH <= n_tempH;
 				tempL <= n_tempL;
 			end else begin
@@ -233,9 +274,20 @@ module mergeArrayController(
 		.cnt_done(w_cnt_done)
 	);
 
+	// Delay cnt_done by 1 cycle to account for merge pipeline register
+	reg w_cnt_done_d;
+	always @(posedge clk or negedge rstn) begin
+		if (~rstn)
+			w_cnt_done_d <= 1'b0;
+		else if (clr)
+			w_cnt_done_d <= 1'b0;
+		else
+			w_cnt_done_d <= w_cnt_done;
+	end
+
 	pipe_stage u_pipe_stage_ctrl(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
-		.up_valid(w_cnt_done), .up_ready(w_up_ready),
+		.up_valid(w_cnt_done_d), .up_ready(w_up_ready),
 		.dn_valid(w_dn_valid), .dn_ready(dn_ready)
 	);
 

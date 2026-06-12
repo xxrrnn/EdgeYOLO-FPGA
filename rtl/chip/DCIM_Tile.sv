@@ -64,8 +64,7 @@ module DCIM_Tile #(
     input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
     input  wire [BUF_ADDR_WIDTH-1:0]     out_base_addr,
 
-    output reg                           ibuf_rd_valid,
-    input  wire                          ibuf_rd_ready,
+    output reg                           ibuf_rd_en,
     output reg  [BUF_ADDR_WIDTH-1:0]     ibuf_rd_addr,
     input  wire                          ibuf_rd_data_valid,
     input  wire [BUF_DATA_WIDTH-1:0]     ibuf_rd_data,
@@ -238,7 +237,7 @@ module DCIM_Tile #(
             all_rows_processed <= 1'b0;
             all_results_collected <= 1'b0;
         end else begin
-            ibuf_handshake_done <= (ibuf_rd_valid && ibuf_rd_ready);
+            ibuf_handshake_done <= ibuf_rd_en;
             ibuf_data_received <= ibuf_rd_data_valid;
             wei_load_finished <= (wei_load_cnt >= chunk_words - 1'b1);
             ppcache_finished <= (state == ST_LOAD_PPCACHE) &&
@@ -310,7 +309,7 @@ module DCIM_Tile #(
             dcim_data_wei <= '0;
             conv_valid <= 1'b0;
             conv_data <= '0;
-            ibuf_rd_valid <= 1'b0;
+            ibuf_rd_en <= 1'b0;
             ibuf_rd_addr <= '0;
             ibuf_data_latch <= '0;
             conv_sent_reg <= 1'b0;
@@ -334,7 +333,7 @@ module DCIM_Tile #(
                     chunk_words <= '0;
                     row_wei_base <= wei_base_addr_reg;
                     row_act_addr <= act_base_addr_reg;
-                    ibuf_rd_valid <= 1'b0;
+                    ibuf_rd_en <= 1'b0;
                     conv_sent_reg <= 1'b0;
                     compute_phase_cnt <= '0;
                     act_load_cnt <= '0;
@@ -344,7 +343,7 @@ module DCIM_Tile #(
                     wei_load_cnt <= '0;
                     ppcache_cnt <= '0;
                     row_cnt <= '0;
-                    ibuf_rd_valid <= 1'b0;
+                    ibuf_rd_en <= 1'b0;
                     conv_sent_reg <= 1'b0;
                     compute_phase_cnt <= '0;
                     act_load_cnt <= '0;
@@ -361,14 +360,14 @@ module DCIM_Tile #(
                 end
 
                 ST_LOAD_WEI_REQ: begin
-                    ibuf_rd_valid <= 1'b1;
+                    ibuf_rd_en <= 1'b1;
                     ibuf_rd_addr <= row_wei_base + wei_load_cnt;
                     if (ibuf_handshake_done)
-                        ibuf_rd_valid <= 1'b0;
+                        ibuf_rd_en <= 1'b0;
                 end
 
                 ST_LOAD_WEI_RESP: begin
-                    ibuf_rd_valid <= 1'b0;
+                    ibuf_rd_en <= 1'b0;
                     if (ibuf_data_received)
                         ibuf_data_latch <= ibuf_rd_data;
                 end
@@ -401,14 +400,14 @@ module DCIM_Tile #(
                 ST_LOAD_ACT_REQ: begin
                     conv_sent_reg <= 1'b0;
                     compute_phase_cnt <= '0;
-                    ibuf_rd_valid <= 1'b1;
+                    ibuf_rd_en <= 1'b1;
                     ibuf_rd_addr <= row_act_addr + act_load_cnt;
                     if (ibuf_handshake_done)
-                        ibuf_rd_valid <= 1'b0;
+                        ibuf_rd_en <= 1'b0;
                 end
 
                 ST_LOAD_ACT_RESP: begin
-                    ibuf_rd_valid <= 1'b0;
+                    ibuf_rd_en <= 1'b0;
                     if (ibuf_data_received) begin
                         if (is_int16) begin
                             for (int ch = 0; ch < BUF_DATA_WIDTH/16; ch++) begin

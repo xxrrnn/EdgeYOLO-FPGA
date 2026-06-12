@@ -193,20 +193,26 @@
 
 // ── Buffer 容量 / 数据宽度（主旋钮）────────────────────────────────────────
 // 字地址位宽决定容量：SIZE_BYTES = (1<<ADDR_WIDTH) * BYTES_PER_WORD
-`define DCIM_IBUF_ADDR_WIDTH    17      // 2MB  IBUF（128K × 16B words）
 `define DCIM_BUF_DATA_WIDTH     128     // IBUF/tile_obuf/VPU_BUF 128-bit 字宽
 
-// ── chip-v2: 共享 OBUF 已拆分为 per-tile tile_obuf + VPU_BUF ──────────────
-// tile_obuf: 每 Tile 本地写 buffer，CDMA 可读。与 Tile 同 SLR，零跨越。
+// ── chip-v3 XPM: IBUF 拆分为 per-tile tile_ibuf ──────────────────────────
+// tile_ibuf: 每 Tile 本地读 buffer (weight+activation)，与 Tile 同 SLR，零跨越。
+// XPM xpm_memory_tdpram, CASCADE_HEIGHT=2, READ_LATENCY=10
+`define DCIM_TILE_IBUF_ADDR_WIDTH  15   // 512KB per tile (32K × 16B words)
+`define DCIM_TILE_IBUF_RD_LATENCY  10   // XPM READ_LATENCY (无 timing 风险)
+
+// 向后兼容: IBUF_ADDR_WIDTH 指向 tile_ibuf（Tile 内部寻址用）
+`define DCIM_IBUF_ADDR_WIDTH    `DCIM_TILE_IBUF_ADDR_WIDTH
+
+// ── chip-v3 XPM: tile_obuf per-tile 输出 buffer ─────────────────────────
+// tile_obuf: 每 Tile 本地写 buffer，CDMA 可读。XPM CASCADE_HEIGHT=2, READ_LATENCY=10
 `define DCIM_TILE_OBUF_ADDR_WIDTH  14   // 256KB per tile (16K × 16B words)
-`define DCIM_TILE_OBUF_NUM_BANKS    4   // 4 bank → cascade=2 → 8 URAM per tile
-`define DCIM_TILE_OBUF_NBPIPE       4   // 读流水级数（CDMA 读取用）
+`define DCIM_TILE_OBUF_RD_LATENCY  10   // XPM READ_LATENCY (无 timing 风险)
 
 // VPU_BUF: VPU 本地 R/W buffer，与 VPU 同在 SLR0，零跨越。
-`define VPU_BUF_ADDR_WIDTH         18   // 4MB (256K × 16B words)
-`define VPU_BUF_NUM_BANKS          16   // 16 bank → cascade=4 → 128 URAM
-`define VPU_BUF_NBPIPE              6   // 读流水级数
-`define VPU_BUF_IN_REG_STAGES       1   // 输入寄存级（同 SLR 不需要多级）
+// chip-v3 XPM: 8MB，CASCADE_HEIGHT=2，READ_LATENCY=10
+`define VPU_BUF_ADDR_WIDTH         19   // 8MB (512K × 16B words)
+`define VPU_BUF_RD_LATENCY         10   // XPM READ_LATENCY (无 timing 风险)
 
 // tile_obuf 写流水排空周期（Tile FSM ST_DONE 等待写入完成）
 // tile_obuf 输入寄存 1 级 + 安全余量 1 = 2 周期
@@ -219,15 +225,18 @@
 `define DCIM_BUF_COL_WIDTH      `CHIP_BYTE_WIDTH                        // 每列 8 bit = 1 byte
 `define DCIM_BUF_NUM_COL        (`DCIM_BUF_DATA_WIDTH / `DCIM_BUF_COL_WIDTH)  // 16 列 byte-enable
 `define DCIM_BUF_BYTES_PER_WORD (`DCIM_BUF_DATA_WIDTH / `CHIP_BYTE_WIDTH)    // 128b → 16B（勿用 NUM_COL*COL_WIDTH）
-`define DCIM_IBUF_SIZE_BYTES    ((1 << `DCIM_IBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
+`define DCIM_TILE_IBUF_SIZE_BYTES ((1 << `DCIM_TILE_IBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
+`define DCIM_IBUF_SIZE_BYTES    `DCIM_TILE_IBUF_SIZE_BYTES
 `define DCIM_TILE_OBUF_SIZE_BYTES ((1 << `DCIM_TILE_OBUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
 `define VPU_BUF_SIZE_BYTES      ((1 << `VPU_BUF_ADDR_WIDTH) * `DCIM_BUF_BYTES_PER_WORD)
 
-// 向后兼容：BUF_ADDR_WIDTH 默认指向 IBUF（旧代码可能用到）
-`define DCIM_BUF_ADDR_WIDTH     `DCIM_IBUF_ADDR_WIDTH
+// 向后兼容：BUF_ADDR_WIDTH 默认指向 tile_ibuf（Tile 内部寻址用）
+`define DCIM_BUF_ADDR_WIDTH     `DCIM_TILE_IBUF_ADDR_WIDTH
 
 // AXI BRAM 字节地址 = 字地址左移 BYTE_ADDR_SHIFT
 `define DCIM_BYTE_ADDR_SHIFT    `CHIP_BYTE_ADDR_SHIFT
+// tile_ibuf 的 AXI 地址宽度
+`define DCIM_TILE_IBUF_AXI_ADDR_WIDTH (`DCIM_TILE_IBUF_ADDR_WIDTH + `DCIM_BYTE_ADDR_SHIFT)
 // tile_obuf 的 AXI 地址宽度
 `define DCIM_TILE_OBUF_AXI_ADDR_WIDTH (`DCIM_TILE_OBUF_ADDR_WIDTH + `DCIM_BYTE_ADDR_SHIFT)
 // VPU_BUF 的 AXI 地址宽度
@@ -236,48 +245,19 @@
 `define DCIM_AXI_BRAM_ADDR_WIDTH `DCIM_TILE_OBUF_AXI_ADDR_WIDTH
 
 // ============================================================================
-// IBUF / OBUF 流水线与多 bank — 仅改「主旋钮」，其余由表达式推导
-// （与 rtl/DCIM_Macro/ibuf.v、obuf.v、ibuf_rd_arbiter.sv 结构一一对应）
+// XPM Buffer 统一参数（chip-v3: 所有 URAM buffer 使用 xpm_memory_tdpram）
+// CASCADE_HEIGHT=2, READ_LATENCY=10, 彻底消除 URAM timing 风险
 // ============================================================================
 
-// ── IBUF 主旋钮 ───────────────────────────────────────────────────────────
-// 250MHz：更多 bank 缩短每 bank URAM 级联深度；URAM_RD_STAGES 将读拆为 addr→data 两拍
-`define DCIM_IBUF_NUM_BANKS          4       // 须为 2 的幂（2→4：单 bank 地址少 1bit，减 URAM 链长）
-`define DCIM_IBUF_URAM_RD_STAGES     1       // ibuf_bank：单拍 mem[addra]→寄存（Vivado URAM 可推断）；勿用 addr 锁存再读
-`define DCIM_IBUF_NBPIPE             6       // ibuf_bank：URAM 输出之后到 dout 的流水级数
-`define DCIM_IBUF_IN_REG             1       // Port A/B 输入寄存（0=旁路）
-`define DCIM_IBUF_BANK_SEL_PIPE_EXTRA 3      // ibuf.v bank_sel_*_pipe：NBPIPE 之后再打 3 拍
+// ── AXI BRAM Controller READ_LATENCY（与 XPM READ_LATENCY 匹配）─────────
+`define DCIM_TILE_IBUF_AXI_BRAM_READ_LATENCY 10
+`define DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY 10
+`define VPU_BUF_AXI_BRAM_READ_LATENCY        10
 
-// ── IBUF 推导 ─────────────────────────────────────────────────────────────
-`define DCIM_IBUF_BANK_BITS          ($clog2(`DCIM_IBUF_NUM_BANKS))
-`define DCIM_IBUF_BANK_ADDR_WIDTH    (`DCIM_IBUF_ADDR_WIDTH - `DCIM_IBUF_BANK_BITS)
-`define DCIM_IBUF_BANK_RD_EN_DEPTH   (`DCIM_IBUF_NBPIPE + 1)
-`define DCIM_IBUF_BANK_MUX_PIPE      (`DCIM_IBUF_NBPIPE + `DCIM_IBUF_BANK_SEL_PIPE_EXTRA)
-`define DCIM_IBUF_ARB_LATENCY_EXTRA  1       // ibuf_rd_arbiter grant/计数余量
-`define DCIM_IBUF_RD_LATENCY         (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE + `DCIM_IBUF_ARB_LATENCY_EXTRA)
-// AXI BRAM Controller READ_LATENCY（CDMA/XDMA 经 Port A 读 IBUF）
-// 公式：IN_REG(1) + BANK_MUX_PIPE(9) + FINAL_MUX_REG(1) = 11
-`define DCIM_IBUF_AXI_BRAM_READ_LATENCY_FINAL_REG 1
-`define DCIM_IBUF_AXI_BRAM_READ_LATENCY (`DCIM_IBUF_IN_REG + `DCIM_IBUF_BANK_MUX_PIPE + `DCIM_IBUF_AXI_BRAM_READ_LATENCY_FINAL_REG)
-// 向后兼容：DCIM_OBUF_AXI_BRAM_READ_LATENCY → tile_obuf
+// 向后兼容别名
+`define DCIM_IBUF_RD_LATENCY        `DCIM_TILE_IBUF_RD_LATENCY
+`define DCIM_IBUF_AXI_BRAM_READ_LATENCY `DCIM_TILE_IBUF_AXI_BRAM_READ_LATENCY
 `define DCIM_OBUF_AXI_BRAM_READ_LATENCY `DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY
-
-// ── OBUF 已废弃（chip-v2: 拆分为 tile_obuf + VPU_BUF）─────────────────────
-// 以下保留推导宏供旧代码编译兼容（如 DCIM_Array.sv out_base_addrs 位宽）
-
-// ── tile_obuf 推导 ──────────────────────────────────────────────────────────
-`define DCIM_TILE_OBUF_BANK_BITS       ($clog2(`DCIM_TILE_OBUF_NUM_BANKS))
-`define DCIM_TILE_OBUF_BANK_ADDR_WIDTH (`DCIM_TILE_OBUF_ADDR_WIDTH - `DCIM_TILE_OBUF_BANK_BITS)
-`define DCIM_TILE_OBUF_BANK_RD_EN_DEPTH (`DCIM_TILE_OBUF_NBPIPE + 1)
-`define DCIM_TILE_OBUF_RD_LATENCY      6   // reg(1) + NBPIPE(4) + mux(1)
-`define DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY 6
-
-// ── VPU_BUF 推导 ────────────────────────────────────────────────────────────
-`define VPU_BUF_BANK_BITS              ($clog2(`VPU_BUF_NUM_BANKS))
-`define VPU_BUF_BANK_ADDR_WIDTH        (`VPU_BUF_ADDR_WIDTH - `VPU_BUF_BANK_BITS)
-`define VPU_BUF_BANK_RD_EN_DEPTH       (`VPU_BUF_NBPIPE + 1)
-`define VPU_BUF_BANK_MUX_PIPE          10   // NBPIPE(6) + IN_REG(1) + 3
-`define VPU_BUF_AXI_BRAM_READ_LATENCY  12  // BANK_MUX_PIPE(10) + 2
 
 // ── tile_obuf 外部字节地址：字地址即 tile 内部地址 ──────────────────────────
 `define DCIM_OBUF_EXT_ADDR_BITS `DCIM_TILE_OBUF_ADDR_WIDTH  // = 14 bits

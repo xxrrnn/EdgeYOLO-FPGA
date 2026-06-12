@@ -278,9 +278,9 @@ make verdi MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
 
 ---
 
-## 当前验证状态（2026-05-30）
+## 当前验证状态（2026-06-12）
 
-硬件拓扑：DCIM lite 为 **4 Tile × 64×64** 的 Array–Tile 结构（`DCIM_Array` = 4×`DCIM_Tile` + 共享 IBUF/OBUF），无 Group 层。
+硬件拓扑：DCIM lite 为 **4 Tile × 64×64** 的 Array–Tile 结构（`DCIM_Array` = 4×`DCIM_Tile` + per-tile XPM tile_ibuf/tile_obuf + VPU_BUF 8MB），无 Group 层。所有 URAM buffer 使用 XPM `xpm_memory_tdpram`（CASCADE_HEIGHT=2, READ_LATENCY=10）。
 
 注意：Vivado module_ref wrapper 会把 `NUM_TILES/CH_IN/CH_OUT/CYCLE` 固化到 `lite_dcim_array_0_0.v`。修改 `chip_defines.vh` 后必须先运行 `make export`，再 `make compile`/`make rebuild-suite`。
 
@@ -564,17 +564,24 @@ make sim-suite MODULE_CASE=mp BATCH_SUITE=mp_all
 make sim-batch MODULE_CASE=im2col BATCH_SUITE=im2col_all
 ```
 
-### conv_pipeline（im2col + DCIM + DQA + QA）
+### conv_pipeline（im2col + DCIM → tile_obuf → VPU_BUF CDMA → DQA + QA）
 
-| 用例 | check / total words | 状态 |
-|------|---------------------|------|
-| `pipe_conv3_s2_c32_to64` | `— / 64` | UNTESTED，需重跑确认 |
-| `pipe_conv1_c512_to64_tilepass` | `—` | UNTESTED |
+DCIM 计算结果写入各 tile 独立的 `tile_obuf`（物理地址 `0x1_0100_0000`~`0x1_010F_FFFF`，与 VPU_BUF 完全分离）。`dcim_layer_inst` 生成 DCIM 层后，通过逐 pixel 的 CDMA（`tile_obuf_t[px*wpt] → VPU_BUF[dcim_off + (px*tiles+t)*wpt]`）将结果搬运为 DQA 所需的 pixel-interleaved 布局，再由 DQA/QA 处理。
+
+**修复日期：2026-06-12**（添加 pixel-interleaved CDMA 搬运逻辑到 `dcim_layer_inst`）
+
+| 用例 | 输入 | 输出 | acc | tiles | 状态 |
+|------|------|------|-----|-------|------|
+| `pipe_conv1_c16_to16` | 4×4×16 | 4×4×32 | 2 | 1 | **PASS** |
+| `pipe_conv3_s2_c32_to64` | 8×8×32 | 4×4×64 | 5 | 2 | **PASS** |
+| `pipe_conv1_c512_to64_tilepass` | 4×4×512 | 4×4×64 | 8 | 2 | **PASS** |
+
+（以上三个用例同时通过 INT8 和 INT16 变体）
 
 运行：
 
 ```bash
-make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all
+make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all
 ```
 
 ### concat_by_cdma
@@ -591,20 +598,19 @@ make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all
 make rebuild-suite MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all STOP_ON_FAIL=0 LOG=1
 ```
 
-### large_channel_pressure
+### mini_network（多层 conv + residual add）
 
-| 用例 | 实际模块 | 状态 |
-|------|----------|------|
-| `dcim_conv1_c512_to64_tilepass` | `dcim_matmul` | 待用 backdoor suite 重跑确认 |
-| `pipe_conv1_c512_to64_tilepass` | `conv_pipeline` | 待用 backdoor suite 重跑确认 |
-| `dqa_c256_pressure` | `dqa` | 待用 backdoor suite 重跑确认 |
-| `qa_c256_pressure` | `qa` | 待用 backdoor suite 重跑确认 |
-| `concat_c128_c128_to256` | `concat_by_cdma` | 待用 backdoor suite 重跑确认 |
+| 用例 | 层数 | 输入 | 状态 |
+|------|------|------|------|
+| `mini_2conv_c16` | 2 | 8×8×16 | **PASS** |
+| `mini_3conv_residual_c32` | 3+residual | 8×8×32 | **PASS** |
+
+（以上两个用例同时通过 INT8 和 INT16 变体）
 
 运行：
 
 ```bash
-make rebuild-suite MODULE_CASE=large_channel_pressure BATCH_SUITE=large_channel_all STOP_ON_FAIL=0 LOG=1
+make sim-batch MODULE_CASE=mini_network BATCH_SUITE=mini_network_all QUANT=all
 ```
 
 ---
@@ -714,6 +720,44 @@ make sim-results
 ---
 
 ## 修复记录
+
+### chip-v3 XPM 改造（2026-06-12）
+
+所有 URAM buffer（`tile_ibuf`、`tile_obuf`、`vpu_buf`）从手动 multi-bank `obuf_bank` 实现替换为 Xilinx XPM `xpm_memory_tdpram`：
+
+- `MEMORY_PRIMITIVE = "ultra"`，`CASCADE_HEIGHT = 2`，`READ_LATENCY = 10`
+- 单个 XPM 实例替代 multi-bank + bank_sel_pipe + MUX 逻辑
+- VPU_BUF 扩容：1MB → 8MB（ADDR_WIDTH=19）
+- backdoor 路径改为 `u_xpm.xpm_memory_base_inst.mem[word_addr]`（单一连续数组，无 bank 分拆）
+- XPM 仿真模型由 `make export` 自动包含（Vivado export_simulation 输出 xpm_memory 库文件）
+
+**改动后必须执行：**
+
+```bash
+make export    # XPM 模块需重新生成仿真文件
+make compile   # 重编 simv
+make sim-smoke # 验证基本功能
+```
+
+**验证 XPM 改造正确性的推荐命令：**
+
+```bash
+# 1. DCIM 全路径（验证 tile_ibuf XPM READ_LATENCY=10 正确）
+timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all STOP_ON_FAIL=0 LOG=1
+
+# 2. conv_pipeline（验证 tile_obuf XPM 写入正确）
+timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all STOP_ON_FAIL=0 LOG=1
+
+# 3. VPU 单元（验证 vpu_buf XPM 8MB 读写正确）
+timeout 2h make rebuild-suite MODULE_CASE=im2col BATCH_SUITE=im2col_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=us BATCH_SUITE=us_all STOP_ON_FAIL=0 LOG=1
+timeout 1h make rebuild-suite MODULE_CASE=mp BATCH_SUITE=mp_all STOP_ON_FAIL=0 LOG=1
+
+# 4. 全量回归
+timeout 8h make sim-all STOP_ON_FAIL=0 LOG=1
+```
+
+---
 
 `us` 修复：原状态机只等 1 拍即锁存 `gb_doutb`，而 OBUF 读延迟为 7 拍，导致输出整体偏移 1 word。修复后增加 `gb_doutb_valid` 握手端口，`S_LOAD_WAIT` 改为 valid 等待，并修正 `LANES_BITS` 硬编码。
 

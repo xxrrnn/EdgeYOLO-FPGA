@@ -40,11 +40,11 @@ if {[file exists $bdRoot]} {
 create_bd_design -dir $bdDir $bdName
 
 set chipRtlFiles [list \
+    [file normalize "$srcDir/common/uram_tdp_bytewrite.v"] \
     [file normalize "$srcDir/chip/DCIM_Array.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
-    [file normalize "$srcDir/chip/ibuf_rd_arbiter.sv"] \
-    [file normalize "$srcDir/chip/obuf_bank.v"] \
+    [file normalize "$srcDir/chip/tile_ibuf.v"] \
     [file normalize "$srcDir/chip/tile_obuf.v"] \
 ]
 
@@ -71,7 +71,6 @@ set dcimRtlFiles [list \
 ]
 
 set bufferRtlFiles [list \
-    [file normalize "$srcDir/DCIM_Macro/ibuf.v"] \
 ]
 
 set vpuRtlFiles {}
@@ -93,6 +92,7 @@ add_files -norecurse [concat $chipRtlFiles $dcimRtlFiles $bufferRtlFiles $vpuRtl
 
 set_property include_dirs [list \
     [file normalize "$srcDir/chip"] \
+    [file normalize "$srcDir/common"] \
     [file normalize "$srcDir/ref/DCIM/src/inc"] \
     [file normalize "$srcDir/ref/DCIM/src/dcim"] \
     [file normalize "$srcDir/ref/DCIM/src/model"] \

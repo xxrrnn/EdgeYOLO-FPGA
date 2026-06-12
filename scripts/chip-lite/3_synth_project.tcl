@@ -184,7 +184,7 @@ puts "\n========== Step 5: Route Design =========="
 set_param general.maxThreads 32
 route_design -directive $routeDirective
 
-phys_opt_design -hold_fix -directive AggressiveExplore
+phys_opt_design -hold_fix
 puts "INFO: Post-route hold phys_opt done"
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
