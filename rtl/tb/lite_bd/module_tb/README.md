@@ -566,17 +566,25 @@ make sim-batch MODULE_CASE=im2col BATCH_SUITE=im2col_all
 
 ### conv_pipeline（im2col + DCIM → tile_obuf → VPU_BUF CDMA → DQA + QA）
 
-DCIM 计算结果写入各 tile 独立的 `tile_obuf`（物理地址 `0x1_0100_0000`~`0x1_010F_FFFF`，与 VPU_BUF 完全分离）。`dcim_layer_inst` 生成 DCIM 层后，通过逐 pixel 的 CDMA（`tile_obuf_t[px*wpt] → VPU_BUF[dcim_off + (px*tiles+t)*wpt]`）将结果搬运为 DQA 所需的 pixel-interleaved 布局，再由 DQA/QA 处理。
+**架构（tile-sequential，2026-06-13 更新）**：
 
-**修复日期：2026-06-12**（添加 pixel-interleaved CDMA 搬运逻辑到 `dcim_layer_inst`）
+DCIM 计算结果写入各 tile 独立的 `tile_obuf`（物理地址 `0x1_0100_0000`~`0x1_010F_FFFF`，与 VPU_BUF 完全分离）。`dcim_layer_inst` 生成 DCIM 层后，通过 **tiles 条整块 CDMA**（每条 `tile_obuf_t[0..num_pixels*wpt] → VPU_BUF[dcim_off + t*block]`）将结果搬入 VPU_BUF（tile-sequential 布局）。DQA 通过 `tile_seq_dqa_insts()` 生成 tiles_out 次独立 DQA 调用（每次处理一个 tile 的所有像素），RTL `dqa_relu_unit` 利用 `dqa_total_c`（= total channels）计算正确的 save stride，输出 NHWC 格式 FP32。
+
+核心改动：
+- `dqa_relu_unit.sv`：新增 `DQA_SAVE_ADDR_3` 状态，save addr 独立 3 级流水（c_cnt、w_cnt×save_stride、h_cnt×h_save_stride），不再依赖 load_addr_add。
+- `golden_module_tb.py`：`dcim_layer_inst` 改为整块 CDMA；新增 `tile_seq_dqa_insts()` 辅助函数。
+
+**指令数对比（160×160 特征图，4 tiles）**：
+- 旧（pixel-interleaved）：51,200 条 CDMA → 超出 INST_BRAM 容量
+- 新（整块 tile-sequential）：4 条 CDMA + 4 次 DQA → 常数级，可支持任意分辨率
 
 | 用例 | 输入 | 输出 | acc | tiles | 状态 |
 |------|------|------|-----|-------|------|
-| `pipe_conv1_c16_to16` | 4×4×16 | 4×4×32 | 2 | 1 | **PASS** |
-| `pipe_conv3_s2_c32_to64` | 8×8×32 | 4×4×64 | 5 | 2 | **PASS** |
-| `pipe_conv1_c512_to64_tilepass` | 4×4×512 | 4×4×64 | 8 | 2 | **PASS** |
+| `pipe_conv1_c16_to16` | 4×4×16 | 4×4×32 | 2 | 1 | **PASS** (64 words) |
+| `pipe_conv3_s2_c32_to64` | 8×8×32 | 4×4×64 | 5 | 2 | **PASS** (64 words) |
+| `pipe_conv1_c512_to64_tilepass` | 4×4×512 | 4×4×64 | 8 | 2 | 待重跑 |
 
-（以上三个用例同时通过 INT8 和 INT16 变体）
+（验证日期：2026-06-13）
 
 运行：
 
@@ -602,8 +610,8 @@ make rebuild-suite MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_all STOP_ON_FAI
 
 | 用例 | 层数 | 输入 | 状态 |
 |------|------|------|------|
-| `mini_2conv_c16` | 2 | 8×8×16 | **PASS** |
-| `mini_3conv_residual_c32` | 3+residual | 8×8×32 | **PASS** |
+| `mini_2conv_c16` | 2 | 8×8×16 | **PASS** (32 words, 2026-06-13) |
+| `mini_3conv_residual_c32` | 3+residual | 8×8×32 | **PASS** (32 words, 2026-06-13) |
 
 （以上两个用例同时通过 INT8 和 INT16 变体）
 
