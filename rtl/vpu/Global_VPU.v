@@ -478,6 +478,8 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
         .dqa_scale_addr(active_scale_addr),
         .dqa_bias_addr(active_bias_addr),
         .dqa_dst_addr(active_dst_addr),
+        // tile-sequential 支持：addr_break 字段复用为 dqa_total_c（0=旧行为）
+        .dqa_total_c(active_addr_break),
 
         .fp_array_tready(fp_array_tready),
         .fp_array_tvalid(dqa_fp_array_tvalid),

@@ -619,11 +619,12 @@ class ResnetSegmentBuilder:
             meta, oh * ow, ObufSlots.IM2COL, ObufSlots.FEAT1,
             IBUF_ACT, IBUF_WEI + self.ibuf_weight_offsets[widx], int16=False, acc_override=acc_eff,
             collect_to_vpubuf=True)
-        self.fast_inst += vpu_pipe_nop()  # 排空 im2col 残留
-        self.fast_inst += vpu_exec(
-            UNIT_DQA, ObufSlots.FEAT1, 0, eff_ch, oh, ow,
+        self.fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
+        self.fast_inst += tile_seq_dqa_insts(
+            meta, oh * ow, ObufSlots.FEAT1, dqa_slot,
+            self.WB_LAYER_STRIDE * wb_i,
             self.WB_BIAS_BASE + self.WB_LAYER_STRIDE * wb_i,
-            self.WB_LAYER_STRIDE * wb_i, dqa_slot, flags=self._dqa_flags)
+            oh, ow, flags=self._dqa_flags, dcim_int16=False)
 
         qa_out, dqa_hwc = golden_conv_forward(
             feat.data, meta, npz, im2col_in_ch=feat.c, acc_eff=acc_eff)
@@ -1418,9 +1419,12 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
       ceil(kH*kW*im2col_in_ch / DCIM_CH_IN)，需通过此参数传入。
       额外 acc steps 对应的权重补零（zero-padded in pack_weight_tile）。
 
-    collect_to_vpubuf=True: DCIM 完成后，通过 pixel-interleaved CDMA 把
+    collect_to_vpubuf=True: DCIM 完成后，通过 tile-sequential 整块 CDMA 把
       各 tile_obuf 的 INT32 结果搬运到 VPU_BUF[dcim_out_obuf]，供 DQA 读取。
-      VPU_BUF 布局：[px0_tile0..tileN, px1_tile0..tileN, ...]（pixel-interleaved）。
+      VPU_BUF 布局（tile-sequential）：
+        [tile0_px0..pxN | tile1_px0..pxN | ...]
+      共 tiles_out 条 CDMA 指令（与 num_pixels 无关），可支持大特征图。
+      调用方须使用 tile_seq_dqa_insts() 生成对应的 tiles_out 次 DQA 调用。
     """
     inst = []
     if acc_override is not None:
@@ -1460,17 +1464,61 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
     )
     inst += [header(OP_NOP, 0, 0)] * 16
     if collect_to_vpubuf:
-        # Pixel-interleaved CDMA: tile_obuf_t[px*wpt] → VPU_BUF[dcim_out_obuf + (px*tiles+t)*wpt]
-        # DCIM 把结果写到 tile_obuf_t[out_base_words + px*wpt]（相对 tile_obuf 起始）。
-        # 当 collect_to_vpubuf=True 时，out_base_words 已被固定为 0（见下方 tile_obuf_write_off），
-        # 所以 pixel px 的 tile t 数据在 tile_obuf_t[px*wpt_bytes]。
-        # 结果：VPU_BUF[dcim_out_obuf] = [px0_t0[wpt], px0_t1[wpt], ..., px1_t0[wpt], ...]
-        # 与 int32_to_words(accum_padded) 格式一致（pixel-major, channel-minor）。
-        for px in range(num_pixels):
-            for t in range(tiles_out):
-                src_phy = TILE_OBUF_PHY_BASES[t] + px * wpt_bytes
-                dst_phy = OBUF_PHY_BASE + dcim_out_obuf + (px * tiles_out + t) * wpt_bytes
-                inst += cdma_copy(src_phy, dst_phy, wpt_bytes)
+        # Tile-sequential 整块 CDMA: tile_obuf_t[0..num_pixels*wpt_bytes] → VPU_BUF[t*block]
+        # 只需 tiles_out 条 CDMA，指令数与 num_pixels 无关，支持大特征图。
+        # VPU_BUF 布局（tile-sequential）：[tile0_px0..pxN | tile1_px0..pxN | ...]
+        # DCIM 写到 tile_obuf_t[0]（out_base_words=0）。
+        block_bytes = num_pixels * wpt_bytes
+        for t in range(tiles_out):
+            src_phy = TILE_OBUF_PHY_BASES[t]
+            dst_phy = OBUF_PHY_BASE + dcim_out_obuf + t * block_bytes
+            inst += cdma_copy(src_phy, dst_phy, block_bytes)
+    return inst
+
+
+def tile_seq_dqa_insts(
+        meta: 'ConvMeta',
+        num_pixels: int,
+        dcim_int32_off: int,   # VPU_BUF byte offset of tile-sequential DCIM output (from dcim_layer_inst)
+        dqa_fp32_off: int,     # VPU_BUF byte offset for FP32 DQA output (NHWC layout)
+        wb_scale_base: int,    # WB byte address of channel-0 scale for this layer
+        wb_bias_base: int,     # WB byte address of channel-0 bias for this layer
+        oh: int, ow: int,
+        flags: int = 0x1,      # DQA vpu_flags (bit0=relu_en, bit1=int16_acc_mode)
+        dcim_int16: bool = False,  # True=DCIM produced INT16-mode output words
+) -> List[int]:
+    """生成 tile-sequential DQA 指令序列（tiles_out 次 DQA + NOP）。
+
+    配合 dcim_layer_inst(collect_to_vpubuf=True) 使用。
+
+    VPU_BUF 输入（tile-sequential 格式）：
+      tile t block 起始 = dcim_int32_off + t * num_pixels * wpt_bytes
+
+    FP32 输出（NHWC 格式，直接可供 QA 读取）：
+      tile t 的通道在每个像素内从 dqa_fp32_off + t*(tile_ch*4) 开始。
+      DQA save_stride = total_ch / FP_CORE_NUM（通过 addr_break=eff_ch 传递）。
+
+    各 DQA 调用的 scale/bias 地址：
+      tile t: wb_scale_base + t * tile_ch * 4
+              wb_bias_base  + t * tile_ch * 4
+    """
+    tiles_out = meta.num_tiles
+    tile_ch  = DCIM_INT16_OUT_CH_PER_TILE if dcim_int16 else DCIM_INT8_OUT_CH_PER_TILE
+    wpt      = DCIM_INT16_OUT_WORDS_PER_TILE if dcim_int16 else DCIM_INT8_OUT_WORDS_PER_TILE
+    wpt_bytes = wpt * OBUF_WORD_BYTES        # INT32/INT16 bytes per tile per pixel
+    eff_ch   = tiles_out * tile_ch           # total channels → DQA save stride denominator
+    tile_fp32_off = tile_ch * 4              # FP32 byte offset per tile within one pixel
+    tile_wb_off   = tile_ch * 4              # WB offset per tile (FP32 scale/bias)
+
+    inst: List[int] = []
+    for t in range(tiles_out):
+        src_t   = dcim_int32_off + t * num_pixels * wpt_bytes
+        dst_t   = dqa_fp32_off  + t * tile_fp32_off
+        scale_t = wb_scale_base + t * tile_wb_off
+        bias_t  = wb_bias_base  + t * tile_wb_off
+        inst += vpu_exec(UNIT_DQA, src_t, 0, tile_ch, oh, ow, bias_t, scale_t, dst_t,
+                         addr_break=eff_ch, flags=flags)
+        inst += vpu_pipe_nop()
     return inst
 
 
@@ -1721,8 +1769,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
                                      int16=True, collect_to_vpubuf=True)
         fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
-        fast_inst += vpu_exec(UNIT_DQA, dcim_off, 0, num_logical_oc, oh, ow, WB_BIAS, WB_SCALE, im2col_off, flags=0x1)
-        fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
+        fast_inst += tile_seq_dqa_insts(meta, oh * ow, dcim_off, im2col_off,
+                                        WB_SCALE, WB_BIAS, oh, ow, flags=0x1, dcim_int16=True)
         fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, qa_off, flags=0x2)
         fast_inst += [header(OP_END, 0, 0)]
         # aux_zero：清空 im2col_off 区域（INT16 残留保护）
@@ -1771,9 +1819,9 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
                          encode_addr_break(meta), oh, ow)
     fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
                                  collect_to_vpubuf=True)
-    fast_inst += vpu_pipe_nop()  # 排空 im2col 最后几拍留在 douta_valid pipeline 中的残留
-    fast_inst += vpu_exec(UNIT_DQA, dcim_off, 0, eff_ch, oh, ow, WB_BIAS, WB_SCALE, im2col_off, flags=0x1)
-    fast_inst += vpu_pipe_nop()  # 排空 DQA 残留，避免污染 QA 的 douta_valid
+    fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
+    fast_inst += tile_seq_dqa_insts(meta, oh * ow, dcim_off, im2col_off,
+                                    WB_SCALE, WB_BIAS, oh, ow, flags=0x1)
     fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, eff_ch, oh, ow, 0, WB_QSCALE, dst_off)
     fast_inst += [header(OP_END, 0, 0)]
     weight_loads: List[Tuple[str, int]] = []
@@ -2288,23 +2336,23 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
 
         if has_residual:
             dqa_dst = SLOT_E if i == 0 else SLOT_F
-            fast_inst += vpu_exec(UNIT_DQA, SLOT_DCIM_OUT, 0, dqa_ch, oh_i, ow_i,
-                                  wb_b, wb_s, dqa_dst, flags=_dqa_flags)
+            fast_inst += tile_seq_dqa_insts(meta, oh_i * ow_i, SLOT_DCIM_OUT, dqa_dst,
+                                            wb_s, wb_b, oh_i, ow_i,
+                                            flags=_dqa_flags, dcim_int16=use_int16)
             if i < num_layers - 1:
-                fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
                 fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, dqa_ch, oh_i, ow_i,
                                       0, wb_q, SLOT_B, flags=_qa_flags)
         else:
             # INT16 multi-layer: keep SLOT_D for im2col only; DQA FP32 → SLOT_E between layers.
             # OBUF CDMA F→D before 2nd im2col hangs simv; do not use cdma_copy to clear SLOT_D.
             dqa_dst = SLOT_E if (use_int16 and i < num_layers - 1) else SLOT_D
-            fast_inst += vpu_exec(UNIT_DQA, SLOT_DCIM_OUT, 0, dqa_ch, oh_i, ow_i,
-                                  wb_b, wb_s, dqa_dst, flags=_dqa_flags)
+            fast_inst += tile_seq_dqa_insts(meta, oh_i * ow_i, SLOT_DCIM_OUT, dqa_dst,
+                                            wb_s, wb_b, oh_i, ow_i,
+                                            flags=_dqa_flags, dcim_int16=use_int16)
             if i < num_layers - 1:
                 qa_dst = SLOT_B
             else:
                 qa_dst = final_dst
-            fast_inst += vpu_pipe_nop()  # 排空 DQA 残留
             fast_inst += vpu_exec(UNIT_QA, dqa_dst, 0, dqa_ch, oh_i, ow_i,
                                   0, wb_q, qa_dst, flags=_qa_flags)
 

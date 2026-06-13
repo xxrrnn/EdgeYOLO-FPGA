@@ -28,6 +28,9 @@ module dqa_relu_unit #(
     input   wire[ADDR_WIDTH - 1:0]              dqa_scale_addr,
     input   wire[ADDR_WIDTH - 1:0]              dqa_bias_addr,
     input   wire[ADDR_WIDTH - 1:0]              dqa_dst_addr,
+    // tile-sequential 支持：save stride 基于 total_c（全部输出通道数），load stride 基于 src_c（单 tile 通道数）
+    // total_c = 0 表示向后兼容（save stride == load stride，等价于旧行为 total_c = src_c）
+    input   wire[ADDR_WIDTH - 1:0]              dqa_total_c,
 
     input   wire                                fp_array_tready,
     output  reg                                 fp_array_tvalid,
@@ -499,9 +502,14 @@ module dqa_relu_unit #(
             dqa_src_w_reg      <= dqa_src_w;
             // Use input ports (not _reg): NBAs in this block still see pre-latch values.
             dqa_w_load_stride_reg <= dqa_src_c >> $clog2(FP_CORE_NUM);
-            dqa_w_save_stride_reg <= dqa_src_c >> $clog2(FP_CORE_NUM);
+            // save stride 基于 total_c（tile-sequential 时 > src_c），total_c=0 退化为旧行为
+            dqa_w_save_stride_reg <= (dqa_total_c != '0) ?
+                                     (dqa_total_c >> $clog2(FP_CORE_NUM)) :
+                                     (dqa_src_c   >> $clog2(FP_CORE_NUM));
             dqa_h_load_stride_reg <= dqa_src_w * (dqa_src_c >> $clog2(FP_CORE_NUM));
-            dqa_h_save_stride_reg <= dqa_src_w * (dqa_src_c >> $clog2(FP_CORE_NUM));
+            dqa_h_save_stride_reg <= dqa_src_w * ((dqa_total_c != '0) ?
+                                     (dqa_total_c >> $clog2(FP_CORE_NUM)) :
+                                     (dqa_src_c   >> $clog2(FP_CORE_NUM)));
             dqa_src_base_word_reg <= dqa_src_addr >> BYTE_ADDR_SHIFT;
             dqa_dst_base_word_reg <= dqa_dst_addr >> BYTE_ADDR_SHIFT;
             dqa_load_word_stride_reg <= dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32;
