@@ -61,8 +61,9 @@ connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_mem_smc
 set_property -dict [list \
-  CONFIG.NUM_SI {2} \
-  CONFIG.NUM_MI {13} \
+  CONFIG.NUM_SI    {2} \
+  CONFIG.NUM_MI    {13} \
+  CONFIG.STRATEGY  {0} \
 ] [get_bd_cells axi_mem_smc]
 
 # Slave ports

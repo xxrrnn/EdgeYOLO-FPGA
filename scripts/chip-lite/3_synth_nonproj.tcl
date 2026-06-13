@@ -323,122 +323,141 @@ report_timing_summary -file [file normalize "$ImplOutputDir/post_opt_timing_summ
 report_utilization -file [file normalize "$ImplOutputDir/post_opt_util.rpt"]
 
 # ==============================================================================
-# Step 3: Place Design (布局)
+# Step 3~6: Place → Phys Opt → Route → Bitstream (with Retry)
 # ==============================================================================
-# place_design 将逻辑单元映射到 FPGA 物理位置：
-#   - 考虑时序约束、资源类型、SLR 分布
-#   - ILR (Incremental Logic Replication) 在多线程下有 bug，已关闭
-#   - place 结果直接决定后续 route 的难度
-#   - post-place 时序是判断能否 timing closure 的关键指标
+# 从 post_opt.dcp 出发，尝试最多 3 组策略。
+# 如果某组策略 post-route WNS >= 0，立即写 bitstream 并结束。
+# 如果全部失败，报告最佳结果并 error。
 # ==============================================================================
-puts "\n========== Step 3: Place Design =========="
+puts "\n========== Step 3-6: Implementation with Retry =========="
 
-catch {set_param place.ILREnabled false}
-set_param general.maxThreads 8
-place_design -directive $placeDirective
-set_param general.maxThreads 32
+set optDcp [file normalize "$ImplOutputDir/post_opt.dcp"]
+set bestWns -999.0
+set bestStrategy ""
+set timingMet 0
 
-write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
-report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
-report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-    -file [file normalize "$ImplOutputDir/post_place_failing_paths.rpt"]
-report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
-report_design_analysis -congestion \
-    -file [file normalize "$ImplOutputDir/post_place_congestion.rpt"]
+for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_idx} {
+    set _strat [lindex $retryStrategies $_retry_idx]
+    set _placeDir  [lindex $_strat 0]
+    set _physDir   [lindex $_strat 1]
+    set _routeDir  [lindex $_strat 2]
 
-# 时序门控：post-place 违例太大则中止
-timing_gate "post-place"
+    set _attempt [expr {$_retry_idx + 1}]
+    set _totalAttempts [llength $retryStrategies]
+    puts "\n================================================================"
+    puts "  ATTEMPT $_attempt/$_totalAttempts: place=$_placeDir  phys_opt=$_physDir  route=$_routeDir"
+    puts "================================================================"
 
-# ==============================================================================
-# Step 4: Physical Optimization (物理优化)
-# ==============================================================================
-# phys_opt_design 在已布局的设计上做物理感知优化：
-#   - 基于实际布线延迟的 retiming
-#   - 关键路径复制 (replication)
-#   - DSP/BRAM 输出寄存器推断
-#   - 逻辑重组以减少扇出
-# AggressiveExplore: 尝试多种优化组合，选择最佳结果
-# ==============================================================================
-puts "\n========== Step 4: Phys Opt Design =========="
+    # 每次 retry 从 post_opt.dcp 干净重新开始
+    if {$_retry_idx > 0} {
+        close_design -quiet
+        open_checkpoint $optDcp
+        set pbs [get_pblocks -quiet]
+        if {[llength $pbs]} { delete_pblocks $pbs }
+        read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+    }
 
-phys_opt_design -directive $physOptDirective
+    # --- Place ---
+    puts "\n---------- Place Design (attempt $_attempt) ----------"
+    catch {set_param place.ILREnabled false}
+    set_param general.maxThreads 8
+    place_design -directive $_placeDir
+    set_param general.maxThreads 32
 
-write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
-report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
-report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-    -file [file normalize "$ImplOutputDir/post_phys_opt_failing_paths.rpt"]
+    set _placeDcp [file normalize "$ImplOutputDir/post_place_attempt${_attempt}.dcp"]
+    write_checkpoint -force $_placeDcp
+    report_timing_summary -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_timing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+        -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_failing.rpt"]
+    report_utilization -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_util.rpt"]
+    report_design_analysis -congestion \
+        -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_congestion.rpt"]
 
-# ==============================================================================
-# Step 5: Route Design (布线)
-# ==============================================================================
-# route_design 为所有网络分配物理布线资源：
-#   - 在已固定的布局上寻找最优路径
-#   - 处理拥塞（congestion）、串扰（crosstalk）
-#   - AggressiveExplore: 多轮迭代，尽可能消除时序违例
-#
-# post-route hold fix:
-#   - DSP48E2 内部寄存器间的 hold violation 是已知问题
-#   - router 不会自动在 DSP 内部路径上插入 delay
-#   - phys_opt_design -hold_fix 通过 LUT-buffer 或路由迂回修复
-#   - 必须在 route_design 之后执行（需要已知物理路径）
-# ==============================================================================
-puts "\n========== Step 5: Route Design =========="
+    # post-place 门控：太差则跳过此策略
+    set _pp [get_timing_paths -max_paths 1 -delay_type max]
+    set _ppWns 0.0
+    if {[llength $_pp]} { set _ppWns [get_property SLACK [lindex $_pp 0]] }
+    puts "INFO: Post-place WNS (attempt $_attempt) = ${_ppWns} ns"
+    if {$_ppWns < $wns_stop_place} {
+        puts "WARNING: Post-place WNS ${_ppWns} < threshold ${wns_stop_place} — skipping this strategy."
+        continue
+    }
 
-set_param general.maxThreads 32
-route_design -directive $routeDirective
+    # --- Phys Opt ---
+    puts "\n---------- Phys Opt Design (attempt $_attempt) ----------"
+    phys_opt_design -directive $_physDir
 
-# Post-route hold fix (Vivado 2024.2: -hold_fix 和 -directive 互斥)
-phys_opt_design -hold_fix
-puts "INFO: Post-route hold phys_opt done"
+    write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt_attempt${_attempt}.dcp"]
+    report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_attempt${_attempt}_timing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+        -file [file normalize "$ImplOutputDir/post_phys_opt_attempt${_attempt}_failing.rpt"]
 
-write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
-report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
-report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-    -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
-report_timing -max_paths 20 -slack_lesser_than 0.0 -delay_type min \
-    -file [file normalize "$ImplOutputDir/post_route_failing_hold.rpt"]
-report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
-report_drc -file [file normalize "$ImplOutputDir/post_route_drc.rpt"]
-report_methodology -file [file normalize "$ImplOutputDir/post_route_methodology.rpt"]
-report_design_analysis -congestion -complexity \
-    -file [file normalize "$ImplOutputDir/post_route_congestion.rpt"]
-report_power -advisory -file [file normalize "$ImplOutputDir/post_route_power.rpt"]
+    # --- Route ---
+    puts "\n---------- Route Design (attempt $_attempt) ----------"
+    set_param general.maxThreads 32
+    route_design -directive $_routeDir
 
-# 时序门控：post-route（WNS < 0 或 WHS < 0 则不写 bitstream）
-set routePaths [get_timing_paths -max_paths 1 -delay_type max]
-set routeWns 0.0
-if {[llength $routePaths]} {
-    set routeWns [get_property SLACK [lindex $routePaths 0]]
+    phys_opt_design -hold_fix
+    puts "INFO: Post-route hold phys_opt done (attempt $_attempt)"
+
+    set _routeDcp [file normalize "$ImplOutputDir/post_route_attempt${_attempt}.dcp"]
+    write_checkpoint -force $_routeDcp
+    report_timing_summary -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_timing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+        -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_failing.rpt"]
+    report_timing -max_paths 20 -slack_lesser_than 0.0 -delay_type min \
+        -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_hold.rpt"]
+    report_utilization -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_util.rpt"]
+    report_design_analysis -congestion -complexity \
+        -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_congestion.rpt"]
+
+    # 检查 timing
+    set _rp [get_timing_paths -max_paths 1 -delay_type max]
+    set _rWns 0.0
+    if {[llength $_rp]} { set _rWns [get_property SLACK [lindex $_rp 0]] }
+    set _rHp [get_timing_paths -max_paths 1 -delay_type min]
+    set _rWhs 0.0
+    if {[llength $_rHp]} { set _rWhs [get_property SLACK [lindex $_rHp 0]] }
+    puts "INFO: Post-route (attempt $_attempt): WNS = ${_rWns} ns  WHS = ${_rWhs} ns"
+
+    if {$_rWns > $bestWns} {
+        set bestWns $_rWns
+        set bestStrategy "$_placeDir/$_physDir/$_routeDir"
+    }
+
+    if {$_rWns >= 0 && $_rWhs >= 0} {
+        puts "INFO: *** TIMING MET on attempt $_attempt! ***"
+        set timingMet 1
+
+        # 复制最终 DCP 为标准名
+        file copy -force $_routeDcp [file normalize "$ImplOutputDir/post_route.dcp"]
+        report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
+        report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
+        report_drc -file [file normalize "$ImplOutputDir/post_route_drc.rpt"]
+        report_methodology -file [file normalize "$ImplOutputDir/post_route_methodology.rpt"]
+        report_power -advisory -file [file normalize "$ImplOutputDir/post_route_power.rpt"]
+
+        # 写 bitstream
+        puts "\n========== Write Bitstream =========="
+        set_property CONFIG_MODE SPIx4 [current_design]
+        set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
+        write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]
+        puts "INFO: Bitstream written: $ImplOutputDir/top.bit"
+
+        set wns $_rWns
+        break
+    }
+
+    puts "INFO: Attempt $_attempt timing NOT met — trying next strategy..."
 }
-set routeHoldPaths [get_timing_paths -max_paths 1 -delay_type min]
-set routeWhs 0.0
-if {[llength $routeHoldPaths]} {
-    set routeWhs [get_property SLACK [lindex $routeHoldPaths 0]]
+
+if {!$timingMet} {
+    puts ""
+    puts "============================================================"
+    puts "  ALL $_totalAttempts STRATEGIES FAILED"
+    puts "  Best WNS = ${bestWns} ns (strategy: $bestStrategy)"
+    puts "============================================================"
+    set wns $bestWns
+    error "\[timing_retry\] All strategies exhausted. Best WNS=${bestWns}ns ($bestStrategy)"
 }
-puts "INFO: Post-route WNS = ${routeWns} ns  WHS = ${routeWhs} ns"
-
-if {$routeWns < 0} {
-    puts "ERROR: Post-route setup timing NOT MET (WNS=${routeWns}ns). Bitstream skipped."
-    error "\[timing_gate\] post-route WNS=${routeWns}ns — setup not met."
-}
-if {$routeWhs < 0} {
-    puts "ERROR: Post-route hold timing NOT MET (WHS=${routeWhs}ns). Bitstream skipped."
-    error "\[timing_gate\] post-route WHS=${routeWhs}ns — hold not met."
-}
-
-# ==============================================================================
-# Step 6: Write Bitstream
-# ==============================================================================
-# 只有 WNS >= 0 且 WHS >= 0 才会到达此处
-# CONFIG_MODE SPIx4: 4-bit SPI 闪存配置模式（VCU128 默认）
-# CONFIGRATE 63.8: 最大配置时钟频率（加速上板时间）
-# -bin_file: 同时输出 .bin 格式（用于 SPI 直接烧录）
-# ==============================================================================
-puts "\n========== Step 6: Write Bitstream =========="
-
-set_property CONFIG_MODE SPIx4 [current_design]
-set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
-write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]
-
-puts "INFO: Bitstream written: $ImplOutputDir/top.bit"
 puts "INFO: 3_synth_nonproj complete — full non-project mode implementation successful."

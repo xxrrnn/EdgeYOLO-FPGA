@@ -116,74 +116,19 @@ if {[llength $_dqa_gs]} { set_property MAX_FANOUT 64 $_dqa_gs }
 # Section 6: Pblock / SLR 分配
 # ############################################################################
 
-# Tile 0 -> SLR0
-set _tile0 [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[0].*}]
-if {[llength $_tile0]} {
-  create_pblock pblock_tile_0
-  add_cells_to_pblock [get_pblocks pblock_tile_0] $_tile0
-  resize_pblock [get_pblocks pblock_tile_0] -add {SLR0}
-  set_property IS_SOFT TRUE [get_pblocks pblock_tile_0]
-}
+# --------------------------------------------------------------------------
+# Tile Pblock: 已删除（2026-06-13）
+#
+# 原方案: Tile0→SLR0, Tile1+2→SLR1, Tile3→SLR2
+# 问题:   SLR1 CLB 利用率 99.4%, 导致 ppCache/maArray 路由违例 (-0.41ns)
+#         4 Tiles + 3 SLRs 无论如何分配，必有 1 个 SLR 装 2 Tiles ≈ 99%
+#         重新分配只是将拥塞从一个 SLR 搬到另一个
+# 解决:   删除所有 Tile Pblock，让 Vivado 自由跨 SLR 布局
+#         整体 CLB 81%, SLL crossing 仅用 8.75% (23040 可用)
+#         Vivado 有充裕跨 SLR 连线资源实现最优布局
+# --------------------------------------------------------------------------
 
-# Tile 1 + 2 -> SLR1
-set _tile12 {}
-foreach _f {
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[1].*}
-  {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[2].*}
-} {
-  set _c [get_cells -quiet -hierarchical -filter $_f]
-  if {[llength $_c]} { set _tile12 [concat $_tile12 $_c] }
-}
-if {[llength $_tile12]} {
-  create_pblock pblock_tile_12
-  add_cells_to_pblock [get_pblocks pblock_tile_12] $_tile12
-  resize_pblock [get_pblocks pblock_tile_12] -add {SLR1}
-  set_property IS_SOFT TRUE [get_pblocks pblock_tile_12]
-}
-
-# Tile 3 -> SLR2
-set _tile3 [get_cells -quiet -hierarchical -filter {NAME =~ */dcim_array_0/inst/u_dcim_array/gen_tiles[3].*}]
-if {[llength $_tile3]} {
-  create_pblock pblock_tile_3
-  add_cells_to_pblock [get_pblocks pblock_tile_3] $_tile3
-  resize_pblock [get_pblocks pblock_tile_3] -add {SLR2}
-  set_property IS_SOFT TRUE [get_pblocks pblock_tile_3]
-}
-
-# tile_ibuf/tile_obuf 已随 Tile pblock 分配（XPM 实例与 Tile 同 SLR）
-# AXI BRAM Controller (tile_*_ctrl_*) 两端连接:
-#   A 端: URAM (与 Tile 同 SLR)
-#   B 端: SmartConnect (SLR0)
-# ctrl_0 直接放 SLR0（A/B 端都在 SLR0，无跨 SLR）
-# ctrl_1/2 放 SLR1（A 端 SLR1, B 端跨 SLR1→SLR0, SmartConnect 有 register slice）
-# ctrl_3 不额外约束: A 端在 SLR2 需跨 1 SLR, B 端在 SLR0 需跨 1 SLR, Vivado 自动折中
-
-# tile_ibuf_ctrl_0 / tile_obuf_ctrl_0 -> SLR0 (A/B 端都在 SLR0)
-foreach _f {
-  {NAME =~ lite_i/tile_ibuf_ctrl_0/*}
-  {NAME =~ lite_i/tile_obuf_ctrl_0/*}
-} {
-  set _c [get_cells -quiet -hierarchical -filter $_f]
-  if {[llength $_c]} { add_cells_to_pblock [get_pblocks pblock_tile_0] $_c }
-}
-
-# tile_ibuf_ctrl_1/2 / tile_obuf_ctrl_1/2 -> SLR1 (A 端 SLR1, B 端跨 1 SLR)
-foreach _f {
-  {NAME =~ lite_i/tile_ibuf_ctrl_1/*}
-  {NAME =~ lite_i/tile_obuf_ctrl_1/*}
-  {NAME =~ lite_i/tile_ibuf_ctrl_2/*}
-  {NAME =~ lite_i/tile_obuf_ctrl_2/*}
-} {
-  set _c [get_cells -quiet -hierarchical -filter $_f]
-  if {[llength $_c]} { add_cells_to_pblock [get_pblocks pblock_tile_12] $_c }
-}
-
-# tile_ibuf_ctrl_3 / tile_obuf_ctrl_3: 不约束 SLR
-# 在 SLR1 是折中（A 端跨 SLR2→1, B 端跨 SLR1→0, 各跨 1 个 SLR）
-# 260612_2213 中 ctrl_3 在 SLR1, worst path ctrl→SmartConnect 仅 -0.060ns
-# 降低 UU 后 (0.050→0.025) 释放 25ps 即可覆盖
-
-# AXI 互连 + VPU + INST_Decoder + CDMA -> SLR0
+# AXI 互连 + VPU + INST_Decoder + CDMA -> SLR0 (PCIe 物理引脚在 SLR0)
 create_pblock pblock_axi_vpu
 foreach _f {
   {NAME =~ lite_i/axi_mem_smc/*}
@@ -232,7 +177,8 @@ if {[llength $_vpu_buf_uram]} {
 # 方案B end--------------------------------------------------------------------------
 
 
-# SLR 分配 (层次 cell)
+# SLR 分配: 仅约束 VPU/INST 层次 cell 到 SLR0 (PCIe 在此)
+# Tile 及其 ibuf/obuf ctrl 不做 SLR 约束，由 Vivado 自由布局
 foreach _cell {lite_i/vpu_0 lite_i/inst_decoder lite_i/cdma_ctrl lite_i/inst_bram} {
   set _c [get_cells -quiet $_cell]
   if {[llength $_c]} { set_property USER_SLR_ASSIGNMENT SLR0 $_c }

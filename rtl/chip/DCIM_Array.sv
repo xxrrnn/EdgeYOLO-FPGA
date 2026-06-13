@@ -74,7 +74,33 @@ module DCIM_Array #(
         else        start_r <= start;
     end
 
-    assign done  = &(tile_done | ~tile_mask);
+    // cfg_* pipeline: 与 start_r 同拍到达 Tile（替代 MCP 4.3b）
+    (* shreg_extract = "no" *) reg [2:0]                             mode_r;
+    (* shreg_extract = "no" *) reg [ACC_UBD_WD-1:0]                  acc_depth_r;
+    (* shreg_extract = "no" *) reg [BUF_ADDR_WIDTH-1:0]              act_base_addr_r;
+    (* shreg_extract = "no" *) reg [NUM_TILES*BUF_ADDR_WIDTH-1:0]    wei_base_addrs_r;
+    (* shreg_extract = "no" *) reg [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] out_base_addrs_r;
+    (* shreg_extract = "no" *) reg [NUM_TILES-1:0]                   tile_mask_r;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mode_r           <= 3'b0;
+            acc_depth_r      <= {ACC_UBD_WD{1'b0}};
+            act_base_addr_r  <= {BUF_ADDR_WIDTH{1'b0}};
+            wei_base_addrs_r <= {(NUM_TILES*BUF_ADDR_WIDTH){1'b0}};
+            out_base_addrs_r <= {(NUM_TILES*TILE_OBUF_ADDR_WIDTH){1'b0}};
+            tile_mask_r      <= {NUM_TILES{1'b1}};
+        end else begin
+            mode_r           <= mode;
+            acc_depth_r      <= acc_depth;
+            act_base_addr_r  <= act_base_addr;
+            wei_base_addrs_r <= wei_base_addrs;
+            out_base_addrs_r <= out_base_addrs;
+            tile_mask_r      <= tile_mask;
+        end
+    end
+
+    assign done  = &(tile_done | ~tile_mask_r);
     assign ready = ready_r;
 
     // -----------------------------------------------------------------------
@@ -128,14 +154,14 @@ module DCIM_Array #(
                 .clk(clk),
                 .rst_n(rst_n),
                 .start(start_r),
-                .tile_enable(tile_mask[i]),
+                .tile_enable(tile_mask_r[i]),
                 .done(tile_done[i]),
                 .ready(tile_ready[i]),
-                .mode(mode),
-                .acc_depth(acc_depth),
-                .wei_base_addr(wei_base_addrs[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
-                .act_base_addr(act_base_addr),
-                .out_base_addr({{(BUF_ADDR_WIDTH-TILE_OBUF_ADDR_WIDTH){1'b0}}, out_base_addrs[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]}),
+                .mode(mode_r),
+                .acc_depth(acc_depth_r),
+                .wei_base_addr(wei_base_addrs_r[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
+                .act_base_addr(act_base_addr_r),
+                .out_base_addr({{(BUF_ADDR_WIDTH-TILE_OBUF_ADDR_WIDTH){1'b0}}, out_base_addrs_r[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]}),
                 .ibuf_rd_en(t_ibuf_rd_valid),
                 .ibuf_rd_addr(t_ibuf_rd_addr),
                 .ibuf_rd_data_valid(t_ibuf_rd_data_valid),

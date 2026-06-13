@@ -114,6 +114,14 @@ module Global_VPU #(
     reg [3:0]                       vpu_flags_reg;
     reg                             vpu_running;
 
+  // start 延迟一拍，切断 inst_decoder → VPU 组合路径
+  // INST_Decoder 时序保证：参数在 start 前一拍稳定并锁入 *_reg
+  reg start_d1;
+  always @(posedge clk or negedge rst_n_local) begin
+    if (!rst_n_local) start_d1 <= 1'b0;
+    else              start_d1 <= start;
+  end
+
   always @(posedge clk or negedge rst_n_local) begin
     if(!rst_n_local) begin
       unit_choose_reg <= 0;
@@ -153,6 +161,8 @@ module Global_VPU #(
       if (start) begin
         vpu_flags_reg    <= vpu_flags;   // 仅在 start 拍锁存，此时 vpu_flags 已稳定
         unit_running_reg <= unit_choose;
+      end
+      if (start_d1) begin
         vpu_running      <= 1'b1;
       end else if (vpu_running && config_ready) begin
         vpu_running <= 1'b0;
@@ -161,21 +171,20 @@ module Global_VPU #(
     
   end
 
-  // start 拍用端口；运行期间用 unit_running_reg（防止 body 抓取阶段把 _reg 清成 0）
-  wire [ADDR_WIDTH-1:0] unit_active     = start ? unit_choose :
-                                          vpu_running ? unit_running_reg : unit_choose_reg;
-  wire [ADDR_WIDTH-1:0] active_src_addr  = start ? src_addr      : src_addr_reg;
-  wire [ADDR_WIDTH-1:0] active_src2_addr = start ? src2_addr     : src2_addr_reg;
-  wire [ADDR_WIDTH-1:0] active_src_c      = start ? src_c         : src_c_reg;
-  wire [ADDR_WIDTH-1:0] active_src_h      = start ? src_h         : src_h_reg;
-  wire [ADDR_WIDTH-1:0] active_src_w      = start ? src_w         : src_w_reg;
-  wire [ADDR_WIDTH-1:0] active_scale_addr  = start ? scale_addr    : scale_addr_reg;
-  wire [ADDR_WIDTH-1:0] active_bias_addr   = start ? bias_addr     : bias_addr_reg;
-  wire [ADDR_WIDTH-1:0] active_dst_addr    = start ? dst_addr      : dst_addr_reg;
-  wire [ADDR_WIDTH-1:0] active_addr_break  = start ? addr_break    : addr_break_reg;
-  wire [ADDR_WIDTH-1:0] active_addr_s      = start ? addr_s        : addr_s_reg;
-  wire [ADDR_WIDTH-1:0] active_addr_t      = start ? addr_t        : addr_t_reg;
-  wire [3:0]            active_vpu_flags   = start ? vpu_flags     : vpu_flags_reg;
+  // start_d1 拍时 unit_running_reg / *_reg 已有正确值
+  wire [ADDR_WIDTH-1:0] unit_active     = vpu_running ? unit_running_reg : unit_choose_reg;
+  wire [ADDR_WIDTH-1:0] active_src_addr  = src_addr_reg;
+  wire [ADDR_WIDTH-1:0] active_src2_addr = src2_addr_reg;
+  wire [ADDR_WIDTH-1:0] active_src_c      = src_c_reg;
+  wire [ADDR_WIDTH-1:0] active_src_h      = src_h_reg;
+  wire [ADDR_WIDTH-1:0] active_src_w      = src_w_reg;
+  wire [ADDR_WIDTH-1:0] active_scale_addr  = scale_addr_reg;
+  wire [ADDR_WIDTH-1:0] active_bias_addr   = bias_addr_reg;
+  wire [ADDR_WIDTH-1:0] active_dst_addr    = dst_addr_reg;
+  wire [ADDR_WIDTH-1:0] active_addr_break  = addr_break_reg;
+  wire [ADDR_WIDTH-1:0] active_addr_s      = addr_s_reg;
+  wire [ADDR_WIDTH-1:0] active_addr_t      = addr_t_reg;
+  wire [3:0]            active_vpu_flags   = vpu_flags_reg;
   wire                  active_int16_mode  = active_vpu_flags[VPU_FLAG_INT16];
 
 
@@ -503,15 +512,15 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
         .wb_doutb(wb_doutb)
     );
 
-    assign config_ready = 1'b1/*nn_unit_ready*/ & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready;
-    // unit_active：start 同拍用 decoder 端口，运行中用 _reg
-    assign dqa_unit_start = (unit_active == UNIT_DQA) ? start : 1'b0;
-    assign qa_unit_start  = (unit_active == UNIT_QA ) ? start : 1'b0;
-    // assign nn_unit_start  = (unit_active == UNIT_NN ) ? start : 1'b0;  // nn_lut_unit 未启用
-    assign mp_unit_start  = (unit_active == UNIT_MP ) ? start : 1'b0;
-    assign us_unit_start  = (unit_active == UNIT_US ) ? start : 1'b0;
-    assign ad_unit_start  = (unit_active == UNIT_AD ) ? start : 1'b0;
-    assign im2col_unit_start = (unit_active == UNIT_IM2COL) ? start : 1'b0;
+    assign config_ready = ~start & ~start_d1 & (1'b1/*nn_unit_ready*/ & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready);
+    // unit_active 使用 _reg（start_d1 拍已稳定）
+    assign dqa_unit_start = (unit_active == UNIT_DQA) ? start_d1 : 1'b0;
+    assign qa_unit_start  = (unit_active == UNIT_QA ) ? start_d1 : 1'b0;
+    // assign nn_unit_start  = (unit_active == UNIT_NN ) ? start_d1 : 1'b0;  // nn_lut_unit 未启用
+    assign mp_unit_start  = (unit_active == UNIT_MP ) ? start_d1 : 1'b0;
+    assign us_unit_start  = (unit_active == UNIT_US ) ? start_d1 : 1'b0;
+    assign ad_unit_start  = (unit_active == UNIT_AD ) ? start_d1 : 1'b0;
+    assign im2col_unit_start = (unit_active == UNIT_IM2COL) ? start_d1 : 1'b0;
 
 
  // GB Address (Output from Unit to BRAM) → 通过 obuf_addr 输出到 OBUF

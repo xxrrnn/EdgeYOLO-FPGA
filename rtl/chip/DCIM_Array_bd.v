@@ -91,6 +91,15 @@ module DCIM_Array_bd #(
 );
 
     localparam ADDR_SHIFT = 4;  // 128bit = 16 bytes → 4 bit shift
+
+    // SLR 穿越 pipeline: ready 从 DCIM_Array 上行到 inst_decoder（替代 MCP 4.3a）
+    wire ready_internal;
+    (* shreg_extract = "no", KEEP = "TRUE" *) reg ready_pipe;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) ready_pipe <= 1'b1;
+        else        ready_pipe <= ready_internal;
+    end
+    assign ready = ready_pipe;
     localparam STRB_WIDTH = BUF_DATA_WIDTH / 8;
     localparam ACC_UBD_WD = $clog2(ACC + 1);
     localparam TILE_IDX_W = (NUM_TILES <= 1) ? 1 : $clog2(NUM_TILES);
@@ -249,7 +258,7 @@ module DCIM_Array_bd #(
         .rst_n           (rst_n),
         .start           (cfg_start),
         .done            (),
-        .ready           (ready),
+        .ready           (ready_internal),
         .mode            (cfg_mode),
         .acc_depth       (cfg_acc_depth),
         .act_base_addr   (cfg_act_base_addr),

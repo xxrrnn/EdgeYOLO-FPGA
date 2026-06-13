@@ -711,6 +711,80 @@ make sim-results
 
 ---
 
+## Golden 可信度分析（2026-06-13）
+
+本节记录 `golden_module_tb.py` 中各算子与原始网络的对应程度、参数覆盖缺口、同源风险，以及 testbench 比对机制的局限。用于在上板前评估测试置信度。
+
+### 算子公式对应程度
+
+| 算子 | Golden 实现 | 说明 | 风险 |
+|------|------------|------|------|
+| **im2col** | `oy*stride + ky - pad_h0`，三层循环 | 正确；pad 使用 `pad_h0` 单侧值 | ⚠️ 非对称 padding 时会出错（当前网络全为对称 padding，暂无影响） |
+| **DQA** | `max(x × scale + bias, 0)` | 公式正确；scale/bias 从 WB 读 | ⚠️ `np.resize` 对齐通道时若 `c > len(scale)` 会循环重复旧值而非补零，与 RTL WB 补零行为不一致。当前所有 case 的 c 均不超过实际 scale 长度，暂未触发 |
+| **QA** | `clip(round(x / act_scale), -128, 127)` | Golden 预计算 `qscale = 1/act_scale` 写入 WB，RTL 直接读 WB 做乘法，语义一致 | 低 |
+| **MaxPool** | `maxpool_generic(kernel, stride, pad)` | 三种 cfg：SPPF 5×5 s1 p2、ResNet stem 3×3 s2 p1、**GAP**（输出 sum） | ⚠️ **GAP（cfg=2）：硬件只输出空间累加和（sum），不做除法。板上推理软件必须额外乘以 `1/(H×W)` 才能得到真正的全局平均。golden 测试仅验证 sum 输出正确；除法约定由调用者（host/firmware）负责** |
+| **Upsample** | `np.repeat(x, 2, axis=0)` / `axis=1` | 最近邻 2× 上采样，正确 | 低 |
+| **AD（residual add）** | `(a + b).astype(np.float32)` | FP32 element-wise add，正确 | 低 |
+| **DCIM matmul** | `cols.astype(np.int32) @ wflat.T` | INT8 im2col → INT32 累加，正确；权重打包见下条 | 低（公式） |
+| **权重打包 `pack_weight_tile`** | Python nibble 循环（每 INT8 拆成 low/high nibble，映射到物理输出通道） | 格式与 DCIM SRAM nibble 格式绑定，已通过 5 种参数验证 | **⚠️ 中高（同源风险，见下节）** |
+
+### GAP 硬件约定详解
+
+`mp_unit` 在 `cfg=2`（GAP 模式）下对每个通道在空间维度求**和**（sum），而非平均（mean）：
+
+```
+hw_output[c] = Σ_{h,w} input[h, w, c]      # 硬件输出这个
+true_gap[c]  = hw_output[c] / (H × W)      # 上层软件负责这步
+```
+
+原因：除以 `H×W` 是固定常数，在 FP32 推理中等价于乘以 `1/(H×W)`，放在 host 做一次标量乘法比在 RTL 里增加除法器更省资源。
+
+**上板时需要注意**：在 Jupyter 推理脚本里读出 `mp_unit` 输出后，若该层是 GAP，需补乘 `1/(H×W)` 再进入下一层。
+
+### 参数覆盖缺口
+
+| 维度 | 已覆盖范围 | 缺口 |
+|------|-----------|------|
+| kernel size | 1×1、3×3、6×6 | 5×5 conv（网络中无） |
+| stride | 1、2 | 无（YOLOv5n 只用 s1/s2） |
+| in_ch / out_ch | 3、16、32、64、128、512 | 256（dcim_matmul 未跑，dqa 有用例但 UNTESTED） |
+| tile 数 | 1、2、4 | **3**（奇数 tile 数未测试） |
+| H×W | 2×2 ~ 20×20 | **实际推理尺寸（160×160）从未仿真**——这是最大缺口 |
+| INT16 conv pipeline | unit 层验证 | **pipeline INT16 全部 SKIP**（golden `native_int16=False`） |
+| 非对称 padding | 无 | 当前网络无此层，但 `im2col` golden 代码存在隐患 |
+
+### 同源错误（Golden 与 RTL 同批次修改）风险
+
+| 路径 | 独立性 | 说明 |
+|------|--------|------|
+| im2col golden vs RTL `im2col_unit.sv` | **较好** | Golden 三层循环极简，RTL 是状态机，出错方向不同 |
+| DQA golden vs RTL `dqa_relu_unit.sv` | **较好** | Golden 一行乘加，RTL FSM 多状态 |
+| DCIM matmul golden vs RTL `DCIM_Tile` | **较好** | Golden 用 numpy `@`，RTL 是阵列乘累加 |
+| **权重打包 `pack_weight_tile` vs RTL SRAM 格式** | **⚠️ 弱** | 两者都描述同一个 nibble 物理格式；若格式定义有细微偏差，两者会同时出错而互相掩盖。5 个 case 已通过说明当前格式对齐，但建议人工抽查（见下） |
+| **tile-sequential DQA save addr** | **⚠️ 弱** | `tile_seq_dqa_insts()` 和 `dqa_relu_unit.sv` 均在 2026-06-13 同批次修改；save addr 的 `DQA_SAVE_ADDR_3` 状态是本次才加的，已通过 `pipe_conv3_s2_c32_to64` 验证，但覆盖宽度有限 |
+
+**人工抽查权重打包的方法**：
+
+```bash
+# 1. 生成 dcim_tiny_1x1 数据
+make data MODULE_CASE=dcim_matmul MODULE_VARIANT=dcim_tiny_1x1
+# 2. 查看 Python 生成的前几个 weight word
+head -4 sim/suite_dcim_matmul/run_dcim_tiny_1x1/weight_tile0.hex
+# 3. 对比 SRAM 格式文档 rtl/dcim/DCIM_Tile.v 中 weight sram 的读取逻辑，
+#    手工验证 nibble[0] 对应 low_nibble of weight[oc=0, k=0]
+```
+
+### Testbench 比对机制局限
+
+| 机制 | 说明 | 局限 |
+|------|------|------|
+| INT（`is_fp32=0`） | `===` 全位严格比对 | 无隐患 |
+| FP32（`is_fp32=1`） | 容差 `1e-2 × (|exp| + 1.0)` | ⚠️ **ReLU 截断边界（expected ≈ 0）处容差退化为 0.01 绝对值**；RTL 若在 0 附近有 0.01 以内的数值偏差不会被报告 MISMATCH。这是已知局限，对功能正确性判断影响有限 |
+| 地址路由 | `preload.txt` 物理地址 → tile_ibuf / tile_obuf / vpu_buf | Golden 与 RTL 使用同一套地址常量（`TILE_IBUF_PHY_BASES` 等），属隐式约定而非 assert 防护；但已通过 e2e pipeline 验证 |
+| `INST_BRAM` 加载 | `$readmemh` backdoor 直写内存 | 绕过 AXI 接口，不验证 host AXI 写路径（由 `PRELOAD_MODE=axi` 单独覆盖） |
+
+---
+
 ## 何时需要重新 export / compile / run
 
 | 场景 | 操作 |

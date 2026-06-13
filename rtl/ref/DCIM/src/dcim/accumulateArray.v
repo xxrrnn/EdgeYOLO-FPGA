@@ -26,6 +26,7 @@ module accumulateArray#(
 	output[CH_OUT*WD3-1: 0] dn_data
 );
 	wire w_accu_cnt_zero;
+	wire w_accu_ena = up_valid & up_ready;
 
 	accumulate_controller#(.ACC(ACC)) u_accumulate_controller(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena), .acc(acc),
@@ -34,15 +35,37 @@ module accumulateArray#(
 		.cnt_zero(w_accu_cnt_zero)
 	);
 
+	// Pipeline: register refresh + up_data + ena before accumulate logic
+	// Cuts critical path: r_cnt_reg → refresh(fo=1053) → wide_adder → temp_reg
+	reg                    refresh_r;
+	reg [CH_OUT*WD2-1: 0]  up_data_r;
+	reg                    ena_r;
+
+	always @(posedge clk or negedge rstn) begin
+		if (~rstn) begin
+			refresh_r <= 1'b0;
+			up_data_r <= {(CH_OUT*WD2){1'b0}};
+			ena_r     <= 1'b0;
+		end else if (clr) begin
+			refresh_r <= 1'b0;
+			up_data_r <= {(CH_OUT*WD2){1'b0}};
+			ena_r     <= 1'b0;
+		end else begin
+			refresh_r <= w_accu_cnt_zero;
+			up_data_r <= up_data;
+			ena_r     <= w_accu_ena;
+		end
+	end
+
 	genvar col;
 	generate
 		for(col=0; col<CH_OUT/4; col=col+1) begin:AccumulateColumn
 			accumulate#(.WD1(WD1), .CH_IN(CH_IN), .ACC(ACC)) u_accumulate(
-				.clk(clk), .rstn(rstn), .clr(clr), .ena(up_valid&up_ready),
+				.clk(clk), .rstn(rstn), .clr(clr), .ena(ena_r),
 				.acc_ena(acc!=0),
 				.mode(mode),
-				.refresh(w_accu_cnt_zero),
-				.up_data(up_data[col*4*WD2+: 4*WD2]),
+				.refresh(refresh_r),
+				.up_data(up_data_r[col*4*WD2+: 4*WD2]),
 				.dn_data(dn_data[col*4*WD3+: 4*WD3])
 			);
 		end
@@ -264,14 +287,13 @@ module accumulate_controller#(
 	input rstn,
 	input clr,
 	input ena,
-	input [ACC_UBD_WD-1: 0] acc, // 0: bypas
+	input [ACC_UBD_WD-1: 0] acc, // 0: bypass
 	input  up_valid,
 	output up_ready,
 	input  dn_ready,
 	output dn_valid,
 	output cnt_zero
 );
-	wire w_up_ready, w_dn_valid;
 	wire [ACC_CNT_WD-1: 0] w_cnt;
 	wire w_cnt_done;
 
@@ -282,14 +304,34 @@ module accumulate_controller#(
 		.cnt_done(w_cnt_done)
 	);
 
-	pipe_stage u_pipe_stage_ctrl(
+	// --- accumulate path (acc != 0) ---
+	// 2 pipe_stages to match: +1 for accumulateArray input pipeline,
+	// +1 for accumulate temp register latency
+	wire acc_up_ready;
+	wire mid_valid, mid_ready;
+	wire acc_dn_valid;
+	pipe_stage u_pipe_stage_0(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
-		.up_valid(w_cnt_done), .up_ready(w_up_ready),
-		.dn_valid(w_dn_valid), .dn_ready(dn_ready)
+		.up_valid(w_cnt_done),  .up_ready(acc_up_ready),
+		.dn_valid(mid_valid),   .dn_ready(mid_ready)
+	);
+	pipe_stage u_pipe_stage_1(
+		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
+		.up_valid(mid_valid),   .up_ready(mid_ready),
+		.dn_valid(acc_dn_valid),.dn_ready(dn_ready)
 	);
 
-	assign up_ready = (acc==0)? (ena&dn_ready): w_up_ready;
-	assign dn_valid = (acc==0)? (ena&up_valid): w_dn_valid;
+	// --- bypass path (acc == 0) ---
+	// 1 pipe_stage to match accumulateArray input pipeline
+	wire byp_up_ready, byp_dn_valid;
+	pipe_stage u_pipe_stage_byp(
+		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
+		.up_valid(up_valid),    .up_ready(byp_up_ready),
+		.dn_valid(byp_dn_valid),.dn_ready(dn_ready)
+	);
+
+	assign up_ready = (acc==0)? byp_up_ready : acc_up_ready;
+	assign dn_valid = (acc==0)? byp_dn_valid : acc_dn_valid;
 	assign cnt_zero = ena & (w_cnt==0);
 
 endmodule

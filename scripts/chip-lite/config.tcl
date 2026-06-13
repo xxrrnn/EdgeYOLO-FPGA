@@ -80,6 +80,16 @@ set placeDirective      Default
 set physOptDirective    AggressiveExplore
 set routeDirective      AggressiveExplore
 
+# --- Timing Retry 策略集 ---
+# run.tcl 在 post-route timing 失败时，从 post_opt.dcp 重新尝试下一组 directive。
+# 每组策略跑 place → phys_opt → route 完整流程。
+# 策略名 | place | phys_opt | route
+set retryStrategies {
+    {Default         AggressiveExplore  AggressiveExplore}
+    {ExtraTimingOpt  AggressiveExplore  NoTimingRelaxation}
+    {SSI_SpreadLogic AggressiveExplore  Explore}
+}
+
 # --- DSP 用量说明 ---
 # DCIM DSP 用量由 RTL 层精确控制：
 #   chip_defines.vh: DCIM_DSP_TILES=4（所有 Tile 参与）, DCIM_DSP_COL_NUM=5
@@ -97,7 +107,7 @@ set wns_warn_place   -2.0
 
 # --- 详细时序报告 ---
 # report_timing -max_paths 输出前 N 条 failing 路径（slack < 0）
-set rptMaxPaths      20
+set rptMaxPaths      50
 
 # post-route: WNS < 0 不写 bitstream
 # (hardcoded in proc, threshold = 0)
@@ -106,7 +116,7 @@ set rptMaxPaths      20
 # Vivado 上限 64 线程；服务器 128 核，以下设置在安全范围内。
 # synthJobs: launch_runs -jobs 的并行 OOC synth 进程数（充分利用 CPU）
 # maxThreads: 单个 Vivado 进程内部的多线程数
-set synthJobs 32
+set synthJobs 128
 set_param general.maxThreads 32
 catch {set_param place.ILREnabled false}
 

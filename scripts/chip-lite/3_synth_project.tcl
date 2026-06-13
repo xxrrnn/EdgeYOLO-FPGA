@@ -145,90 +145,133 @@ report_timing_summary -file [file normalize "$ImplOutputDir/post_opt_timing_summ
 report_utilization -file [file normalize "$ImplOutputDir/post_opt_util.rpt"]
 
 # ==============================================================================
-# Step 3: Place Design
+# Step 3~6: Place → Phys Opt → Route → Bitstream (with Retry)
 # ==============================================================================
-puts "\n========== Step 3: Place Design =========="
+puts "\n========== Step 3-6: Implementation with Retry =========="
 
-catch {set_param place.ILREnabled false}
-set_param general.maxThreads 8
-place_design -directive $placeDirective
-set_param general.maxThreads 32
+set optDcp [file normalize "$ImplOutputDir/post_opt.dcp"]
+set bestWns -999.0
+set bestStrategy ""
+set timingMet 0
 
-write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
-report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
-report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-    -file [file normalize "$ImplOutputDir/post_place_failing_paths.rpt"]
-report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
-report_design_analysis -congestion \
-    -file [file normalize "$ImplOutputDir/post_place_congestion.rpt"]
+for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_idx} {
+    set _strat [lindex $retryStrategies $_retry_idx]
+    set _placeDir  [lindex $_strat 0]
+    set _physDir   [lindex $_strat 1]
+    set _routeDir  [lindex $_strat 2]
 
-timing_gate "post-place"
+    set _attempt [expr {$_retry_idx + 1}]
+    set _totalAttempts [llength $retryStrategies]
+    puts "\n================================================================"
+    puts "  ATTEMPT $_attempt/$_totalAttempts: place=$_placeDir  phys_opt=$_physDir  route=$_routeDir"
+    puts "================================================================"
 
-# ==============================================================================
-# Step 4: Physical Optimization
-# ==============================================================================
-puts "\n========== Step 4: Phys Opt Design =========="
+    if {$_retry_idx > 0} {
+        close_design -quiet
+        open_checkpoint $optDcp
+        set pbs [get_pblocks -quiet]
+        if {[llength $pbs]} { delete_pblocks $pbs }
+        read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+    }
 
-phys_opt_design -directive $physOptDirective
+    # --- Place ---
+    puts "\n---------- Place Design (attempt $_attempt) ----------"
+    catch {set_param place.ILREnabled false}
+    set_param general.maxThreads 8
+    place_design -directive $_placeDir
+    set_param general.maxThreads 32
 
-write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
-report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
-report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-    -file [file normalize "$ImplOutputDir/post_phys_opt_failing_paths.rpt"]
+    set _placeDcp [file normalize "$ImplOutputDir/post_place_attempt${_attempt}.dcp"]
+    write_checkpoint -force $_placeDcp
+    report_timing_summary -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_timing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+        -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_failing.rpt"]
+    report_utilization -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_util.rpt"]
+    report_design_analysis -congestion \
+        -file [file normalize "$ImplOutputDir/post_place_attempt${_attempt}_congestion.rpt"]
 
-# ==============================================================================
-# Step 5: Route Design
-# ==============================================================================
-puts "\n========== Step 5: Route Design =========="
+    set _pp [get_timing_paths -max_paths 1 -delay_type max]
+    set _ppWns 0.0
+    if {[llength $_pp]} { set _ppWns [get_property SLACK [lindex $_pp 0]] }
+    puts "INFO: Post-place WNS (attempt $_attempt) = ${_ppWns} ns"
+    if {$_ppWns < $wns_stop_place} {
+        puts "WARNING: Post-place WNS ${_ppWns} < threshold ${wns_stop_place} — skipping this strategy."
+        continue
+    }
 
-set_param general.maxThreads 32
-route_design -directive $routeDirective
+    # --- Phys Opt ---
+    puts "\n---------- Phys Opt Design (attempt $_attempt) ----------"
+    phys_opt_design -directive $_physDir
 
-phys_opt_design -hold_fix
-puts "INFO: Post-route hold phys_opt done"
+    write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt_attempt${_attempt}.dcp"]
+    report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_attempt${_attempt}_timing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+        -file [file normalize "$ImplOutputDir/post_phys_opt_attempt${_attempt}_failing.rpt"]
 
-write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
-report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
-report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-    -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
-report_timing -max_paths 20 -slack_lesser_than 0.0 -delay_type min \
-    -file [file normalize "$ImplOutputDir/post_route_failing_hold.rpt"]
-report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
-report_drc -file [file normalize "$ImplOutputDir/post_route_drc.rpt"]
-report_methodology -file [file normalize "$ImplOutputDir/post_route_methodology.rpt"]
-report_design_analysis -congestion -complexity \
-    -file [file normalize "$ImplOutputDir/post_route_congestion.rpt"]
-report_power -advisory -file [file normalize "$ImplOutputDir/post_route_power.rpt"]
+    # --- Route ---
+    puts "\n---------- Route Design (attempt $_attempt) ----------"
+    set_param general.maxThreads 32
+    route_design -directive $_routeDir
 
-set routePaths [get_timing_paths -max_paths 1 -delay_type max]
-set routeWns 0.0
-if {[llength $routePaths]} {
-    set routeWns [get_property SLACK [lindex $routePaths 0]]
+    phys_opt_design -hold_fix
+    puts "INFO: Post-route hold phys_opt done (attempt $_attempt)"
+
+    set _routeDcp [file normalize "$ImplOutputDir/post_route_attempt${_attempt}.dcp"]
+    write_checkpoint -force $_routeDcp
+    report_timing_summary -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_timing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+        -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_failing.rpt"]
+    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type min \
+        -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_hold.rpt"]
+    report_utilization -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_util.rpt"]
+    report_design_analysis -congestion -complexity \
+        -file [file normalize "$ImplOutputDir/post_route_attempt${_attempt}_congestion.rpt"]
+
+    set _rp [get_timing_paths -max_paths 1 -delay_type max]
+    set _rWns 0.0
+    if {[llength $_rp]} { set _rWns [get_property SLACK [lindex $_rp 0]] }
+    set _rHp [get_timing_paths -max_paths 1 -delay_type min]
+    set _rWhs 0.0
+    if {[llength $_rHp]} { set _rWhs [get_property SLACK [lindex $_rHp 0]] }
+    puts "INFO: Post-route (attempt $_attempt): WNS = ${_rWns} ns  WHS = ${_rWhs} ns"
+
+    if {$_rWns > $bestWns} {
+        set bestWns $_rWns
+        set bestStrategy "$_placeDir/$_physDir/$_routeDir"
+    }
+
+    if {$_rWns >= 0 && $_rWhs >= 0} {
+        puts "INFO: *** TIMING MET on attempt $_attempt! ***"
+        set timingMet 1
+
+        file copy -force $_routeDcp [file normalize "$ImplOutputDir/post_route.dcp"]
+        report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
+        report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
+        report_drc -file [file normalize "$ImplOutputDir/post_route_drc.rpt"]
+        report_methodology -file [file normalize "$ImplOutputDir/post_route_methodology.rpt"]
+        report_power -advisory -file [file normalize "$ImplOutputDir/post_route_power.rpt"]
+
+        puts "\n========== Write Bitstream =========="
+        set_property CONFIG_MODE SPIx4 [current_design]
+        set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
+        write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]
+        puts "INFO: Bitstream written: $ImplOutputDir/top.bit"
+
+        set wns $_rWns
+        break
+    }
+
+    puts "INFO: Attempt $_attempt timing NOT met — trying next strategy..."
 }
-set routeHoldPaths [get_timing_paths -max_paths 1 -delay_type min]
-set routeWhs 0.0
-if {[llength $routeHoldPaths]} {
-    set routeWhs [get_property SLACK [lindex $routeHoldPaths 0]]
-}
-puts "INFO: Post-route WNS = ${routeWns} ns  WHS = ${routeWhs} ns"
 
-if {$routeWns < 0} {
-    puts "ERROR: Post-route setup timing NOT MET (WNS=${routeWns}ns). Bitstream skipped."
-    error "\[timing_gate\] post-route WNS=${routeWns}ns — setup not met."
-}
-if {$routeWhs < 0} {
-    puts "ERROR: Post-route hold timing NOT MET (WHS=${routeWhs}ns). Bitstream skipped."
-    error "\[timing_gate\] post-route WHS=${routeWhs}ns — hold not met."
+if {!$timingMet} {
+    puts ""
+    puts "============================================================"
+    puts "  ALL $_totalAttempts STRATEGIES FAILED"
+    puts "  Best WNS = ${bestWns} ns (strategy: $bestStrategy)"
+    puts "============================================================"
+    set wns $bestWns
+    error "\[timing_retry\] All strategies exhausted. Best WNS=${bestWns}ns ($bestStrategy)"
 }
 
-# ==============================================================================
-# Step 6: Bitstream
-# ==============================================================================
-puts "\n========== Step 6: Write Bitstream =========="
-
-set_property CONFIG_MODE SPIx4 [current_design]
-set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
-write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]
-
-puts "INFO: Bitstream written: $ImplOutputDir/top.bit"
 puts "INFO: 3_synth_project complete — full project mode implementation successful."
