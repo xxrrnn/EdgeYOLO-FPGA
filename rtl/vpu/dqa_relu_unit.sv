@@ -72,6 +72,7 @@ module dqa_relu_unit #(
         DQA_COMPUTE_WAIT,
         DQA_SAVE_ADDR_1,
         DQA_SAVE_ADDR_2,
+        DQA_SAVE_ADDR_3,
         DQA_SAVE
     } state_t;
     (* fsm_encoding = "auto" *) state_t c_state, n_state;
@@ -342,11 +343,21 @@ module dqa_relu_unit #(
                 DQA_SAVE: begin
                     dqa_save_cnt <= dqa_save_cnt + 1'b1;
                 end
+                // save addr 独立于 load addr 计算，使用 save stride（支持 tile-sequential total_c != src_c）
+                // SAVE_ADDR_1: base = dst_base + c_cnt * DQA_SINGLE_COMPUTE_SAVE_BLOCKS；同时清零 save_cnt
+                // SAVE_ADDR_2: += w_cnt * w_save_stride
+                // SAVE_ADDR_3: += h_cnt * h_save_stride
+                // DQA_SAVE   : 写地址 = save_addr + save_cnt（save_cnt 从 0 递增）
                 DQA_SAVE_ADDR_1: begin
-                    dqa_save_addr <= dqa_dst_base_word_reg + dqa_x_load_addr_add;
+                    dqa_save_cnt  <= '0;
+                    dqa_save_addr <= dqa_dst_base_word_reg +
+                                     dqa_x_load_c_cnt * DQA_SINGLE_COMPUTE_SAVE_BLOCKS;
                 end
                 DQA_SAVE_ADDR_2: begin
-                    dqa_save_addr <= dqa_save_addr - dqa_x_load_block_cnt + dqa_save_cnt;
+                    dqa_save_addr <= dqa_save_addr + dqa_x_load_w_cnt * dqa_w_save_stride_reg;
+                end
+                DQA_SAVE_ADDR_3: begin
+                    dqa_save_addr <= dqa_save_addr + dqa_x_load_h_cnt * dqa_h_save_stride_reg;
                 end
                 IDLE: begin
                     dqa_save_cnt <= '0;
@@ -368,7 +379,7 @@ module dqa_relu_unit #(
             gb_web   = '0;
             gb_dinb  = '0;
         end else if(c_state == DQA_SAVE) begin
-            gb_addrb = dqa_save_addr;
+            gb_addrb = dqa_save_addr + dqa_save_cnt;
             gb_enb   = 1'b1;
             gb_web   = {(GB_BANDWIDTH / 8){1'b1}};
             gb_dinb  = dqa_out_reg[dqa_save_cnt * GB_BANDWIDTH +: GB_BANDWIDTH];
@@ -547,7 +558,8 @@ module dqa_relu_unit #(
             DQA_COMPUTE     : n_state = fp_array_tready? DQA_COMPUTE_WAIT :DQA_COMPUTE;
             DQA_COMPUTE_WAIT        : n_state = fp_res_tvalid ? DQA_SAVE_ADDR_1 : DQA_COMPUTE_WAIT;
             DQA_SAVE_ADDR_1: n_state = DQA_SAVE_ADDR_2;
-            DQA_SAVE_ADDR_2: n_state = DQA_SAVE;
+            DQA_SAVE_ADDR_2: n_state = DQA_SAVE_ADDR_3;
+            DQA_SAVE_ADDR_3: n_state = DQA_SAVE;
             DQA_SAVE        : begin
                 if(dqa_done && dqa_save_done) begin
                     n_state = IDLE;
