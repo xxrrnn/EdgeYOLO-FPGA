@@ -24,11 +24,10 @@ if {[llength $_xdc_user_clk_pins] == 0} {
 }
 if {[llength $_xdc_user_clk_pins]} {
   create_clock -period 4.000 -name clk_main [lindex $_xdc_user_clk_pins 0]
-  # UU=50ps: 给 placer 施加额外 setup 压力, 迫使高扇出 data1_reg/s2_reg
-  # 与 DSP/product_pipe_reg 紧凑放置, 否则路由延迟从 ~2ns 爆增到 ~4ns.
-  # 副作用: DSP 内部路径出现微小 hold violation (~-0.011ns),
-  # 由 3_synth.tcl 中 phys_opt_design -hold 修复.
-  set_clock_uncertainty 0.050 [get_clocks clk_main]
+  # UU=25ps: 给 placer 施加额外 setup 压力, 迫使高扇出 data1_reg/s2_reg
+  # 与 DSP/product_pipe_reg 紧凑放置。
+  # 原 50ps 过大: post-route 全局路径均差 ~60ps，降至 25ps 释放余量。
+  set_clock_uncertainty 0.025 [get_clocks clk_main]
 }
 
 # clk_main <-> GTYE4_TXOUTCLK: XDMA 内部 CoreClk, 与 UserClk 独立分频,
@@ -83,73 +82,13 @@ if {[llength $_hbm_wready]} {
 }
 
 # ############################################################################
-# Section 4: 多周期路径 (MCP)
+# Section 4: 多周期路径 (MCP) — 已全部替换为 pipeline register
 # ############################################################################
-
-# --- 4.1 DCIM maArray 计算流水 MCP ---
-# maSubcolumn -> ma_pipe 流水寄存器 (DSP/LUT 两种映射均覆盖)
-set _mcp_sub_from [get_cells -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*}]
-set _mcp_sub_to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_maArray/gen_ma_pipe.r_ma_pipe*}]
-if {[llength $_mcp_sub_from] && [llength $_mcp_sub_to]} {
-  set_multicycle_path -setup 2 -from $_mcp_sub_from -to $_mcp_sub_to
-  set_multicycle_path -hold 1 -from $_mcp_sub_from -to $_mcp_sub_to
-}
-
-# adderTree carry -> result_reg
-set _mcp_carry [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/u_adderTree/*carry*/CO[*]}]
-set _mcp_res_d [get_pins -quiet -hierarchical -filter {NAME =~ *u_maArray/MaColumn*/MaSubcolumn*/result_reg*/D}]
-if {[llength $_mcp_carry] && [llength $_mcp_res_d]} {
-  set_multicycle_path -setup 2 -from $_mcp_carry -to $_mcp_res_d
-  set_multicycle_path -hold 1  -from $_mcp_carry -to $_mcp_res_d
-}
-
-# mergeArray -> accumulateArray -> postProcess
-set _merge_cells [get_cells -quiet -hierarchical -filter {NAME =~ *u_mergeArray/*}]
-set _accum_cells [get_cells -quiet -hierarchical -filter {NAME =~ *u_accumulateArray/*}]
-set _post_cells  [get_cells -quiet -hierarchical -filter {NAME =~ *u_postProcess/*}]
-if {[llength $_merge_cells] && [llength $_accum_cells]} {
-  set_multicycle_path -setup 2 -from $_merge_cells -to $_accum_cells
-  set_multicycle_path -hold 1  -from $_merge_cells -to $_accum_cells
-}
-if {[llength $_accum_cells] && [llength $_post_cells]} {
-  set_multicycle_path -setup 2 -from $_accum_cells -to $_post_cells
-  set_multicycle_path -hold 1  -from $_accum_cells -to $_post_cells
-}
-
-# --- 4.2 (已废弃: chip-v3 per-tile IBUF, 无 arbiter) ---
-# IBUF arbiter MCP 已删除: per-tile IBUF 消除仲裁器
-
-# --- 4.3 SLR 穿越流水 MCP ---
-# ready_r -> inst_decoder FSM
-set _mcp_ready_r_from [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/ready_r_reg/C}]
-set _mcp_ready_r_to [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *inst_decoder*/FSM_onehot_state_reg*/CE ||
-           NAME =~ *inst_decoder*/FSM_onehot_state_reg*/D  ||
-           NAME =~ *inst_decoder*/dcim_layer_seen_busy_reg*/D}]
-if {[llength $_mcp_ready_r_from] && [llength $_mcp_ready_r_to]} {
-  set_multicycle_path 2 -setup -from $_mcp_ready_r_from -to $_mcp_ready_r_to
-  set_multicycle_path 1 -hold  -from $_mcp_ready_r_from -to $_mcp_ready_r_to
-}
-
-# start_rr -> tile FSM (chip-v3: start 多打两拍 start_r→start_rr，路径已足够短)
-# 不再需要 MCP，保留注释供参考
-
-# cfg_* -> tile FSM (配置寄存器在 FSM 启动前已稳定)
-set _mcp_cfg_from [get_cells -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/inst/cfg_*_reg*}]
-set _mcp_fsm_ce_to [get_pins -quiet -hierarchical \
-  -filter {NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/FSM_onehot_state_reg*/CE ||
-           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/FSM_onehot_state_reg*/D  ||
-           NAME =~ *dcim_array_0/inst/u_dcim_array/gen_tiles*.u_tile/*state_reg*/CE}]
-if {[llength $_mcp_cfg_from] && [llength $_mcp_fsm_ce_to]} {
-  set_multicycle_path 2 -setup -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
-  set_multicycle_path 1 -hold  -from $_mcp_cfg_from -to $_mcp_fsm_ce_to
-}
-
-# --- 4.4 (已废弃: chip-v3 XPM 实现, READ_LATENCY=10 不需要 MCP) ---
-# 所有 URAM buffer (tile_ibuf/tile_obuf/vpu_buf) 已替换为 XPM xpm_memory_tdpram,
-# CASCADE_HEIGHT=2, READ_LATENCY=10, 彻底消除 timing 风险，无需 MCP。
+# 4.1 maArray 计算流水: adderTreePipe 已逐级 pipeline，无需 MCP
+# 4.1c/d mergeArray→accumulateArray: postProcess.v 中加 pipe_stage + data reg
+# 4.3a ready_r→inst_decoder: DCIM_Array_bd.v 中加 ready_pipe 寄存器
+# 4.3b cfg_*→tile FSM: DCIM_Array.sv 中加 cfg_*_r pipeline（与 start_r 对齐）
+# 4.4 URAM buffer: XPM READ_LATENCY=10，无需 MCP
 
 # ############################################################################
 # Section 5: 扇出优化 (MAX_FANOUT)
@@ -212,6 +151,37 @@ if {[llength $_tile3]} {
 }
 
 # tile_ibuf/tile_obuf 已随 Tile pblock 分配（XPM 实例与 Tile 同 SLR）
+# AXI BRAM Controller (tile_*_ctrl_*) 两端连接:
+#   A 端: URAM (与 Tile 同 SLR)
+#   B 端: SmartConnect (SLR0)
+# ctrl_0 直接放 SLR0（A/B 端都在 SLR0，无跨 SLR）
+# ctrl_1/2 放 SLR1（A 端 SLR1, B 端跨 SLR1→SLR0, SmartConnect 有 register slice）
+# ctrl_3 不额外约束: A 端在 SLR2 需跨 1 SLR, B 端在 SLR0 需跨 1 SLR, Vivado 自动折中
+
+# tile_ibuf_ctrl_0 / tile_obuf_ctrl_0 -> SLR0 (A/B 端都在 SLR0)
+foreach _f {
+  {NAME =~ lite_i/tile_ibuf_ctrl_0/*}
+  {NAME =~ lite_i/tile_obuf_ctrl_0/*}
+} {
+  set _c [get_cells -quiet -hierarchical -filter $_f]
+  if {[llength $_c]} { add_cells_to_pblock [get_pblocks pblock_tile_0] $_c }
+}
+
+# tile_ibuf_ctrl_1/2 / tile_obuf_ctrl_1/2 -> SLR1 (A 端 SLR1, B 端跨 1 SLR)
+foreach _f {
+  {NAME =~ lite_i/tile_ibuf_ctrl_1/*}
+  {NAME =~ lite_i/tile_obuf_ctrl_1/*}
+  {NAME =~ lite_i/tile_ibuf_ctrl_2/*}
+  {NAME =~ lite_i/tile_obuf_ctrl_2/*}
+} {
+  set _c [get_cells -quiet -hierarchical -filter $_f]
+  if {[llength $_c]} { add_cells_to_pblock [get_pblocks pblock_tile_12] $_c }
+}
+
+# tile_ibuf_ctrl_3 / tile_obuf_ctrl_3: 不约束 SLR
+# 在 SLR1 是折中（A 端跨 SLR2→1, B 端跨 SLR1→0, 各跨 1 个 SLR）
+# 260612_2213 中 ctrl_3 在 SLR1, worst path ctrl→SmartConnect 仅 -0.060ns
+# 降低 UU 后 (0.050→0.025) 释放 25ps 即可覆盖
 
 # AXI 互连 + VPU + INST_Decoder + CDMA -> SLR0
 create_pblock pblock_axi_vpu
@@ -253,20 +223,11 @@ if {[llength $_vpu_buf_uram]} {
   puts "INFO: pblock_vpu_buf_uram: [llength $_vpu_buf_uram] cells -> URAM288 X0~3, Y0~63"
 }
 
-# (B-2) 将 Global_VPU 逻辑（含 obuf_din_r_reg）约束到 CRX1~CRX3
-# obuf_regs 当前分布: SLICE X=56~132 (CRX2~CRX3)
-# 约束到 CRX1(SL31~56) + CRX2(SL57~94) + CRX3(SL95~116) 覆盖区域
-# 这样 obuf_regs 到 URAM X=0(CRX1)/X=1(CRX3) 最大水平距离 ≤ 2 个 CR
-set _vpu_logic [get_cells -quiet -hierarchical \
-  -filter {NAME =~ lite_i/vpu_0/inst/u_global_vpu/*}]
-if {[llength $_vpu_logic]} {
-  create_pblock pblock_vpu_logic
-  add_cells_to_pblock [get_pblocks pblock_vpu_logic] $_vpu_logic
-  resize_pblock [get_pblocks pblock_vpu_logic] -add {CLOCKREGION_X1Y0:CLOCKREGION_X3Y3}
-  set_property IS_SOFT TRUE [get_pblocks pblock_vpu_logic]
-  set_property PARENT pblock_axi_vpu [get_pblocks pblock_vpu_logic]
-  puts "INFO: pblock_vpu_logic: [llength $_vpu_logic] cells -> CR X1Y0:X3Y3"
-}
+# (B-2) VPU 逻辑 Pblock: 已删除
+# 实测 CRX1~X3 导致严重拥挤 (route 后 WNS -2.577ns)，CRX1~X5 仍有风险。
+# 仅靠 B-1 排除 URAM X=4(CRX6) 已能将最大 obuf→URAM 距离从 4CR 降到 3CR，
+# 配合 phys_opt_design 优化足以收敛（旧 build 差 60ps）。
+# 如仍不足，启用方案 C (再加一级 pipeline) 替代。
 
 # 方案B end--------------------------------------------------------------------------
 
