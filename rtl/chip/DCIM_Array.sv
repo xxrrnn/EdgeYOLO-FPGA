@@ -115,9 +115,8 @@ module DCIM_Array #(
     generate
         genvar i;
         for (i = 0; i < NUM_TILES; i = i + 1) begin : gen_tiles
-            localparam TILE_IS_SOLO = (i == 0 || i == 3) ? 1 : 0;
-            localparam TILE_DSP_COL = TILE_IS_SOLO ? `DCIM_DSP_COL_SOLO : `DCIM_DSP_COL_SHARED;
-            localparam TILE_DSP_PARTIAL = TILE_IS_SOLO ? `DCIM_DSP_PARTIAL_SOLO : `DCIM_DSP_PARTIAL_SHARED;
+            localparam TILE_DSP_COL = `DCIM_DSP_COL_NUM;
+            localparam TILE_DSP_PARTIAL = `DCIM_DSP_PARTIAL_SUBCOL;
 
             // Tile 写信号
             wire                          t_wr_valid;

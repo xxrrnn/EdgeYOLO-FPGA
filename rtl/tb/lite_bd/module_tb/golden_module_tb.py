@@ -81,28 +81,19 @@ def dcim_effective_out_ch(meta: 'ConvMeta', int16: bool = False) -> int:
 HBM_PHY_BASE = 0x0
 OBUF_PHY_BASE = 0x1020_0000_0   # chip-v3 XPM: VPU_BUF 8MB @ 0x1_0200_0000
 
-# Per-tile IBUF architecture: 4 tile_ibufs, 512KB each
-NUM_TILE_IBUFS = 4
+# Per-tile IBUF architecture (configurable via chip_defines.vh)
+NUM_TILE_IBUFS = DCIM_NUM_TILES
 TILE_IBUF_SIZE_BYTES = 0x80_000   # 512KB per tile
-TILE_IBUF_PHY_BASES = [
-    0x1_0000_0000,  # tile_ibuf[0]
-    0x1_0008_0000,  # tile_ibuf[1]
-    0x1_0010_0000,  # tile_ibuf[2]
-    0x1_0018_0000,  # tile_ibuf[3]
-]
+TILE_IBUF_PHY_BASE_START = 0x1_0000_0000
+TILE_IBUF_PHY_BASES = [TILE_IBUF_PHY_BASE_START + t * TILE_IBUF_SIZE_BYTES for t in range(NUM_TILE_IBUFS)]
 IBUF_PHY_BASE = TILE_IBUF_PHY_BASES[0]  # backward compat (tile 0 base)
 IBUF_SIZE_BYTES = TILE_IBUF_SIZE_BYTES   # per-tile capacity (not total!)
 
-# Per-tile OBUF architecture: 4 tile_obufs, 256KB each
-# DCIM 把 INT32 accumulator 结果写到各自的 tile_obuf（与 VPU_BUF 物理独立）
-NUM_TILE_OBUFS = 4
+# Per-tile OBUF architecture (configurable via chip_defines.vh)
+NUM_TILE_OBUFS = DCIM_NUM_TILES
 TILE_OBUF_SIZE_BYTES = 0x40_000  # 256KB per tile
-TILE_OBUF_PHY_BASES = [
-    0x1_0100_0000,  # tile_obuf[0]
-    0x1_0104_0000,  # tile_obuf[1]
-    0x1_0108_0000,  # tile_obuf[2]
-    0x1_010C_0000,  # tile_obuf[3]
-]
+TILE_OBUF_PHY_BASE_START = 0x1_0100_0000
+TILE_OBUF_PHY_BASES = [TILE_OBUF_PHY_BASE_START + t * TILE_OBUF_SIZE_BYTES for t in range(NUM_TILE_OBUFS)]
 
 # Activation and weight offsets WITHIN each tile_ibuf (512KB split: 256KB act + 256KB wei)
 IBUF_ACT = 0x000000            # activation start within each tile_ibuf

@@ -29,7 +29,8 @@ proc chip_get {name {default ""}} {
 # 将 DCIM tile_ibuf / tile_obuf / VPU_BUF 的 axi_bram_ctrl READ_LATENCY 与 chip_defines 对齐
 proc apply_dcim_axi_bram_read_latency {} {
     # tile_ibuf controllers
-    for {set t 0} {$t < 4} {incr t} {
+    set num_tiles [chip_get DCIM_NUM_TILES 4]
+    for {set t 0} {$t < $num_tiles} {incr t} {
         set cell "tile_ibuf_ctrl_${t}"
         set cells [get_bd_cells -quiet $cell]
         if {[llength $cells] == 0} { continue }
@@ -41,7 +42,7 @@ proc apply_dcim_axi_bram_read_latency {} {
         puts "INFO: $cell CONFIG.READ_LATENCY=$lat (DCIM_TILE_IBUF_AXI_BRAM_READ_LATENCY)"
     }
     # tile_obuf controllers
-    for {set t 0} {$t < 4} {incr t} {
+    for {set t 0} {$t < $num_tiles} {incr t} {
         set cell "tile_obuf_ctrl_${t}"
         set cells [get_bd_cells -quiet $cell]
         if {[llength $cells] == 0} { continue }

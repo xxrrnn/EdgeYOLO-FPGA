@@ -118,7 +118,7 @@ set_property verilog_define [list \
 # 创建 BD cells
 # ==============================================================================
 create_bd_cell -type module -reference DCIM_Array_bd dcim_array_0
-set_property -dict [list CONFIG.NUM_TILES {4}] [get_bd_cells dcim_array_0]
+set_property -dict [list CONFIG.NUM_TILES $::DCIM_NUM_TILES] [get_bd_cells dcim_array_0]
 catch {set_property generate_synth_checkpoint false [get_bd_cells dcim_array_0]}
 
 create_bd_cell -type module -reference Global_VPU_top vpu_0

@@ -113,82 +113,48 @@
 // ============================================================================
 
 // ── 阵列拓扑（Array–Tile，无 Group 层）────────────────────────────────────
-`define DCIM_NUM_TILES          4       // DCIM_Tile 数量；64×64 @250MHz INT8 峰值约 2.048 TOPS
+`define DCIM_NUM_TILES          8       // DCIM_Tile 数量；8×(64×32) @250MHz INT8 同等算力
 
-// ── DSP 映射控制（Per-Tile 部分 DSP 方案）─────────────────────────────────
-// 每 Tile 有 16 列 × 4 subcol × 64 ch = 4096 个 4-bit 乘法器。
-// 细粒度双参数方案：
-//   DSP_COL_NUM        : 前 N 列全部 4 subcol 使用 DSP48E2
-//   DSP_PARTIAL_SUBCOL : 第 N+1 列仅前 M 个 subcol 使用 DSP48E2（0=禁用）
+// ── DSP 映射控制（统一分配，所有 Tile 参数一致）──────────────────────────────
+// CH_OUT=32 时每 Tile 有 8 列 × 4 subcol × 64 ch_in = 2048 个 4-bit 乘法器。
+// 公式: 每 Tile DSP = (DSP_COL_NUM × 4 + DSP_PARTIAL_SUBCOL) × CH_IN
+// CH_OUT=32 → 最大列数 = CH_OUT/4 = 8
 //
-// 每 Tile DSP 数 = (DSP_COL_NUM × 4 + DSP_PARTIAL_SUBCOL) × 64(ch)
 // xcvu37p: 9024 DSP total, 3 SLR (SLR0/1/2), 约 3008/SLR
-//
-// 布局方案 1+2+1:
-//   SLR0: Tile 0 (独占) + VPU/XDMA/IBUF (~60 DSP)  → Tile 可用 ~2940
-//   SLR1: Tile 1 + Tile 2 (共享) + arb              → 每 Tile 可用 ~1536
-//   SLR2: Tile 3 (独占)                              → Tile 可用 ~3000
+// 布局方案 2+3+3:
+//   SLR0: Tile 0,1 + VPU/XDMA (~57 DSP)   → per-tile DSP budget ~1475
+//   SLR1: Tile 2,3,4                       → per-tile DSP budget ~1002
+//   SLR2: Tile 5,6,7                       → per-tile DSP budget ~1002
 //
 // ┌───────────────────────────────────────────────────────────────────────────────┐
-// │ DSP 用量四档方案（复制对应行替换下方 define 即可）                             │
-// │ 公式: 每 Tile DSP = (COL×4 + PARTIAL) × 64                                   │
-// │ xcvu37p: 9024 DSP, SLR cap ~3008/SLR, VPU/XDMA 固定 ~57 DSP                  │
-// │ 布局 1+2+1: SLR0=Tile0(solo), SLR1=Tile1+2(shared), SLR2=Tile3(solo)         │
-// ├───────┬───────────┬─────────┬──────────┬──────────┬────────┬──────────────────┤
-// │ 档位  │ SOLO_COL  │ SOLO_P  │ SHARE_COL│ SHARE_P  │ 总 DSP │ 芯片利用率       │
-// ├───────┼───────────┼─────────┼──────────┼──────────┼────────┼──────────────────┤
-// │ 少    │    5      │   0     │    3     │   0      │  4153  │  46%             │
-// │ 中    │    7      │   0     │    4     │   0      │  5689  │  63%             │
-// │ 多    │    9      │   0     │    5     │   2      │  7481  │  83%             │
-// │ 极多  │   11      │   2     │    5     │   3      │  8889  │  98.5%           │
-// ├───────┴───────────┴─────────┴──────────┴──────────┴────────┴──────────────────┤
-// │                                                                                │
-// │ 【少】route 友好，留足余量，适合初期验证                                       │
-// │   `define DCIM_DSP_COL_SOLO       5                                            │
-// │   `define DCIM_DSP_PARTIAL_SOLO   0                                            │
-// │   `define DCIM_DSP_COL_SHARED     3                                            │
-// │   `define DCIM_DSP_PARTIAL_SHARED 0                                            │
-// │   // Solo: 5×4×64=1280/tile, Shared: 3×4×64=768/tile                          │
-// │   // Total: 1280×2+768×2+57 = 4153 DSP                                        │
-// │                                                                                │
-// │ 【中】均衡方案，SLR 约 60% 填充                                                │
-// │   `define DCIM_DSP_COL_SOLO       7                                            │
-// │   `define DCIM_DSP_PARTIAL_SOLO   0                                            │
-// │   `define DCIM_DSP_COL_SHARED     4                                            │
-// │   `define DCIM_DSP_PARTIAL_SHARED 0                                            │
-// │   // Solo: 7×4×64=1792/tile, Shared: 4×4×64=1024/tile                          │
-// │   // Total: 1792×2+1024×2+57 = 5689 DSP                                       │
-// │                                                                                │
-// │ 【多】高性能方案，P&R 需关注拥塞                                               │
-// │   `define DCIM_DSP_COL_SOLO       9                                            │
-// │   `define DCIM_DSP_PARTIAL_SOLO   0                                            │
-// │   `define DCIM_DSP_COL_SHARED     5                                            │
-// │   `define DCIM_DSP_PARTIAL_SHARED 2                                            │
-// │   // Solo: 9×4×64=2304/tile, Shared: (5×4+2)×64=1408/tile                     │
-// │   // Total: 2304×2+1408×2+57 = 7481 DSP                                       │
-// │                                                                                │
-// │ 【极多】压满芯片，P&R 有挑战，可能需 directive 调优                            │
-// │   `define DCIM_DSP_COL_SOLO       11                                           │
-// │   `define DCIM_DSP_PARTIAL_SOLO   2                                            │
-// │   `define DCIM_DSP_COL_SHARED     5                                            │
-// │   `define DCIM_DSP_PARTIAL_SHARED 3                                            │
-// │   // Solo: (11×4+2)×64=2944/tile, Shared: (5×4+3)×64=1472/tile                │
-// │   // Total: 2944×2+1472×2+57 = 8889 DSP                                       │
-// │                                                                                │
+// │ DSP 用量方案（8 Tiles 统一配置，CH_OUT=32）                                   │
+// │ 公式: 每 Tile DSP = (COL×4 + PARTIAL) × 64(CH_IN)                            │
+// │ 总 DSP = 8 × per_tile + 57(VPU)                                              │
+// ├───────┬─────────┬─────────┬────────────┬────────┬─────────────────────────────┤
+// │ 档位  │ COL_NUM │ PARTIAL │ DSP/tile   │ 总 DSP │ 利用率 (SLR1/2 max)         │
+// ├───────┼─────────┼─────────┼────────────┼────────┼─────────────────────────────┤
+// │ 少    │    2    │   0     │  512       │  4153  │  46% (1536/3008=51%)        │
+// │ 中    │    3    │   0     │  768       │  6201  │  69% (2304/3008=77%)        │
+// │ 多    │    3    │   3     │  960       │  7737  │  86% (2880/3008=96%)        │
+// │ 满配  │    8    │   0     │ 2048       │ 16441  │  N/A (超限)                 │
+// ├───────┴─────────┴─────────┴────────────┴────────┴─────────────────────────────┤
+// │ 推荐: COL=3, PARTIAL=3（960 DSP/tile, 86%利用率, SLR1/2=96%）                 │
 // └────────────────────────────────────────────────────────────────────────────────┘
 //
-`define DCIM_DSP_TILES          4
-`define DCIM_DSP_COL_SOLO       7       // ← 替换为上方对应档位的值
-`define DCIM_DSP_PARTIAL_SOLO   0
-`define DCIM_DSP_COL_SHARED     4       // ← 替换为上方对应档位的值
-`define DCIM_DSP_PARTIAL_SHARED 0
+`define DCIM_DSP_COL_NUM        3       // 所有 Tile 统一: 前 3 列全 DSP
+`define DCIM_DSP_PARTIAL_SUBCOL 3       // 第 4 列前 3 个 subcol 用 DSP
+// 向后兼容别名（DCIM_Array.sv 仍引用这些宏）
+`define DCIM_DSP_COL_SOLO       `DCIM_DSP_COL_NUM
+`define DCIM_DSP_PARTIAL_SOLO   `DCIM_DSP_PARTIAL_SUBCOL
+`define DCIM_DSP_COL_SHARED     `DCIM_DSP_COL_NUM
+`define DCIM_DSP_PARTIAL_SHARED `DCIM_DSP_PARTIAL_SUBCOL
 
 // ── Tile 计算参数 ─────────────────────────────────────────────────────────
 `define DCIM_WD1                4       // 权重位宽（INT4）
 `define DCIM_CH_IN              64      // 每 Tile 每 acc step 输入通道数
-`define DCIM_CH_OUT             64      // 每 Tile physical output lane 数；INT8 有效输出 CH_OUT/2
+`define DCIM_CH_OUT             32      // 每 Tile physical output lane 数；INT8 有效输出 CH_OUT/2
 `define DCIM_SRAM_DP            128     // DCIM SRAM 深度（固定 128 entries；acc_depth>1 时由 DCIM_Tile 分块加载权重）
-`define DCIM_CYCLE              128     // 64×64×4bit / 128bit = 128 个 128-bit weight word/acc step
+`define DCIM_CYCLE              64      // 64×32×4bit / 128bit = 64 个 128-bit weight word/acc step
 `define DCIM_ACC_MAX            80      // 最大累加深度（num_rows / acc_depth 上界）
 
 // ── Buffer 容量 / 数据宽度（主旋钮）────────────────────────────────────────

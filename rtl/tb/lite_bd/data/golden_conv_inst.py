@@ -55,7 +55,7 @@ WEIGHT_DIR = os.path.join(
     '..', '..', '..', '..', 'model', 'yolov5n', 'parsed', 'weights'
 )
 
-NUM_TILES = 4                     # DCIM_NUM_TILES (chip_defines.vh)
+NUM_TILES = 8                     # DCIM_NUM_TILES (chip_defines.vh)
 DCIM_CH_IN  = 16                   # ch per CIM op
 TILE_CH_OUT = 16                   # CH_OUT per tile
 OBUF_WORD_BYTES = 16               # 128-bit word

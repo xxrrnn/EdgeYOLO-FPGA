@@ -324,6 +324,10 @@ module tb_lite_bd_module;
                 1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_ibuf.u_uram.mem[word_addr] = word128;
                 2: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_ibuf.u_uram.mem[word_addr] = word128;
                 3: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                4: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[4].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                5: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[5].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                6: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[6].u_tile_ibuf.u_uram.mem[word_addr] = word128;
+                7: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[7].u_tile_ibuf.u_uram.mem[word_addr] = word128;
                 default: begin
                     $display("FATAL: tile_ibuf backdoor tile=%0d out of range", tile_idx);
                     $finish(1);
@@ -345,6 +349,10 @@ module tb_lite_bd_module;
                 1: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.u_uram.mem[word_addr] = word128;
                 2: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.u_uram.mem[word_addr] = word128;
                 3: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                4: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[4].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                5: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[5].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                6: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[6].u_tile_obuf.u_uram.mem[word_addr] = word128;
+                7: dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[7].u_tile_obuf.u_uram.mem[word_addr] = word128;
                 default: begin
                     $display("FATAL: tile_obuf backdoor tile=%0d out of range", tile_idx);
                     $finish(1);
@@ -360,7 +368,11 @@ module tb_lite_bd_module;
                 1: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[1].u_tile_obuf.u_uram.mem[word_addr];
                 2: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[2].u_tile_obuf.u_uram.mem[word_addr];
                 3: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[3].u_tile_obuf.u_uram.mem[word_addr];
-                default: begin
+                4: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[4].u_tile_obuf.u_uram.mem[word_addr];
+                5: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[5].u_tile_obuf.u_uram.mem[word_addr];
+                6: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[6].u_tile_obuf.u_uram.mem[word_addr];
+                7: word128 = dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[7].u_tile_obuf.u_uram.mem[word_addr];
+                 default: begin
                     $display("FATAL: tile_obuf backdoor read tile=%0d out of range", tile_idx);
                     $finish(1);
                 end
@@ -402,14 +414,29 @@ module tb_lite_bd_module;
                 word_addr = (base_addr - E2E_IBUF_TILE3_BASE) >> 4;
                 for (i = 0; i < nwords; i = i + 1)
                     backdoor_write_ibuf_word(3, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE4_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE4_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(4, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE5_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE5_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(5, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE6_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE6_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(6, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE7_BASE, E2E_IBUF_TILE_SIZE)) begin
+                word_addr = (base_addr - E2E_IBUF_TILE7_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_ibuf_word(7, word_addr + i, mem[i]);
             end else if (addr_in_range(base_addr, E2E_IBUF_BASE, E2E_IBUF_SIZE)) begin
-                // Broadcast: address within 2MB range but not in specific tile → write ALL tiles
+                // Broadcast: write ALL tiles with same data
                 word_addr = (base_addr - E2E_IBUF_BASE) >> 4;
-                for (i = 0; i < nwords; i = i + 1) begin
-                    backdoor_write_ibuf_word(0, word_addr + i, mem[i]);
-                    backdoor_write_ibuf_word(1, word_addr + i, mem[i]);
-                    backdoor_write_ibuf_word(2, word_addr + i, mem[i]);
-                    backdoor_write_ibuf_word(3, word_addr + i, mem[i]);
+                for (i = 0; i < nwords; i = i + 1) begin : ibuf_bcast
+                    integer t;
+                    for (t = 0; t < E2E_NUM_TILES; t = t + 1)
+                        backdoor_write_ibuf_word(t, word_addr + i, mem[i]);
                 end
             end else if (addr_in_range(base_addr, E2E_VPU_BUF_BASE, E2E_VPU_BUF_SIZE)) begin
                 word_addr = (base_addr - E2E_VPU_BUF_BASE) >> 4;
@@ -436,6 +463,22 @@ module tb_lite_bd_module;
                 word_addr = (base_addr - E2E_TILE_OBUF3_BASE) >> 4;
                 for (i = 0; i < nwords; i = i + 1)
                     backdoor_write_tile_obuf_word(3, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_TILE_OBUF4_BASE, E2E_TILE_OBUF_SIZE)) begin
+                word_addr = (base_addr - E2E_TILE_OBUF4_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_tile_obuf_word(4, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_TILE_OBUF5_BASE, E2E_TILE_OBUF_SIZE)) begin
+                word_addr = (base_addr - E2E_TILE_OBUF5_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_tile_obuf_word(5, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_TILE_OBUF6_BASE, E2E_TILE_OBUF_SIZE)) begin
+                word_addr = (base_addr - E2E_TILE_OBUF6_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_tile_obuf_word(6, word_addr + i, mem[i]);
+            end else if (addr_in_range(base_addr, E2E_TILE_OBUF7_BASE, E2E_TILE_OBUF_SIZE)) begin
+                word_addr = (base_addr - E2E_TILE_OBUF7_BASE) >> 4;
+                for (i = 0; i < nwords; i = i + 1)
+                    backdoor_write_tile_obuf_word(7, word_addr + i, mem[i]);
             end else if (addr_in_range(base_addr, E2E_WB_BASE, E2E_WB_SIZE)) begin
                 word_addr = (base_addr - E2E_WB_BASE) >> 4;
                 for (i = 0; i < nwords; i = i + 1)

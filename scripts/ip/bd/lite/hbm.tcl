@@ -3,10 +3,10 @@
 #
 # chip-v3 变更:
 #   - 删除 dcim_ibuf_smc / dcim_ibuf_ctrl_0（共享 IBUF 已拆分为 per-tile）
-#   - 新增 4x tile_ibuf_ctrl_N（per-Tile IBUF, 512KB each）
-#   - 保留 4x tile_obuf_ctrl_N（per-Tile OBUF, 256KB each）
-#   - 保留 vpu_buf_ctrl（VPU 本地 buffer, 1MB）
-#   - SmartConnect NUM_MI = 13
+#   - 新增 Nx tile_ibuf_ctrl_N（per-Tile IBUF, 512KB each, N=$::DCIM_NUM_TILES）
+#   - 保留 Nx tile_obuf_ctrl_N（per-Tile OBUF, 256KB each）
+#   - 保留 vpu_buf_ctrl（VPU 本地 buffer, 8MB）
+#   - SmartConnect NUM_MI = DCIM_NUM_TILES*2 + 5
 # ==============================================================================
 
 # ==============================================================================
@@ -89,13 +89,17 @@ set_property -dict [list \
 ] [get_bd_cells hbm_axi_cc]
 
 # ==============================================================================
-# 5. tile_ibuf Controllers (chip-v3: 4x 512KB per-tile IBUF, 128-bit)
+# 5. tile_ibuf Controllers (chip-v3: N x 512KB per-tile IBUF, 128-bit)
+#    Tile 数量由 $::DCIM_NUM_TILES 驱动（config.tcl 定义）
 # ==============================================================================
 
 if {![info exists ::DCIM_TILE_IBUF_AXI_BRAM_READ_LATENCY]} {
     error "DCIM_TILE_IBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
 }
-for {set t 0} {$t < 4} {incr t} {
+if {![info exists ::DCIM_NUM_TILES]} {
+    error "DCIM_NUM_TILES not set — source config.tcl before hbm.tcl"
+}
+for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
   create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 tile_ibuf_ctrl_${t}
   set_property -dict [list \
     CONFIG.DATA_WIDTH {128} \
@@ -106,12 +110,13 @@ for {set t 0} {$t < 4} {incr t} {
 }
 
 # ==============================================================================
-# 5b. tile_obuf Controllers (chip-v2: 4x 256KB, 128-bit each)
+# 5b. tile_obuf Controllers (N x 256KB, 128-bit each)
+#     Tile 数量由 $::DCIM_NUM_TILES 驱动
 # ==============================================================================
 if {![info exists ::DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY]} {
     error "DCIM_TILE_OBUF_AXI_BRAM_READ_LATENCY not set — source config.tcl before hbm.tcl"
 }
-for {set t 0} {$t < 4} {incr t} {
+for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
   create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 tile_obuf_ctrl_${t}
   set_property -dict [list \
     CONFIG.DATA_WIDTH {128} \

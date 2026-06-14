@@ -116,17 +116,32 @@ if {[llength $_dqa_gs]} { set_property MAX_FANOUT 64 $_dqa_gs }
 # Section 6: Pblock / SLR 分配
 # ############################################################################
 
-# --------------------------------------------------------------------------
-# Tile Pblock: 已删除（2026-06-13）
-#
-# 原方案: Tile0→SLR0, Tile1+2→SLR1, Tile3→SLR2
-# 问题:   SLR1 CLB 利用率 99.4%, 导致 ppCache/maArray 路由违例 (-0.41ns)
-#         4 Tiles + 3 SLRs 无论如何分配，必有 1 个 SLR 装 2 Tiles ≈ 99%
-#         重新分配只是将拥塞从一个 SLR 搬到另一个
-# 解决:   删除所有 Tile Pblock，让 Vivado 自由跨 SLR 布局
-#         整体 CLB 81%, SLL crossing 仅用 8.75% (23040 可用)
-#         Vivado 有充裕跨 SLR 连线资源实现最优布局
-# --------------------------------------------------------------------------
+# ==============================================================================
+# Section 6: SLR Pblock 约束（参数化，2+3+3 分布）
+# ==============================================================================
+# 8 Tiles 分布: SLR0=Tile0,1  SLR1=Tile2,3,4  SLR2=Tile5,6,7
+# 改变分布只需修改 slr_map；改变 tile 数只需修改 chip_defines.vh
+
+set slr_map {
+  {0 1}
+  {2 3 4}
+  {5 6 7}
+}
+
+foreach slr_idx {0 1 2} {
+  set tiles [lindex $slr_map $slr_idx]
+  if {[llength $tiles] == 0} continue
+  set pblock_name "pblock_tiles_slr${slr_idx}"
+  create_pblock $pblock_name
+  foreach t $tiles {
+    add_cells_to_pblock $pblock_name [get_cells -quiet -hier -filter "NAME =~ */gen_tiles[$t].*"]
+    add_cells_to_pblock $pblock_name [get_cells -quiet -hier -filter "NAME =~ */u_tile_ibuf_gen[$t].*"]
+    add_cells_to_pblock $pblock_name [get_cells -quiet -hier -filter "NAME =~ */u_tile_obuf_gen[$t].*"]
+  }
+  resize_pblock $pblock_name -add "SLR${slr_idx}"
+  set_property IS_SOFT TRUE [get_pblocks $pblock_name]
+  puts "INFO: $pblock_name -> SLR${slr_idx} (tiles: $tiles)"
+}
 
 # AXI 互连 + VPU + INST_Decoder + CDMA -> SLR0 (PCIe 物理引脚在 SLR0)
 create_pblock pblock_axi_vpu
@@ -178,7 +193,7 @@ if {[llength $_vpu_buf_uram]} {
 
 
 # SLR 分配: 仅约束 VPU/INST 层次 cell 到 SLR0 (PCIe 在此)
-# Tile 及其 ibuf/obuf ctrl 不做 SLR 约束，由 Vivado 自由布局
+# Tile 及其 ibuf/obuf ctrl 的 SLR 分配由上方参数化 Pblock 处理
 foreach _cell {lite_i/vpu_0 lite_i/inst_decoder lite_i/cdma_ctrl lite_i/inst_bram} {
   set _c [get_cells -quiet $_cell]
   if {[llength $_c]} { set_property USER_SLR_ASSIGNMENT SLR0 $_c }
