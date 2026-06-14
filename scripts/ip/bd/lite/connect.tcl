@@ -42,30 +42,47 @@ connect_bd_net [get_bd_pins util_ds_buf/IBUF_DS_ODIV2] [get_bd_pins xdma_0/sys_c
 connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 
 # ==============================================================================
-# SmartConnect 级联拓扑（Vivado SmartConnect MI ≤ 16 限制）
-#   Level-1: axi_si_smc  (2 SI → 2 MI)  汇聚 XDMA + CDMA，分发到 tile/misc
-#   Level-2a: axi_tile_smc (1 SI → 16 MI) → 8×ibuf + 8×obuf
-#   Level-2b: axi_misc_smc (1 SI → 5 MI)  → vpu_buf + wb + inst_bram + regs + hbm
+# SmartConnect 拓扑（修复 XDMA PCIe 协议错误）
+#   - XDMA 直连 axi_xdma_smc (1SI, 2MI) → tile_smc / misc_smc
+#   - CDMA 直连 axi_cdma_smc (1SI, 2MI) → tile_smc / misc_smc
+#   - axi_tile_smc (2SI, 16MI) → 8×ibuf + 8×obuf
+#   - axi_misc_smc (2SI, 5MI)  → vpu_buf + wb + inst_bram + regs + hbm
 # ==============================================================================
 set num_tile_mi [expr {$::DCIM_NUM_TILES * 2}]
 
-create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_si_smc
+create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_xdma_smc
 set_property -dict [list \
-  CONFIG.NUM_SI    {2} \
+  CONFIG.NUM_SI    {1} \
   CONFIG.NUM_MI    {2} \
-] [get_bd_cells axi_si_smc]
+] [get_bd_cells axi_xdma_smc]
+
+create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_cdma_smc
+set_property -dict [list \
+  CONFIG.NUM_SI    {1} \
+  CONFIG.NUM_MI    {2} \
+] [get_bd_cells axi_cdma_smc]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_tile_smc
-set_property CONFIG.NUM_MI $num_tile_mi [get_bd_cells axi_tile_smc]
+set_property -dict [list \
+  CONFIG.NUM_SI    {2} \
+  CONFIG.NUM_MI    $num_tile_mi \
+] [get_bd_cells axi_tile_smc]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_misc_smc
-set_property CONFIG.NUM_MI {5} [get_bd_cells axi_misc_smc]
+set_property -dict [list \
+  CONFIG.NUM_SI    {2} \
+  CONFIG.NUM_MI    {5} \
+] [get_bd_cells axi_misc_smc]
 
-# Level-1: XDMA + CDMA → axi_si_smc → tile/misc
-connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_si_smc/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_si_smc/S01_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_si_smc/M00_AXI] [get_bd_intf_pins axi_tile_smc/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_si_smc/M01_AXI] [get_bd_intf_pins axi_misc_smc/S00_AXI]
+# XDMA → axi_xdma_smc → tile/misc (single-master, zero arbitration)
+connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_xdma_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_xdma_smc/M00_AXI] [get_bd_intf_pins axi_tile_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_xdma_smc/M01_AXI] [get_bd_intf_pins axi_misc_smc/S00_AXI]
+
+# CDMA → axi_cdma_smc → tile/misc (single-master, zero arbitration)
+connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_cdma_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_cdma_smc/M00_AXI] [get_bd_intf_pins axi_tile_smc/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_cdma_smc/M01_AXI] [get_bd_intf_pins axi_misc_smc/S01_AXI]
 
 # Level-2a: axi_tile_smc M[0..N-1] → ibuf, M[N..2N-1] → obuf
 for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
@@ -106,7 +123,7 @@ for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
   connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_wrdata_a] [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_dina]
   connect_bd_net [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_douta] [get_bd_pins tile_ibuf_ctrl_${t}/bram_rddata_a]
   connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aclk]
-  connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aresetn]
+  connect_bd_net [get_bd_pins xdma_0/axi_aresetn]         [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aresetn]
 }
 
 # ==============================================================================
@@ -120,7 +137,7 @@ for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
   connect_bd_net [get_bd_pins tile_obuf_ctrl_${t}/bram_wrdata_a] [get_bd_pins dcim_array_0/tile_obuf${t}_ext_dina]
   connect_bd_net [get_bd_pins dcim_array_0/tile_obuf${t}_ext_douta] [get_bd_pins tile_obuf_ctrl_${t}/bram_rddata_a]
   connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aclk]
-  connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aresetn]
+  connect_bd_net [get_bd_pins xdma_0/axi_aresetn]         [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aresetn]
 }
 
 # ==============================================================================
@@ -128,7 +145,7 @@ for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
 # ==============================================================================
 connect_bd_intf_net [get_bd_intf_pins vpu_buf_ctrl/BRAM_PORTA] [get_bd_intf_pins vpu_0/vpu_buf_bram]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins vpu_buf_ctrl/s_axi_aclk]
-connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins vpu_buf_ctrl/s_axi_aresetn]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn]          [get_bd_pins vpu_buf_ctrl/s_axi_aresetn]
 
 # ==============================================================================
 # VPU WB: AXI BRAM Controller → vpu_0/wb_bram (BRAM interface)
@@ -203,9 +220,11 @@ connect_bd_net [get_bd_pins vpu_0/ready]                 [get_bd_pins vpu_regs/r
 # Common clock/reset from XDMA (250 MHz)
 # ==============================================================================
 
-# SmartConnect (3-instance cascade)
-connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_si_smc/aclk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_si_smc/aresetn]
+# SmartConnect (4-instance: xdma_smc + cdma_smc + tile_smc + misc_smc)
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_xdma_smc/aclk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_xdma_smc/aresetn]
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_cdma_smc/aclk]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_cdma_smc/aresetn]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_tile_smc/aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_tile_smc/aresetn]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_misc_smc/aclk]
@@ -213,11 +232,11 @@ connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_misc_smc/areset
 
 # AXI BRAM controllers
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_wb_ctrl/s_axi_aclk]
-connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins vpu_wb_ctrl/s_axi_aresetn]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins vpu_wb_ctrl/s_axi_aresetn]
 
 # inst_bram_ctrl
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins inst_bram_ctrl/s_axi_aclk]
-connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins inst_bram_ctrl/s_axi_aresetn]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins inst_bram_ctrl/s_axi_aresetn]
 
 # inst_bram
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins inst_bram/clk]
