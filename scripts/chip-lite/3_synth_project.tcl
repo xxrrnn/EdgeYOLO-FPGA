@@ -213,8 +213,10 @@ for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_i
     set_param general.maxThreads 32
     route_design -directive $_routeDir
 
+    # --- Post-route phys_opt (setup + hold) ---
+    phys_opt_design -directive AggressiveExplore
     phys_opt_design -hold_fix
-    puts "INFO: Post-route hold phys_opt done (attempt $_attempt)"
+    puts "INFO: Post-route phys_opt (setup + hold) done (attempt $_attempt)"
 
     set _routeDcp [file normalize "$ImplOutputDir/post_route_attempt${_attempt}.dcp"]
     write_checkpoint -force $_routeDcp

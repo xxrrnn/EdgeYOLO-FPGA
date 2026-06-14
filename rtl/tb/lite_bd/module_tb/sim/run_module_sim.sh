@@ -18,7 +18,7 @@ BD_SIM_DIR="$LITE_BD_DIR/sim"
 # LITE_BUILD_DIR: build/lite/<tag>   （不含末尾 /）
 # LITE_GEN      : .../lite.gen/sources_1/ip  传给 gen_bd_rtl_extra.sh
 if [[ -z "${BUILD_TAG:-}" ]]; then
-  _latest=$(ls -dt "$REPO_ROOT/build/lite"/*/lite.xpr 2>/dev/null | head -1)
+  _latest=$(ls -dt "$REPO_ROOT/build/lite"/*/lite.xpr 2>/dev/null | head -1 || true)
   if [[ -n "$_latest" ]]; then
     BUILD_TAG="$(basename "$(dirname "$_latest")")"
   fi
