@@ -143,15 +143,21 @@ foreach slr_idx {0 1 2} {
   puts "INFO: $pblock_name -> SLR${slr_idx} (tiles: $tiles)"
 }
 
-# AXI 互连 + VPU + INST_Decoder + CDMA -> SLR0 (PCIe 物理引脚在 SLR0)
+# AXI 互连 + VPU + INST_Decoder + CDMA + vpu_buf_ctrl -> SLR0 (PCIe 物理引脚在 SLR0)
 create_pblock pblock_axi_vpu
 foreach _f {
-  {NAME =~ lite_i/axi_mem_smc/*}
+  {NAME =~ lite_i/axi_xdma_smc/*}
+  {NAME =~ lite_i/axi_cdma_smc/*}
+  {NAME =~ lite_i/axi_misc_smc/*}
   {NAME =~ lite_i/vpu_0/*}
+  {NAME =~ lite_i/vpu_buf_ctrl/*}
   {NAME =~ lite_i/axi_cdma_0/*}
   {NAME =~ lite_i/inst_decoder/*}
   {NAME =~ lite_i/cdma_ctrl/*}
   {NAME =~ lite_i/inst_bram/*}
+  {NAME =~ lite_i/inst_bram_ctrl/*}
+  {NAME =~ lite_i/vpu_wb_ctrl/*}
+  {NAME =~ lite_i/vpu_regs/*}
 } {
   set _c [get_cells -quiet -hierarchical -filter $_f]
   if {[llength $_c]} { add_cells_to_pblock [get_pblocks pblock_axi_vpu] $_c }

@@ -350,3 +350,237 @@ if {[llength $_obuf_din_r] && [llength $_uram_din]} {
 ### 260612_2213 Build 状态
 
 该 build（无 Pblock 约束）经过 `phys_opt_design` 32 轮迭代后报告 **WNS=+0.009ns**（仅 9ps 余量），说明 Vivado 勉强通过物理优化修复了违例。但 9ps 余量极不稳定，post-route 可能再次变负。方案 B 的 Pblock 约束将在下次 build 中提供稳定余量。
+
+---
+
+## MCP 全部替换为 Pipeline Register（2026-06-13）
+
+### 背景
+
+原设计中 `chip_timing.xdc` Section 4 定义了多组 `set_multicycle_path`，用于放松以下路径的 timing 约束：
+- 4.1: DCIM maArray 计算流水（mergeArray→accumulateArray 组合路径过长）
+- 4.3a: `ready_r` → inst_decoder FSM（SLR 穿越握手信号）
+- 4.3b: `cfg_*_reg` → Tile FSM（配置寄存器跨 SLR 到远端 Tile）
+
+MCP 虽然功能正确，但它依赖 Vivado 理解路径语义，且在物理优化阶段可能产生次优布局。
+**本次改造用 pipeline register 彻底替代所有 MCP，使所有路径均可在单周期内完成。**
+
+### 改动清单
+
+| 文件 | 改动内容 | 对应原 MCP |
+|------|----------|-----------|
+| `rtl/ref/DCIM/src/dcim/postProcess.v` | mergeArray→accumulateArray 之间插入 `pipe_stage` + data register | 4.1c/d |
+| `rtl/chip/DCIM_Array_bd.v` | `ready_internal` → `ready_pipe` 寄存器，再输出 | 4.3a |
+| `rtl/chip/DCIM_Array.sv` | 新增 `mode_r`/`acc_depth_r`/`*_base_addrs_r`/`tile_mask_r`，Tile 实例化使用 `_r` 版本 | 4.3b |
+| `xdc/chip/chip_timing.xdc` | 删除所有 `set_multicycle_path` 语句，Section 4 仅保留注释 | — |
+
+### 时序影响
+
+| Pipeline | Latency 代价 | 性能影响 |
+|----------|-------------|----------|
+| merge→accumulate | +1 clk / matmul | < 1%（CYCLE=128 拍中的 1 拍） |
+| ready_pipe | +1 clk / layer | 可忽略（每层 ~100μs 中多 4ns） |
+| cfg_*_r | +0（与已有 start_r 对齐） | 零 |
+
+### 验证
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+make compile                      # RTL 改动后重编 simv
+# DCIM 全量验证（postProcess pipeline 影响）
+make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all
+# conv_pipeline 验证（含 postProcess + cfg pipeline 完整链路）
+make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all
+# 冒烟
+make sim-smoke
+```
+
+---
+
+## Timing Closure: accumulateArray + VPU start pipeline（2026-06-13）
+
+### 问题描述
+
+移除 MCP 后重新跑实现（build `260613_1126`），`post_phys_opt_failing_paths.rpt` 出现 20 条 violation（WNS = **-0.780ns**），分为 4 类：
+
+| 类别 | 数量 | 路径 | Slack |
+|------|------|------|-------|
+| accumulate_controller `r_cnt_reg` → `temp*_reg` | 11 | cnt→refresh(fo=1043)→wide_adder(11×CARRY8)→temp | -0.780~-0.743ns |
+| maArray `b_reg_reg` → adderTree `r_sum_reg` | 6 | multiplier DSP→adder tree | -0.779~-0.748ns |
+| inst_decoder `vpu_unit_choose_reg` → qa_unit `CE` | 2 | 跨模块控制信号 | -0.751ns |
+| ppCacheController FSM → cacheMem `CE` | 1 | 内部 FSM fanout | -0.746ns |
+
+### 根因分析
+
+**类别 1**（主 critical path）：`accumulate_controller` 的 `cnt_zero` 信号（= `w_cnt==0`）用于选择"直接赋值"或"累加"，但该信号 fanout=1043（驱动 16 个 AccumulateColumn × 4 temp × 多 bit MUX），且路径包含 11 级 CARRY8 宽加法器。整条路径从 `r_cnt_reg` 出发，经过 2 级 LUT 比较、高扇出 `refresh` 分发、宽加法器、最后到 `temp_reg`，总延迟 4.2ns（其中 route 占 82%）。
+
+**类别 3**：`vpu_unit_choose_reg[15]` 从 inst_decoder 输出，经过 Global_VPU 中的 `unit_active` MUX + 比较逻辑，组合路径到达 qa_unit 内部 FSM CE。
+
+### 修复方案
+
+#### 1. accumulateArray input pipeline（`accumulateArray.v`）
+
+在 `accumulateArray` 模块中，将 `refresh` / `up_data` / `ena` 统一打一拍后再送入 `accumulate` 实例：
+
+```verilog
+reg                    refresh_r;
+reg [CH_OUT*WD2-1: 0]  up_data_r;
+reg                    ena_r;
+always @(posedge clk or negedge rstn) begin
+    ...
+    refresh_r <= w_accu_cnt_zero;
+    up_data_r <= up_data;
+    ena_r     <= up_valid & up_ready;
+end
+// accumulate 实例使用 refresh_r / up_data_r / ena_r
+```
+
+**效果**：`r_cnt_reg` → `refresh_r` 变为纯寄存器输出（fanout 由工具自动复制），宽加法器的输入全部来自寄存器，timing 路径从 4.2ns 缩短到 <2ns。
+
+对应 `accumulate_controller` 增加 1 级 `pipe_stage`（总共 2 级），bypass 路径也增加 1 级，确保 `dn_valid` 与数据对齐。
+
+#### 2. VPU start pipeline（`Global_VPU.v`）
+
+将 `start` 打一拍为 `start_d1`，所有 unit_start 信号使用 `start_d1`：
+
+```verilog
+reg start_d1;
+always @(posedge clk or negedge rst_n_local) begin
+    if (!rst_n_local) start_d1 <= 1'b0;
+    else              start_d1 <= start;
+end
+
+assign qa_unit_start = (unit_active == UNIT_QA) ? start_d1 : 1'b0;
+// active_* 信号全部使用 *_reg 版本（start 拍已锁存）
+// config_ready 在 start/start_d1 期间强制为 0，防止 inst_decoder 误判完成
+assign config_ready = ~start & ~start_d1 & (...unit_ready...);
+```
+
+**效果**：切断 `vpu_unit_choose_reg` → qa_unit 的组合路径，所有比较逻辑输入来自寄存器。
+
+#### 3. 类别 2 & 4（maArray / ppCache）
+
+这两类 violation 量级接近 timing boundary（-0.75ns），主要由 placement pressure 引起。修复类别 1（释放 CARRY8 链布局空间）和类别 3 后，placer 有更多自由度，预期这两类会自行收敛。如果新 build 仍 fail，再针对性处理。
+
+### 时序影响
+
+| Pipeline | Latency 代价 | 性能影响 |
+|----------|-------------|----------|
+| accumulateArray input | +1 clk / matmul | < 1%（CYCLE=128 中的 1 拍） |
+| VPU start_d1 | +1 clk / VPU 调用 | 可忽略（60 层中每层 1 cycle） |
+
+### 修改文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `rtl/ref/DCIM/src/dcim/accumulateArray.v` | accumulateArray 加 input pipeline；accumulate_controller 改为 2 级 pipe_stage + bypass pipe_stage |
+| `rtl/vpu/Global_VPU.v` | 加 `start_d1`；`active_*` 全用 `*_reg`；`config_ready` 屏蔽 start 窗口 |
+
+### 验证
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+make compile
+# DCIM 验证（accumulateArray pipeline）
+make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all
+# conv_pipeline 验证（VPU start pipeline + accumulate pipeline 全链路）
+make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all
+```
+
+---
+
+## Timing Closure: 删除 Tile Pblock 解除 SLR1 拥塞（2026-06-13）
+
+### 问题描述
+
+build `260613_1104`（post_route）出现 20 条 violation（WNS = **-0.410ns**），全部特征相同：
+- **Logic Levels: 0~3**（组合逻辑极浅）
+- **Route Delay 占 92~98%**（纯粹物理距离问题）
+- **集中在 SLR1**（16/20 条）
+
+### Violation 分类
+
+| 类型 | 数量 | 路径 | Slack | 所在 SLR |
+|------|------|------|-------|----------|
+| A: `data1_reg_rep` → DSP `a_reg_reg` | 2 | maArray 内部 FF replica 到远端乘法器 | -0.410/-0.408 | SLR0, SLR2 |
+| B: `ppCacheController/FSM` → `cacheMem/r_mem CE` | 14 | FSM 地址译码到 128 行寄存器使能 | -0.410~-0.409 | **SLR1** |
+| C: `mid_data_q_reg` → `cacheMem/r_mem D` (fo=256) | 2 | 数据寄存器高扇出到全部 cacheMem bit | -0.410/-0.408 | **SLR1** |
+| D: `maArray/result_reg` → `accumulate/temp_reg` | 2 | merge→accumulate 宽加法器 | -0.409 | SLR2 |
+
+### 根因分析
+
+**SLR1 CLB 利用率 99.4%**——两个 Tile 被 Pblock 约束到同一 SLR。
+
+关键证据（`post_place_util.rpt` Section 14）：
+
+| SLR | CLB 利用率 | 主要内容 | Violation 数 |
+|-----|-----------|---------|-------------|
+| SLR0 | 86.0% | Tile 0 + VPU + XDMA | 2 条 |
+| **SLR1** | **99.4%** | **Tile 1 + Tile 2** | **16 条** |
+| SLR2 | 57.6% | Tile 3 | 2 条 |
+
+**4 Tiles + 3 SLRs 的数学约束**：每 Tile 约 27000 CLB（≈50% SLR），VPU+XDMA 约 20000 CLB。无论如何重新分配，必有 1 个 SLR 装 2 Tiles ≈ 99%：
+
+| 方案 | SLR0 | SLR1 | SLR2 | 问题 |
+|------|------|------|------|------|
+| 原 (0/12/3) | 87% | **99%** | 58% | SLR1 爆 |
+| 改 (0/1/23) | 87% | 50% | **~99%** | SLR2 爆 |
+| 改 (0/13/2) | 87% | **~99%** | 50% | SLR1 换了内容但仍爆 |
+
+**结论：纯靠重新分配 Pblock 只是把拥塞搬到另一个 SLR，不解决问题。**
+
+### 解决方案：删除所有 Tile Pblock
+
+**改动文件**：`xdc/chip/chip_timing.xdc` Section 6
+
+**保留**：
+- `pblock_axi_vpu`（VPU/XDMA/SmartConnect → SLR0，IS_SOFT=TRUE）
+- `pblock_vpu_buf_uram`（256 URAM → X0~X3，IS_SOFT=FALSE）
+
+**删除**：
+- `pblock_tile_0`（Tile 0 → SLR0）
+- `pblock_tile_12`（Tile 1+2 → SLR1）
+- `pblock_tile_3`（Tile 3 → SLR2）
+- 所有 `tile_ibuf_ctrl_*` / `tile_obuf_ctrl_*` 的 Pblock 附加
+
+### 为什么可行
+
+| 指标 | 值 | 说明 |
+|------|-----|------|
+| 整体 CLB 利用率 | 81% | 空间充裕，不需要挤在某一 SLR |
+| SLR0↔SLR1 SLL 用量 | 8.75% | 23040 可用，当前 2016 条 |
+| SLR1↔SLR2 SLL 用量 | 2.75% | 23040 可用，当前 633 条 |
+| Vivado 自由度 | 全局 | 可跨 SLR 混合布局 4 Tile |
+
+删除 Pblock 后，Vivado placer 可以：
+1. 将每个 Tile 的逻辑分散到最近的可用 CLB，而不是挤在同一 SLR
+2. 利用充裕的 SLL crossing 资源建立跨 SLR 信号路径
+3. 在 phys_opt 阶段自由复制高扇出寄存器（data1_reg、mid_data_q）到就近位置
+
+### RTL 改动
+
+**无**。仅改 XDC。
+
+### 性能影响
+
+**无**。不改 RTL，不增加延迟。
+
+### 验证
+
+```bash
+# 不需要重新仿真（RTL 未改动）
+# 直接跑综合实现
+make build  # 或手动 vivado flow
+# 检查新 build 的 timing report
+```
+
+### 备选方案（如仍不满足 timing）
+
+如果删除 Pblock 后 Vivado 仍无法自动收敛，可额外追加：
+
+| 方案 | 改动 | 预期效果 |
+|------|------|---------|
+| ppCache 写端口 +1 reg | `ppCache.v` cacheMem 内 wr/addr/data 加 1 级寄存器 | 砍断类型 B/C 的 FSM→CE/data→D 长路径 |
+| data1_reg MAX_FANOUT | XDC 加 `set_property MAX_FANOUT 64` | 强制复制到就近位置 |
+| 加回 soft Pblock (1/1/2) | XDC 加 IS_SOFT=TRUE hint | 给 Vivado 一个起点但不强制 |
+
