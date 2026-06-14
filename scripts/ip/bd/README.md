@@ -1,0 +1,1 @@
+用于在blockdesign中导入相应的ip。write_ip_tcl导出的tcl无法直接使用，在这里给出可以直接使用的tcl。
