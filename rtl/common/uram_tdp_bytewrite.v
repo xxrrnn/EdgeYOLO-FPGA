@@ -63,9 +63,13 @@ module uram_tdp_bytewrite #(
     end
 
     // Port A 使能流水
+    // 仅在读操作（mem_ena & ~|wea）时推入 1，写操作不推进数据 pipeline。
+    // No-Change 模式下写时 memrega 不更新，若写时推入 1 会让 dat_pipe_a
+    // 在后续级传播陈旧的 memrega 值，导致 douta 数据与 douta_valid 不同步。
     reg [NBPIPE:0] men_pipe_a;
+    wire rd_en_a = mem_ena & ~(|wea);
     always @(posedge clk)
-        men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};
+        men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
 
     // Port A 数据流水
     reg [DWIDTH-1:0] dat_pipe_a [0:NBPIPE-1];
@@ -101,10 +105,11 @@ module uram_tdp_bytewrite #(
         end
     end
 
-    // Port B 使能流水
+    // Port B 使能流水（同 Port A 修复）
     reg [NBPIPE:0] men_pipe_b;
+    wire rd_en_b = mem_enb & ~(|web);
     always @(posedge clk)
-        men_pipe_b <= {men_pipe_b[NBPIPE-1:0], mem_enb};
+        men_pipe_b <= {men_pipe_b[NBPIPE-1:0], rd_en_b};
 
     // Port B 数据流水
     reg [DWIDTH-1:0] dat_pipe_b [0:NBPIPE-1];

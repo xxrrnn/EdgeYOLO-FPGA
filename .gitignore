@@ -202,3 +202,5 @@ rtl/vpu/tb/standalone/generated/
 # VCS 编译版本探针
 .cxl.vcs*.version
 synopsys_sim.setup
+rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
+rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
