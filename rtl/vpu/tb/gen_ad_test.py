@@ -53,8 +53,8 @@ def generate_testbench(test_cases):
 module tb_ad_unit;
 
     parameter ADDR_WIDTH = 32;
-    parameter GB_BANDWIDTH = 256;
-    parameter GB_ADDR_WIDTH = 16;
+    parameter VB_BANDWIDTH = 256;
+    parameter VPU_ADDR_WIDTH = 16;
     parameter FP_CORE_NUM = 256;
     parameter FP_WIDTH = 32;
     
@@ -70,17 +70,17 @@ module tb_ad_unit;
     reg [ADDR_WIDTH-1:0] ad_src_w;
     reg [ADDR_WIDTH-1:0] ad_dst_addr;
     
-    wire [GB_ADDR_WIDTH-1:0] gb_addrb;
-    wire [GB_BANDWIDTH-1:0] gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0] gb_web;
+    wire [VPU_ADDR_WIDTH-1:0] gb_addrb;
+    wire [VB_BANDWIDTH-1:0] gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0] gb_web;
     wire gb_enb;
-    reg [GB_BANDWIDTH-1:0] gb_doutb;
+    reg [VB_BANDWIDTH-1:0] gb_doutb;
     
     // 实例化 DUT
     ad_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_WIDTH(FP_WIDTH)
     ) dut (

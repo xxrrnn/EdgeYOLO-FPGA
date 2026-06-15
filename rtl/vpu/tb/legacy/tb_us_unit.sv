@@ -52,8 +52,8 @@ reg [255:0] us_expected [0:511];
   // 参数定义（与 DUT 一致）
   // =======================
     localparam ADDR_WIDTH = 32;
-    localparam GB_ADDR_WIDTH = $clog2(RAM_DEPTH);
-    localparam GB_BANDWIDTH = 256;
+    localparam VPU_ADDR_WIDTH = $clog2(RAM_DEPTH);
+    localparam VB_BANDWIDTH = 256;
     localparam FP_WIDTH  = 8;
     localparam VPU_NUM = 4;
     localparam FP_NUM = 16;
@@ -89,19 +89,19 @@ reg [255:0] us_expected [0:511];
 
 
     // global buffer interface (connected to DUT)
-    wire [GB_ADDR_WIDTH-1:0] gb_addrb;
-    wire [GB_BANDWIDTH-1:0]  gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0] gb_web;
+    wire [VPU_ADDR_WIDTH-1:0] gb_addrb;
+    wire [VB_BANDWIDTH-1:0]  gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0] gb_web;
     wire gb_enb;
-    wire [GB_BANDWIDTH-1:0]  gb_doutb; // now wire, driven by BRAM
+    wire [VB_BANDWIDTH-1:0]  gb_doutb; // now wire, driven by BRAM
 
   // =======================
   // 实例化 DUT
   // =======================
     us_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
         .FP_WIDTH(FP_WIDTH),
         .MAX_MP_CHANNEL_NUM(MAX_MP_CHANNEL_NUM)
     ) dut (
@@ -130,7 +130,7 @@ reg [255:0] us_expected [0:511];
     wire [clogb2(RAM_DEPTH-1)-1:0] bram_addrb;
     reg [(NB_COL*COL_WIDTH)-1:0] bram_dina;
     wire [(NB_COL*COL_WIDTH)-1:0] bram_doutb;
-    wire [GB_BANDWIDTH - 1 : 0] bram_douta;
+    wire [VB_BANDWIDTH - 1 : 0] bram_douta;
     reg clka;
     reg [NB_COL-1:0] bram_wea;
     wire [NB_COL-1:0] bram_web;

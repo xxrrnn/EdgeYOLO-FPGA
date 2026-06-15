@@ -53,8 +53,8 @@ module tb_dqa_standalone;
 
     localparam CLK_PERIOD       = 4.0;
     localparam ADDR_WIDTH       = 32;
-    localparam GB_BANDWIDTH     = `GB_BANDWIDTH;
-    localparam GB_ADDR_WIDTH    = `GB_ADDR_WIDTH;
+    localparam VB_BANDWIDTH     = `VB_BANDWIDTH;
+    localparam VPU_ADDR_WIDTH    = `VPU_ADDR_WIDTH;
     localparam WB_BANDWIDTH     = `WB_BANDWIDTH;
     localparam WB_ADDR_WIDTH    = `WB_ADDR_WIDTH;
     localparam FP_CORE_NUM      = `FP_CORE_NUM;
@@ -79,11 +79,11 @@ module tb_dqa_standalone;
     wire [FP_CORE_NUM*FP_WIDTH-1:0]   fp_res;
     wire                              fp_res_tvalid;
 
-    wire [GB_ADDR_WIDTH-1:0]   gb_addrb;
-    wire [GB_BANDWIDTH-1:0]    gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]  gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]   gb_addrb;
+    wire [VB_BANDWIDTH-1:0]    gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]  gb_web;
     wire                       gb_enb;
-    wire [GB_BANDWIDTH-1:0]    gb_doutb;
+    wire [VB_BANDWIDTH-1:0]    gb_doutb;
     wire                       gb_doutb_valid;
 
     wire [WB_ADDR_WIDTH-1:0]  wb_addrb;
@@ -96,10 +96,10 @@ module tb_dqa_standalone;
     // Port A: DQA unit 读写（gb_addrb/gb_dinb/gb_web/gb_enb → addra/dina/wea/mem_ena）
     // Port B: Testbench 初始化和验证（通过 tb_obuf_* 信号）
     reg                       tb_obuf_ena;
-    reg  [GB_BANDWIDTH/8-1:0] tb_obuf_wea;
+    reg  [VB_BANDWIDTH/8-1:0] tb_obuf_wea;
     reg  [OBUF_AWIDTH-1:0]    tb_obuf_addra;
-    reg  [GB_BANDWIDTH-1:0]   tb_obuf_dina;
-    wire [GB_BANDWIDTH-1:0]   tb_obuf_douta;
+    reg  [VB_BANDWIDTH-1:0]   tb_obuf_dina;
+    wire [VB_BANDWIDTH-1:0]   tb_obuf_douta;
     wire                      tb_obuf_douta_valid;
 
     obuf u_obuf (
@@ -129,8 +129,8 @@ module tb_dqa_standalone;
 
     dqa_relu_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .C_INT_WIDTH_IN(C_INT_WIDTH_IN),
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_TRAN_NUM(FP_TRAN_NUM),
@@ -446,8 +446,8 @@ module tb_dqa_standalone;
         void'($value$plusargs("ONLY_CASE=%d", only_case));
 
         $display("=== tb_dqa_standalone: YOLOv5n L1/L2/L3 (network params golden) ===");
-        $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d GB_BW=%0d OBUF_RD_PIPE=%0d",
-                 FP_CORE_NUM, FP_TRAN_NUM, GB_BANDWIDTH, `DCIM_OBUF_RD_TOTAL_PIPE);
+        $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d VPU_BW=%0d OBUF_RD_PIPE=%0d",
+                 FP_CORE_NUM, FP_TRAN_NUM, VB_BANDWIDTH, `DCIM_OBUF_RD_TOTAL_PIPE);
 
         dqa_unit_start = 0;
         dqa_src_addr = 0; dqa_scale_addr = 0; dqa_bias_addr = 0; dqa_dst_addr = 0;

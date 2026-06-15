@@ -1,15 +1,15 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 module dqa_relu_unit #(
     parameter ADDR_WIDTH = 32,
-    parameter GB_BANDWIDTH = 256,
-    parameter GB_ADDR_WIDTH = 16,
+    parameter VB_BANDWIDTH = `VB_BANDWIDTH,
+    parameter VB_ADDR_WIDTH = `VB_ADDR_WIDTH,
     parameter C_INT_WIDTH_IN = 32,
-    parameter FP_CORE_NUM = 8,
-    parameter FP_TRAN_NUM = 8,
+    parameter FP_CORE_NUM = `FP_CORE_NUM,
+    parameter FP_TRAN_NUM = `FP_TRAN_NUM,
     parameter FP_WIDTH    = 32,
-    parameter WB_BANDWIDTH = 256,
+    parameter WB_BANDWIDTH = `VB_BANDWIDTH,
     parameter WB_ADDR_WIDTH = 15,   // 字节地址位宽
     parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM
 
@@ -40,11 +40,11 @@ module dqa_relu_unit #(
     input   wire [FP_CORE_NUM*FP_WIDTH-1:0]     fp_res,
     input   wire                                fp_res_tvalid,
 
-    output  logic [GB_ADDR_WIDTH-1:0]           gb_addrb, 
-    output  logic [GB_BANDWIDTH-1:0]            gb_dinb,  
-    output  logic [GB_BANDWIDTH/8-1:0]          gb_web,   
+    output  logic [VB_ADDR_WIDTH-1:0]           gb_addrb, 
+    output  logic [VB_BANDWIDTH-1:0]            gb_dinb,  
+    output  logic [VB_BANDWIDTH/8-1:0]          gb_web,   
     output  logic                               gb_enb,    
-    input   wire [GB_BANDWIDTH-1:0]             gb_doutb,
+    input   wire [VB_BANDWIDTH-1:0]             gb_doutb,
     input   wire                                gb_doutb_valid,  // OBUF 读数据有效（与 gb_doutb 同拍）
 
     output  reg [WB_ADDR_WIDTH-1:0]             wb_addrb,
@@ -118,15 +118,15 @@ module dqa_relu_unit #(
     */
     localparam  MAX_CHANNEL_LENGTH = MAX_CHANNEL_NUM * FP_WIDTH;
     localparam  FP_CORE_LENGTH = FP_CORE_NUM* FP_WIDTH;
-    localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+    localparam  BYTE_ADDR_SHIFT = $clog2(VB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
     logic [ADDR_WIDTH - 1 : 0]                      dqa_x_load_addr_add, n_dqa_x_load_addr_add;
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_BYTES,DQA_SINGLE_COMPUTE_BLOCKS ;
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_SAVE_BLOCKS ;
     // localparam DQA_SINGLE_COMPUTE_BYTES        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3);
-    localparam DQA_SINGLE_COMPUTE_BLOCKS32      = ((FP_CORE_NUM * 32 + GB_BANDWIDTH - 1) / GB_BANDWIDTH);
-    localparam DQA_SINGLE_COMPUTE_BLOCKS16      = ((FP_CORE_NUM * 16 + GB_BANDWIDTH - 1) / GB_BANDWIDTH);
-    localparam DQA_SINGLE_COMPUTE_BLOCKS        = ((FP_CORE_NUM * C_INT_WIDTH_IN + GB_BANDWIDTH - 1) / GB_BANDWIDTH);
-    localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM * FP_WIDTH + GB_BANDWIDTH - 1) / GB_BANDWIDTH);
+    localparam DQA_SINGLE_COMPUTE_BLOCKS32      = ((FP_CORE_NUM * 32 + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
+    localparam DQA_SINGLE_COMPUTE_BLOCKS16      = ((FP_CORE_NUM * 16 + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
+    localparam DQA_SINGLE_COMPUTE_BLOCKS        = ((FP_CORE_NUM * C_INT_WIDTH_IN + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
+    localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM * FP_WIDTH + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
     localparam DQA_LOAD_WORDS_MAX = (DQA_SINGLE_COMPUTE_BLOCKS32 > DQA_SINGLE_COMPUTE_BLOCKS16) ?
                                     DQA_SINGLE_COMPUTE_BLOCKS32 : DQA_SINGLE_COMPUTE_BLOCKS16;
     localparam DQA_LOAD_WORDS_BITS = (DQA_LOAD_WORDS_MAX <= 1) ? 1 : $clog2(DQA_LOAD_WORDS_MAX);
@@ -331,10 +331,10 @@ module dqa_relu_unit #(
                                 dqa_int_in_reg[dqa_i16_i*C_INT_WIDTH_IN +: C_INT_WIDTH_IN]
                                     <= {{(C_INT_WIDTH_IN-16){gb_doutb[dqa_i16_i*16+15]}}, gb_doutb[dqa_i16_i*16 +: 16]};
                             end
-                        end else if (FP_CORE_NUM * C_INT_WIDTH_IN > GB_BANDWIDTH) begin
+                        end else if (FP_CORE_NUM * C_INT_WIDTH_IN > VB_BANDWIDTH) begin
                             // 宽于 GB：移位拼接（只在 C_INT_WIDTH_IN>32 或 chip 256-bit 路径有效）
                             dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0]
-                                <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : GB_BANDWIDTH]};
+                                <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : VB_BANDWIDTH]};
                         end else begin
                             dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
                         end
@@ -381,8 +381,8 @@ module dqa_relu_unit #(
         end else if(c_state == DQA_SAVE) begin
             gb_addrb = dqa_save_addr + dqa_save_cnt;
             gb_enb   = 1'b1;
-            gb_web   = {(GB_BANDWIDTH / 8){1'b1}};
-            gb_dinb  = dqa_out_reg[dqa_save_cnt * GB_BANDWIDTH +: GB_BANDWIDTH];
+            gb_web   = {(VB_BANDWIDTH / 8){1'b1}};
+            gb_dinb  = dqa_out_reg[dqa_save_cnt * VB_BANDWIDTH +: VB_BANDWIDTH];
         end
     end
 

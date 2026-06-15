@@ -1,4 +1,4 @@
-`timescale 1ps/1ps
+`timescale 1ns/1ns
 // Module-TB 快速仿真 stub：替换 HBM 完整行为模型
 // 输出：apb_complete_0=1（SmartConnect 认为 HBM ready），
 //       AXI 响应均为零（module_tb 不通过 HBM 访问）

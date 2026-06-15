@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 // Global_VPU_top - VPU 顶层模块 (chip-v2)
@@ -9,9 +9,9 @@
 
 module Global_VPU_top #(
     parameter ADDR_WIDTH = `VPU_DATA_WIDTH,
-    parameter GB_ADDR_WIDTH = `GB_ADDR_WIDTH,
+    parameter VPU_ADDR_WIDTH = `VPU_ADDR_WIDTH,
     parameter C_INT_WIDTH_IN = `C_INT_WIDTH_IN,
-    parameter BANDWIDTH = `VPU_BANDWIDTH,
+    parameter BANDWIDTH = `VB_BANDWIDTH,
     parameter FP_CORE_NUM = `FP_CORE_NUM,
     parameter FP_TRAN_NUM = `FP_TRAN_NUM,
     parameter FP_WIDTH    = `FP_WIDTH,
@@ -145,7 +145,7 @@ module Global_VPU_top #(
     // -----------------------------------------------------------------------
     Global_VPU #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .C_INT_WIDTH_IN(C_INT_WIDTH_IN),
         .BANDWIDTH(BANDWIDTH),
         .FP_CORE_NUM(FP_CORE_NUM),

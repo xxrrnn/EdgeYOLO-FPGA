@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 
 // 复位同步器模块 - 用于同步异步复位信号
 module rst_n_sync (

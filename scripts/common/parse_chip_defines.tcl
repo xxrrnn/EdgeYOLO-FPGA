@@ -9,8 +9,8 @@
 #   parse_chip_defines $path_to_chip_defines_vh
 #
 #   # 之后可以使用全局变量访问参数
-#   puts $::VPU_BANDWIDTH        ;# 128
-#   puts $::GB_SIZE_BYTES        ;# 16777216
+#   puts $::VB_BANDWIDTH        ;# 128
+#   puts $::VPU_SIZE_BYTES        ;# 16777216
 #==============================================================================
 
 namespace eval vpu_params {

@@ -15,8 +15,8 @@
 module tb_im2col_unit;
 
     parameter ADDR_WIDTH    = 32;
-    parameter GB_BANDWIDTH  = 128;
-    parameter GB_ADDR_WIDTH = 24;
+    parameter VB_BANDWIDTH  = 128;
+    parameter VPU_ADDR_WIDTH = 24;
     parameter FP_WIDTH      = 32;
 
     // 测试配置（model.1.conv: CH_IN=16, 3×3, stride=2, padding=1, H=160, W=160）
@@ -55,18 +55,18 @@ module tb_im2col_unit;
     // =========================================================================
     // OBUF 模拟（dual port RAM）
     // =========================================================================
-    reg [GB_BANDWIDTH-1:0] obuf_mem [0:OBUF_DEPTH-1];
+    reg [VB_BANDWIDTH-1:0] obuf_mem [0:OBUF_DEPTH-1];
 
     // DUT 接口
-    wire [GB_ADDR_WIDTH-1:0]      gb_addrb;
-    wire [GB_BANDWIDTH-1:0]       gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]     gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]      gb_addrb;
+    wire [VB_BANDWIDTH-1:0]       gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]     gb_web;
     wire                          gb_enb;
-    reg  [GB_BANDWIDTH-1:0]       gb_doutb;
+    reg  [VB_BANDWIDTH-1:0]       gb_doutb;
     reg                           gb_doutb_valid;
 
     // OBUF 模拟读写
-    wire [GB_ADDR_WIDTH-5:0] obuf_word_addr = gb_addrb >> 4;  // 字节地址 >> 4 = 128-bit 字地址
+    wire [VPU_ADDR_WIDTH-5:0] obuf_word_addr = gb_addrb >> 4;  // 字节地址 >> 4 = 128-bit 字地址
     reg                        gb_read_pending;
 
     always @(posedge clk) begin
@@ -75,7 +75,7 @@ module tb_im2col_unit;
             if (|gb_web) begin
                 // 写操作
                 integer i;
-                for (i = 0; i < GB_BANDWIDTH/8; i = i + 1) begin
+                for (i = 0; i < VB_BANDWIDTH/8; i = i + 1) begin
                     if (gb_web[i])
                         obuf_mem[obuf_word_addr][i*8 +: 8] <= gb_dinb[i*8 +: 8];
                 end
@@ -101,8 +101,8 @@ module tb_im2col_unit;
 
     im2col_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .FP_WIDTH(FP_WIDTH)
     ) dut (
         .clk(clk),

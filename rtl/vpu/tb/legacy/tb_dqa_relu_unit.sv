@@ -13,8 +13,8 @@
 module tb_dqa_relu_unit;
 
     parameter ADDR_WIDTH     = 32;
-    parameter GB_BANDWIDTH   = 256;
-    parameter GB_ADDR_WIDTH  = 16;
+    parameter VB_BANDWIDTH   = 256;
+    parameter VPU_ADDR_WIDTH  = 16;
     parameter C_INT_WIDTH_IN = 32;
     parameter FP_CORE_NUM    = 8;
     parameter FP_TRAN_NUM    = 8;
@@ -24,8 +24,8 @@ module tb_dqa_relu_unit;
     parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM;
 
     parameter CLK_PERIOD = 10;
-    parameter INT_LANES = GB_BANDWIDTH / C_INT_WIDTH_IN;
-    parameter FP_LANES  = GB_BANDWIDTH / FP_WIDTH;
+    parameter INT_LANES = VB_BANDWIDTH / C_INT_WIDTH_IN;
+    parameter FP_LANES  = VB_BANDWIDTH / FP_WIDTH;
     parameter BRAM_DEPTH = 4096;
 
     //==========================================================================
@@ -44,11 +44,11 @@ module tb_dqa_relu_unit;
     reg  [ADDR_WIDTH-1:0]       dqa_bias_addr;
     reg  [ADDR_WIDTH-1:0]       dqa_dst_addr;
 
-    wire [GB_ADDR_WIDTH-1:0]    gb_addrb;
-    wire [GB_BANDWIDTH-1:0]     gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]   gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]    gb_addrb;
+    wire [VB_BANDWIDTH-1:0]     gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]   gb_web;
     wire                        gb_enb;
-    wire [GB_BANDWIDTH-1:0]     gb_doutb;
+    wire [VB_BANDWIDTH-1:0]     gb_doutb;
 
     wire [WB_ADDR_WIDTH-1:0]    wb_addrb;
     wire [WB_BANDWIDTH-1:0]     wb_dinb;
@@ -75,7 +75,7 @@ module tb_dqa_relu_unit;
     // Global Buffer BRAM (real)
     //==========================================================================
     global_buffer_bram #(
-        .NB_COL(GB_BANDWIDTH/8),
+        .NB_COL(VB_BANDWIDTH/8),
         .COL_WIDTH(8),
         .RAM_DEPTH(BRAM_DEPTH),
         .RAM_PERFORMANCE("LOW_LATENCY"),
@@ -132,8 +132,8 @@ module tb_dqa_relu_unit;
     //==========================================================================
     dqa_relu_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .C_INT_WIDTH_IN(C_INT_WIDTH_IN),
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_TRAN_NUM(FP_TRAN_NUM),
@@ -223,8 +223,8 @@ module tb_dqa_relu_unit;
         int cycle_count, timeout;
 
         num_elements = num_c * num_h * num_w;
-        num_src_words = (num_elements * C_INT_WIDTH_IN + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
-        num_dst_words = (num_elements * FP_WIDTH + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
+        num_src_words = (num_elements * C_INT_WIDTH_IN + VB_BANDWIDTH - 1) / VB_BANDWIDTH;
+        num_dst_words = (num_elements * FP_WIDTH + VB_BANDWIDTH - 1) / VB_BANDWIDTH;
         src_word = src_byte_addr >> 5;
         dst_word = dst_byte_addr >> 5;
         test_errors = 0;

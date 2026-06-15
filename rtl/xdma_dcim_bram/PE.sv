@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "dcim_defs.vh"
 
 // PE wraps the DCIM compute macro with one input buffer and one output buffer.

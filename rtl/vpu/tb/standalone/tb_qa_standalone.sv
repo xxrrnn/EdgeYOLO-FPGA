@@ -11,8 +11,8 @@ module tb_qa_standalone;
 
     localparam CLK_PERIOD     = 4.0;
     localparam ADDR_WIDTH       = 32;
-    localparam GB_BANDWIDTH     = `GB_BANDWIDTH;
-    localparam GB_ADDR_WIDTH    = `GB_ADDR_WIDTH;
+    localparam VB_BANDWIDTH     = `VB_BANDWIDTH;
+    localparam VPU_ADDR_WIDTH    = `VPU_ADDR_WIDTH;
     localparam WB_BANDWIDTH     = `WB_BANDWIDTH;
     localparam WB_ADDR_WIDTH    = `WB_ADDR_WIDTH;
     localparam FP_CORE_NUM      = `FP_CORE_NUM;
@@ -38,11 +38,11 @@ module tb_qa_standalone;
     wire [FP_CORE_NUM*FP_WIDTH-1:0]   fp_res;
     wire                              fp_res_tvalid;
 
-    wire [GB_ADDR_WIDTH-1:0]   gb_addrb;
-    wire [GB_BANDWIDTH-1:0]    gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]  gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]   gb_addrb;
+    wire [VB_BANDWIDTH-1:0]    gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]  gb_web;
     wire                       gb_enb;
-    wire [GB_BANDWIDTH-1:0]    gb_doutb;
+    wire [VB_BANDWIDTH-1:0]    gb_doutb;
     wire                       gb_doutb_valid;
 
     wire [WB_ADDR_WIDTH-1:0]  wb_addrb;
@@ -53,10 +53,10 @@ module tb_qa_standalone;
 
     // 真实 obuf.v（与 E2E / DQA standalone 一致），Port A 给 QA，Port B 给 TB
     reg                       tb_obuf_ena;
-    reg  [GB_BANDWIDTH/8-1:0] tb_obuf_wea;
+    reg  [VB_BANDWIDTH/8-1:0] tb_obuf_wea;
     reg  [OBUF_AWIDTH-1:0]    tb_obuf_addra;
-    reg  [GB_BANDWIDTH-1:0]   tb_obuf_dina;
-    wire [GB_BANDWIDTH-1:0]   tb_obuf_douta;
+    reg  [VB_BANDWIDTH-1:0]   tb_obuf_dina;
+    wire [VB_BANDWIDTH-1:0]   tb_obuf_douta;
     wire                      tb_obuf_douta_valid;
 
     obuf u_obuf (
@@ -82,7 +82,7 @@ module tb_qa_standalone;
 
     task automatic obuf_write_word(input int addr, input logic [127:0] data);
         @(posedge clk);
-        tb_obuf_wea   <= {GB_BANDWIDTH/8{1'b1}};
+        tb_obuf_wea   <= {VB_BANDWIDTH/8{1'b1}};
         tb_obuf_ena   <= 1'b1;
         tb_obuf_dina  <= data;
         tb_obuf_addra <= addr;
@@ -167,8 +167,8 @@ module tb_qa_standalone;
 
     qa_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .WB_BANDWIDTH(WB_BANDWIDTH),
         .WB_ADDR_WIDTH(WB_ADDR_WIDTH),
         .FP_CORE_NUM(FP_CORE_NUM),
@@ -248,7 +248,7 @@ module tb_qa_standalone;
         integer b;
         begin
             int8_word_close = 1'b1;
-            for (b = 0; b < GB_BANDWIDTH/8; b = b + 1)
+            for (b = 0; b < VB_BANDWIDTH/8; b = b + 1)
                 if (!int8_byte_close(got[b*8 +: 8], exp[b*8 +: 8]))
                     int8_word_close = 1'b0;
         end
@@ -357,8 +357,8 @@ module tb_qa_standalone;
         void'($value$plusargs("ONLY_CASE=%d", only_case));
 
         $display("=== tb_qa_standalone: YOLOv5n L1/L2/L3 (network params golden) ===");
-        $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d GB_BW=%0d RD_LATENCY=%0d",
-                 FP_CORE_NUM, FP_TRAN_NUM, GB_BANDWIDTH, OBUF_RD_LATENCY);
+        $display("  FP_CORE_NUM=%0d FP_TRAN_NUM=%0d VPU_BW=%0d RD_LATENCY=%0d",
+                 FP_CORE_NUM, FP_TRAN_NUM, VB_BANDWIDTH, OBUF_RD_LATENCY);
 
         qa_unit_start = 0;
         qa_src_addr = 0; qa_scale_addr = 0; qa_dst_addr = 0;

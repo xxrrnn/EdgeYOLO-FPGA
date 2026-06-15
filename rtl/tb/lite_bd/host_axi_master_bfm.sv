@@ -1,4 +1,4 @@
-`timescale 1ps / 1ps
+`timescale 1ns / 1ns
 // AXI4 full master BFM (64b addr, 256b data) for force-driving xdma_0/M_AXI in lite BD sim.
 //
 // Key design decisions for hardware-consistent BD sim:

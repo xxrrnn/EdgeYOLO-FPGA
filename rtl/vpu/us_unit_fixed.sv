@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "chip_defines.vh"
 //==============================================================================
 // us_unit_fixed - 硬编码 Nearest Neighbor Upsample ×2 单元
@@ -31,8 +31,8 @@
 
 module us_unit_fixed #(
     parameter ADDR_WIDTH    = 32,
-    parameter GB_BANDWIDTH  = 256,   // bits per BRAM word
-    parameter GB_ADDR_WIDTH = 32,
+    parameter VB_BANDWIDTH  = `VB_BANDWIDTH,   // bits per BRAM word
+    parameter VB_ADDR_WIDTH = `VB_ADDR_WIDTH,
     parameter FP_WIDTH      = 32
 )(
     input  wire                          clk,
@@ -48,11 +48,11 @@ module us_unit_fixed #(
     input  wire [ADDR_WIDTH-1:0]         us_dst_addr,   // 输出基地址（字节）
 
     // GB BRAM Port B 接口
-    output logic [GB_ADDR_WIDTH-1:0]     gb_addrb,
-    output logic [GB_BANDWIDTH-1:0]      gb_dinb,
-    output logic [GB_BANDWIDTH/8-1:0]    gb_web,
+    output logic [VB_ADDR_WIDTH-1:0]     gb_addrb,
+    output logic [VB_BANDWIDTH-1:0]      gb_dinb,
+    output logic [VB_BANDWIDTH/8-1:0]    gb_web,
     output logic                         gb_enb,
-    input  wire  [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire  [VB_BANDWIDTH-1:0]      gb_doutb,
     input  wire                          gb_doutb_valid  // OBUF 读数据有效（ready/valid，替代硬延迟）
 );
 
@@ -61,9 +61,9 @@ module us_unit_fixed #(
     // =========================================================================
     localparam SCALE      = 2;
     localparam SCALE_BITS = 1;  // log2(SCALE) = log2(2) = 1
-    localparam LANES      = GB_BANDWIDTH / FP_WIDTH;
+    localparam LANES      = VB_BANDWIDTH / FP_WIDTH;
     localparam LANES_BITS = $clog2(LANES);  // log2(LANES)
-    localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+    localparam BYTE_ADDR_SHIFT = $clog2(VB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
     // =========================================================================
     // 状态机
@@ -92,12 +92,12 @@ module us_unit_fixed #(
     // 运行时计算的参数（锁存输入配置）
     // =========================================================================
     reg [ADDR_WIDTH-1:0] in_h, in_w, c_blocks;
-    reg [GB_ADDR_WIDTH-1:0] src_base_word;
-    reg [GB_ADDR_WIDTH-1:0] dst_base_word;
+    reg [VB_ADDR_WIDTH-1:0] src_base_word;
+    reg [VB_ADDR_WIDTH-1:0] dst_base_word;
     
     // 预计算的步长（避免重复乘法）
-    reg [GB_ADDR_WIDTH-1:0] src_row_stride;  // in_w * c_blocks
-    reg [GB_ADDR_WIDTH-1:0] dst_row_stride;  // out_w * c_blocks = (in_w << 1) * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] src_row_stride;  // in_w * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] dst_row_stride;  // out_w * c_blocks = (in_w << 1) * c_blocks
 
     // =========================================================================
     // 循环计数器
@@ -107,29 +107,29 @@ module us_unit_fixed #(
     reg [ADDR_WIDTH-1:0] cb_cnt;    // channel block
 
     // 像素缓冲
-    reg [GB_BANDWIDTH-1:0] pixel_buf;
+    reg [VB_BANDWIDTH-1:0] pixel_buf;
 
     // =========================================================================
     // 地址寄存器（基址 + 偏移分离，避免S_NEXT中的乘法）
     // =========================================================================
     // 行基址（每换行时更新）
-    reg [GB_ADDR_WIDTH-1:0] src_row_base;        // ih * in_w * c_blocks
-    reg [GB_ADDR_WIDTH-1:0] dst_row_base_even;   // (2*ih) * out_w * c_blocks
-    reg [GB_ADDR_WIDTH-1:0] dst_row_base_odd;    // (2*ih+1) * out_w * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] src_row_base;        // ih * in_w * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] dst_row_base_even;   // (2*ih) * out_w * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] dst_row_base_odd;    // (2*ih+1) * out_w * c_blocks
     
     // 列偏移（每换列时更新，每换cb时微调）
-    reg [GB_ADDR_WIDTH-1:0] src_col_base;        // iw * c_blocks
-    reg [GB_ADDR_WIDTH-1:0] dst_col_base_even;   // (2*iw) * c_blocks
-    reg [GB_ADDR_WIDTH-1:0] dst_col_base_odd;    // (2*iw+1) * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] src_col_base;        // iw * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] dst_col_base_even;   // (2*iw) * c_blocks
+    reg [VB_ADDR_WIDTH-1:0] dst_col_base_odd;    // (2*iw+1) * c_blocks
 
     // =========================================================================
     // 地址计算（基址 + 偏移 + cb）
     // =========================================================================
-    wire [GB_ADDR_WIDTH-1:0] load_addr   = src_row_base + src_col_base + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_0 = dst_row_base_even + dst_col_base_even + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_1 = dst_row_base_even + dst_col_base_odd + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_2 = dst_row_base_odd + dst_col_base_even + cb_cnt;
-    wire [GB_ADDR_WIDTH-1:0] save_addr_3 = dst_row_base_odd + dst_col_base_odd + cb_cnt;
+    wire [VB_ADDR_WIDTH-1:0] load_addr   = src_row_base + src_col_base + cb_cnt;
+    wire [VB_ADDR_WIDTH-1:0] save_addr_0 = dst_row_base_even + dst_col_base_even + cb_cnt;
+    wire [VB_ADDR_WIDTH-1:0] save_addr_1 = dst_row_base_even + dst_col_base_odd + cb_cnt;
+    wire [VB_ADDR_WIDTH-1:0] save_addr_2 = dst_row_base_odd + dst_col_base_even + cb_cnt;
+    wire [VB_ADDR_WIDTH-1:0] save_addr_3 = dst_row_base_odd + dst_col_base_odd + cb_cnt;
 
     // =========================================================================
     // 状态机主逻辑
@@ -223,7 +223,7 @@ module us_unit_fixed #(
                 S_SAVE_0: begin
                     gb_addrb <= save_addr_0;
                     gb_dinb  <= pixel_buf;
-                    gb_web   <= {(GB_BANDWIDTH/8){1'b1}};
+                    gb_web   <= {(VB_BANDWIDTH/8){1'b1}};
                     gb_enb   <= 1'b1;
                     state    <= S_SAVE_1;
                 end
@@ -232,7 +232,7 @@ module us_unit_fixed #(
                 S_SAVE_1: begin
                     gb_addrb <= save_addr_1;
                     gb_dinb  <= pixel_buf;
-                    gb_web   <= {(GB_BANDWIDTH/8){1'b1}};
+                    gb_web   <= {(VB_BANDWIDTH/8){1'b1}};
                     gb_enb   <= 1'b1;
                     state    <= S_SAVE_2;
                 end
@@ -241,7 +241,7 @@ module us_unit_fixed #(
                 S_SAVE_2: begin
                     gb_addrb <= save_addr_2;
                     gb_dinb  <= pixel_buf;
-                    gb_web   <= {(GB_BANDWIDTH/8){1'b1}};
+                    gb_web   <= {(VB_BANDWIDTH/8){1'b1}};
                     gb_enb   <= 1'b1;
                     state    <= S_SAVE_3;
                 end
@@ -250,7 +250,7 @@ module us_unit_fixed #(
                 S_SAVE_3: begin
                     gb_addrb <= save_addr_3;
                     gb_dinb  <= pixel_buf;
-                    gb_web   <= {(GB_BANDWIDTH/8){1'b1}};
+                    gb_web   <= {(VB_BANDWIDTH/8){1'b1}};
                     gb_enb   <= 1'b1;
                     state    <= S_NEXT;
                 end

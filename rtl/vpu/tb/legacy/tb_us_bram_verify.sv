@@ -1,15 +1,15 @@
 `timescale 1ns/1ps
 module tb_us_bram_verify;
-  localparam GB_BW=256, DEPTH=16384, GB_ADDR_W=32, NB_COL=32;
+  localparam VPU_BW=256, DEPTH=16384, VPU_ADDR_W=32, NB_COL=32;
   reg clk=0, rst_n=0, us_unit_start=0;
   wire us_unit_ready;
   reg [31:0] us_src_addr, us_src_h, us_src_w, us_src_c, us_dst_addr;
-  wire [GB_ADDR_W-1:0] gb_addrb;
-  wire [GB_BW-1:0] gb_dinb, gb_doutb;
-  wire [GB_BW/8-1:0] gb_web;
+  wire [VPU_ADDR_W-1:0] gb_addrb;
+  wire [VPU_BW-1:0] gb_dinb, gb_doutb;
+  wire [VPU_BW/8-1:0] gb_web;
   wire gb_enb;
   always #2 clk=~clk;
-  us_unit_fixed #(.ADDR_WIDTH(32),.GB_BANDWIDTH(GB_BW),.GB_ADDR_WIDTH(GB_ADDR_W),.FP_WIDTH(32)) dut(
+  us_unit_fixed #(.ADDR_WIDTH(32),.VB_BANDWIDTH(VPU_BW),.VPU_ADDR_WIDTH(VPU_ADDR_W),.FP_WIDTH(32)) dut(
     .clk(clk),.rst_n(rst_n),.us_unit_start(us_unit_start),.us_unit_ready(us_unit_ready),
     .us_src_addr(us_src_addr),.us_src_h(us_src_h),.us_src_w(us_src_w),.us_src_c(us_src_c),.us_dst_addr(us_dst_addr),
     .gb_addrb(gb_addrb),.gb_dinb(gb_dinb),.gb_web(gb_web),.gb_enb(gb_enb),.gb_doutb(gb_doutb));

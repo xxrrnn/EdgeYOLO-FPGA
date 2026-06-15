@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 // ============================================================================
@@ -54,8 +54,8 @@
 
 module im2col_unit #(
     parameter ADDR_WIDTH    = 32,
-    parameter GB_BANDWIDTH  = 256,
-    parameter GB_ADDR_WIDTH = 24,
+    parameter VB_BANDWIDTH  = `VB_BANDWIDTH,
+    parameter VB_ADDR_WIDTH = `VB_ADDR_WIDTH,
     parameter FP_WIDTH      = 32
 )(
     input  wire                          clk,
@@ -75,11 +75,11 @@ module im2col_unit #(
     input  wire [ADDR_WIDTH-1:0]         im2col_addr_t,     // OW
 
     // GB (OBUF) 端口
-    output reg  [GB_ADDR_WIDTH-1:0]      gb_addrb,
-    output reg  [GB_BANDWIDTH-1:0]       gb_dinb,
-    output reg  [GB_BANDWIDTH/8-1:0]     gb_web,
+    output reg  [VB_ADDR_WIDTH-1:0]      gb_addrb,
+    output reg  [VB_BANDWIDTH-1:0]       gb_dinb,
+    output reg  [VB_BANDWIDTH/8-1:0]     gb_web,
     output reg                           gb_enb,
-    input  wire [GB_BANDWIDTH-1:0]       gb_doutb,
+    input  wire [VB_BANDWIDTH-1:0]       gb_doutb,
     input  wire                          gb_doutb_valid   // OBUF 读数据有效（与 gb_doutb 同拍）
 );
 
@@ -140,15 +140,15 @@ module im2col_unit #(
     reg [4:0] latch_stall_cnt;     // S_READ_LATCH：valid 残留过高时的退出保护
 
     // 锁存的读数据 + 读地址在 128-bit 字内的字节偏移
-    reg [GB_BANDWIDTH-1:0] rd_data_reg;
-    reg [GB_BANDWIDTH-1:0] rd_tail_data_reg;  // 跨读字边界时下一 OBUF 字
+    reg [VB_BANDWIDTH-1:0] rd_data_reg;
+    reg [VB_BANDWIDTH-1:0] rd_tail_data_reg;  // 跨读字边界时下一 OBUF 字
     reg [3:0]              in_byte_in_word_r;
 
     // =========================================================================
     // 地址计算（完全流水线化：所有乘法在 S_INIT 预算，运行时只有加减法）
     // =========================================================================
     localparam C_CHUNK_BYTES = 16;
-    localparam WORD_BYTES    = GB_BANDWIDTH / 8;  // OBUF 物理字宽（lite=16B, chip=32B）
+    localparam WORD_BYTES    = VB_BANDWIDTH / 8;  // OBUF 物理字宽（lite=16B, chip=32B）
     // ELEM_BYTES 运行时值（已锁存）
     wire [ADDR_WIDTH-1:0] elem_bytes_w = {{(ADDR_WIDTH-2){1'b0}}, elem_bytes_r};
     wire [31:0] c_chunk_byte_offset = c_chunk_byte_offset_r;
@@ -169,16 +169,16 @@ module im2col_unit #(
     reg signed [31:0] in_kh_acc_r;   // = kh * w_times_c_r
     reg signed [31:0] in_ow_acc_r;   // = ow * stride_w_c_r
     reg signed [31:0] in_kw_acc_r;   // = kw * in_col_stride_r
-    // 组合：全有符号加法，地址截断到 GB_ADDR_WIDTH
+    // 组合：全有符号加法，地址截断到 VB_ADDR_WIDTH
     wire signed [31:0] in_pixel_byte_addr_s =
         $signed(in_base_r) + $signed(in_oh_acc_r) + $signed(in_kh_acc_r)
         + $signed(in_ow_acc_r) + $signed(in_kw_acc_r) + $signed(c_chunk_byte_offset);
-    wire [GB_ADDR_WIDTH-1:0] in_pixel_byte_addr = in_pixel_byte_addr_s[GB_ADDR_WIDTH-1:0];
+    wire [VB_ADDR_WIDTH-1:0] in_pixel_byte_addr = in_pixel_byte_addr_s[VB_ADDR_WIDTH-1:0];
 
     // 输出地址：同样只加法
     reg [31:0] out_row_offset_r;  // = (oh*OW + ow) * row_stride
     reg [31:0] out_col_offset_r;  // = (kh*kW + kw) * CH_IN
-    wire [GB_ADDR_WIDTH-1:0] out_byte_addr =
+    wire [VB_ADDR_WIDTH-1:0] out_byte_addr =
         dst_addr_r + out_row_offset_r + out_col_offset_r + c_chunk_byte_offset;
 
     // 写使能/数据：按字内偏移放置 CH_IN×ELEM_BYTES 字节
@@ -198,16 +198,16 @@ module im2col_unit #(
     wire [5:0] rd_tail_span_end = {2'b0, in_byte_in_word_r} + {1'b0, write_first_nbyte}
                                 + {1'b0, write_tail_nbyte};
     wire       need_rd_tail = write_need_tail && in_bound && (rd_tail_span_end > WORD_BYTES);
-    wire [GB_ADDR_WIDTH-1:0] write_byte_addr_aligned = out_byte_addr & ~32'd15;
-    wire [GB_ADDR_WIDTH-1:0] in_rd_word_base = in_pixel_byte_addr & ~32'd15;
+    wire [VB_ADDR_WIDTH-1:0] write_byte_addr_aligned = out_byte_addr & ~32'd15;
+    wire [VB_ADDR_WIDTH-1:0] in_rd_word_base = in_pixel_byte_addr & ~32'd15;
     wire                    write_is_tail = (state == S_WRITE_TAIL);
-    reg [GB_BANDWIDTH/8-1:0] write_mask;
-    reg [GB_BANDWIDTH-1:0] write_din_aligned;
+    reg [VB_BANDWIDTH/8-1:0] write_mask;
+    reg [VB_BANDWIDTH-1:0] write_din_aligned;
     // 循环变量用 LOOP_BITS 位，防止综合器 integer(32-bit) 展开时产生越界 part-select
     reg [LOOP_BITS-1:0] write_mask_i, write_byte_pos, rd_byte_idx;
     always_comb begin
-        write_mask = {GB_BANDWIDTH/8{1'b0}};
-        write_din_aligned = {GB_BANDWIDTH{1'b0}};
+        write_mask = {VB_BANDWIDTH/8{1'b0}};
+        write_din_aligned = {VB_BANDWIDTH{1'b0}};
         if (!write_is_tail) begin
             for (write_mask_i = 0; write_mask_i < write_first_nbyte; write_mask_i = write_mask_i + 1'b1) begin
                 write_byte_pos = out_byte_in_word + write_mask_i;

@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 // ============================================================================
@@ -10,8 +10,8 @@
 
 module VPU_im2col_shim #(
     parameter ADDR_WIDTH    = `VPU_DATA_WIDTH,
-    parameter GB_ADDR_WIDTH = `GB_ADDR_WIDTH,
-    parameter GB_BANDWIDTH  = `GB_BANDWIDTH,
+    parameter VPU_ADDR_WIDTH = `VPU_ADDR_WIDTH,
+    parameter VB_BANDWIDTH  = `VB_BANDWIDTH,
     parameter OBUF_ADDR_WIDTH = `VPU_BUF_ADDR_WIDTH,
     parameter BUF_DATA_WIDTH  = `DCIM_BUF_DATA_WIDTH
 )(
@@ -78,15 +78,15 @@ module VPU_im2col_shim #(
     end
 
     // im2col GB 信号
-    wire [GB_ADDR_WIDTH-1:0]     im2col_gb_addrb;
-    wire [GB_BANDWIDTH-1:0]      im2col_gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]    im2col_gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]     im2col_gb_addrb;
+    wire [VB_BANDWIDTH-1:0]      im2col_gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]    im2col_gb_web;
     wire                         im2col_gb_enb;
 
     im2col_unit #(
         .ADDR_WIDTH    (ADDR_WIDTH),
-        .GB_BANDWIDTH  (GB_BANDWIDTH),
-        .GB_ADDR_WIDTH (GB_ADDR_WIDTH),
+        .VB_BANDWIDTH  (VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH (VPU_ADDR_WIDTH),
         .FP_WIDTH      (32)
     ) u_im2col (
         .clk               (clk),

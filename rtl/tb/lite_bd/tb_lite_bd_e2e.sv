@@ -1,4 +1,4 @@
-`timescale 1ps / 1ps
+`timescale 1ns / 1ns
 `include "chip_defines.vh"
 `include "conv_manifest.svh"
 `include "lite_addrmap.svh"
@@ -9,8 +9,8 @@ module tb_lite_bd_e2e;
 
     glbl glbl_inst ();
 
-    localparam int CLK_PERIOD_PS    = 4000;   // 250 MHz AXI
-    localparam int REFCLK_PERIOD_PS = 10000;  // 100 MHz PCIe refclk (for XDMA sys_clk)
+    localparam int CLK_PERIOD_NS    = 4;    // 250 MHz AXI
+    localparam int REFCLK_PERIOD_NS = 10;   // 100 MHz PCIe refclk (for XDMA sys_clk)
     localparam int OBUF_RD_WAIT  = 20;
     localparam int FAIL_LOG_FIRST_N = 10;
     localparam int GOLDEN_DEPTH = 4096;
@@ -93,7 +93,7 @@ module tb_lite_bd_e2e;
         pcie_refclk_p = 1'b0;
         pcie_refclk_n = 1'b1;
         forever begin
-            #(REFCLK_PERIOD_PS/2);
+            #(REFCLK_PERIOD_NS/2);
             pcie_refclk_p = ~pcie_refclk_p;
             pcie_refclk_n = ~pcie_refclk_n;
         end
@@ -102,7 +102,7 @@ module tb_lite_bd_e2e;
     initial begin
         tb_aclk = 1'b0;
         forever begin
-            #(CLK_PERIOD_PS/2);
+            #(CLK_PERIOD_NS/2);
             tb_aclk = ~tb_aclk;
         end
     end

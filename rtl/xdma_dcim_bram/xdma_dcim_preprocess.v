@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "dcim_defs.vh"
 
 // Pack BRAM/XDMA raw tiles into calculate_core WD1=4 tensors.

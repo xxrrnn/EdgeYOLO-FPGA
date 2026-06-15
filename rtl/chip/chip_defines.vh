@@ -37,7 +37,7 @@
 // 3. VPU 参数
 // ============================================================================
 `define VPU_DATA_WIDTH          `CHIP_DATA_WIDTH
-`define VPU_BANDWIDTH           `CHIP_BANDWIDTH
+`define VB_BANDWIDTH           `CHIP_BANDWIDTH
 `define VPU_BYTE_WIDTH          `CHIP_BYTE_WIDTH
 `define VPU_BYTES_PER_WORD      `CHIP_BYTES_PER_WORD
 `define VPU_BYTE_ADDR_SHIFT     `CHIP_BYTE_ADDR_SHIFT
@@ -54,22 +54,22 @@
 `define INTERVAL_NUM            16      // NN LUT 间隔数（已废弃，保留兼容）
 
 // BRAM 列参数
-`define NB_COL                  (`VPU_BANDWIDTH / `VPU_BYTE_WIDTH)     // 16 (lite: 32→16)
+`define NB_COL                  (`VB_BANDWIDTH / `VPU_BYTE_WIDTH)     // 16 (lite: 32→16)
 `define COL_WIDTH               `VPU_BYTE_WIDTH                        // 8
 
 // Global Buffer (GB)
 // lite: GB 已删除，VPU 通过 128-bit OBUF 端口访问 OBUF。
-// 但保留 GB_ADDR_WIDTH/GB_BANDWIDTH 参数（VPU unit 内部仍用 gb_* 信号名）
-// GB_ADDR_WIDTH 扩展到 24，让 unit 可寻址全 16MB OBUF（24-bit 字节地址 = 20-bit 128-bit 字地址）
-`define GB_SIZE_BYTES           16777216  // 16MB（对齐 OBUF 容量）
-`define GB_BANDWIDTH            `VPU_BANDWIDTH
-`define GB_DEPTH                (`GB_SIZE_BYTES / `VPU_BYTES_PER_WORD) // 1048576
-`define GB_WORD_ADDR_WIDTH      20      // lite: 128-bit word, 16MB = 1M words
-`define GB_ADDR_WIDTH           24      // 字节地址位宽（lite: 16MB → 24-bit）
+// VPU unit 内部 buffer 参数命名统一：VB_ 前缀（VPU Buffer）
+// VB_ADDR_WIDTH = VPU_ADDR_WIDTH = 24（字节地址位宽，实际物理 VPU_BUF = 8MB，ADDR_WIDTH=19）
+`define VPU_SIZE_BYTES           16777216  // 24-bit 可寻址空间上限（物理 buf 实为 8MB）
+`define VB_ADDR_WIDTH            `VPU_ADDR_WIDTH  // 字节地址位宽，24-bit
+`define VPU_DEPTH                (`VPU_SIZE_BYTES / `VPU_BYTES_PER_WORD) // 1048576
+`define VPU_WORD_ADDR_WIDTH      20      // lite: 128-bit word 地址位宽
+`define VPU_ADDR_WIDTH           24      // 字节地址位宽（lite: 24-bit）
 
 // Weight Buffer (WB)
 `define WB_SIZE_BYTES           32768   // 32KB
-`define WB_BANDWIDTH            `VPU_BANDWIDTH
+`define WB_BANDWIDTH            `VB_BANDWIDTH
 `define WB_DEPTH                (`WB_SIZE_BYTES / `VPU_BYTES_PER_WORD) // 1024
 `define WB_WORD_ADDR_WIDTH      10
 `define WB_ADDR_WIDTH           15      // 字节地址位宽
@@ -86,11 +86,11 @@
 
 // HBM BRAM
 `define HBM_BRAM_SIZE_BYTES     1048576 // 1MB
-`define HBM_BRAM_BANDWIDTH      `VPU_BANDWIDTH
+`define HBM_BRAM_BANDWIDTH      `VB_BANDWIDTH
 `define HBM_BRAM_DEPTH          (`HBM_BRAM_SIZE_BYTES / `VPU_BYTES_PER_WORD)
 
 // RAM 深度（全局别名）
-`define RAM_DEPTH_GB            `GB_DEPTH
+`define RAM_DEPTH_GB            `VPU_DEPTH
 `define RAM_DEPTH_WB            `WB_DEPTH
 
 // VPU 地址映射

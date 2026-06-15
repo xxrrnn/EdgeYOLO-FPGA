@@ -1,11 +1,11 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 module ad_unit #(
     parameter ADDR_WIDTH =      32,
-    parameter GB_BANDWIDTH =    256,
-    parameter GB_ADDR_WIDTH =   16,
-    parameter FP_CORE_NUM =     256,
+    parameter VB_BANDWIDTH =    `VB_BANDWIDTH,
+    parameter VB_ADDR_WIDTH =   `VB_ADDR_WIDTH,
+    parameter FP_CORE_NUM =     `FP_CORE_NUM,
     parameter FP_WIDTH    =     32
 
 )(
@@ -21,19 +21,19 @@ module ad_unit #(
     input   wire[ADDR_WIDTH - 1:0]   ad_src_w,
     input   wire[ADDR_WIDTH - 1:0]   ad_dst_addr,
 
-    output logic [GB_ADDR_WIDTH-1:0]    gb_addrb, 
-    output logic [GB_BANDWIDTH-1:0]     gb_dinb,  
-    output logic [GB_BANDWIDTH/8-1:0]   gb_web,   
+    output logic [VB_ADDR_WIDTH-1:0]    gb_addrb, 
+    output logic [VB_BANDWIDTH-1:0]     gb_dinb,  
+    output logic [VB_BANDWIDTH/8-1:0]   gb_web,   
     output logic                        gb_enb,    
-    input  wire [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire [VB_BANDWIDTH-1:0]      gb_doutb,
     input  wire                         gb_doutb_valid  // OBUF 读数据有效（与 gb_doutb 同拍）
 );
 
-    localparam  ad_single_compute_blocks      = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH) ;
-    localparam  ad_single_compute_save_blocks = (FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH);
-    localparam  GB_BW_SHIFT = $clog2(GB_BANDWIDTH);
+    localparam  ad_single_compute_blocks      = (FP_CORE_NUM * FP_WIDTH / VB_BANDWIDTH) ;
+    localparam  ad_single_compute_save_blocks = (FP_CORE_NUM * FP_WIDTH / VB_BANDWIDTH);
+    localparam  GB_BW_SHIFT = $clog2(VB_BANDWIDTH);
     localparam  FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
-    localparam  BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+    localparam  BYTE_ADDR_SHIFT = $clog2(VB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
 
     typedef enum logic [5:0] {
@@ -117,8 +117,8 @@ module ad_unit #(
             if (c_state == AD_PRECOMPUTE_3) begin
                 automatic logic [2*ADDR_WIDTH-1:0] total_bits;
                 total_bits = precompute_chw << FP_WIDTH_SHIFT;
-                ad_x_total_blocks_reg <= (total_bits[ADDR_WIDTH-1:0] + GB_BANDWIDTH - 1) >> GB_BW_SHIFT;
-                ad_x_load_done_threshold <= ((total_bits[ADDR_WIDTH-1:0] + GB_BANDWIDTH - 1) >> GB_BW_SHIFT) - ad_single_compute_blocks;
+                ad_x_total_blocks_reg <= (total_bits[ADDR_WIDTH-1:0] + VB_BANDWIDTH - 1) >> GB_BW_SHIFT;
+                ad_x_load_done_threshold <= ((total_bits[ADDR_WIDTH-1:0] + VB_BANDWIDTH - 1) >> GB_BW_SHIFT) - ad_single_compute_blocks;
             end
         end
     end
@@ -178,8 +178,8 @@ module ad_unit #(
                         $display("[%0t] AD_UNIT: latch src0 data=0x%0h (src2_addr_reg=0x%0h)",
                                  $time, gb_doutb, ad_src2_addr_reg);
 `endif
-                        if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
-                            ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                        if (FP_CORE_NUM * FP_WIDTH > VB_BANDWIDTH)
+                            ad_fp_in_reg <= {gb_doutb, ad_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : VB_BANDWIDTH]};
                         else
                             ad_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                     end
@@ -189,8 +189,8 @@ module ad_unit #(
 `ifdef SIMULATION
                         $display("[%0t] AD_UNIT: latch src1 data=0x%0h", $time, gb_doutb);
 `endif
-                        if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
-                            ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                        if (FP_CORE_NUM * FP_WIDTH > VB_BANDWIDTH)
+                            ad_fp_in2_reg <= {gb_doutb, ad_fp_in2_reg[FP_CORE_NUM * FP_WIDTH - 1 : VB_BANDWIDTH]};
                         else
                             ad_fp_in2_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                     end
@@ -233,8 +233,8 @@ module ad_unit #(
         end else if(c_state == AD_SAVE) begin
             gb_addrb = ad_save_addr;
             gb_enb   = 1'b1;
-            gb_web   = {(GB_BANDWIDTH / 8){1'b1}};
-            gb_dinb  = ad_out_reg[ad_save_cnt*GB_BANDWIDTH +: GB_BANDWIDTH];
+            gb_web   = {(VB_BANDWIDTH / 8){1'b1}};
+            gb_dinb  = ad_out_reg[ad_save_cnt*VB_BANDWIDTH +: VB_BANDWIDTH];
         end
     end
 

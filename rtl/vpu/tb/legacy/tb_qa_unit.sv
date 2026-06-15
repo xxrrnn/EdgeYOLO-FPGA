@@ -13,8 +13,8 @@
 module tb_qa_unit;
 
     parameter ADDR_WIDTH    = 32;
-    parameter GB_BANDWIDTH  = 256;
-    parameter GB_ADDR_WIDTH = 16;
+    parameter VB_BANDWIDTH  = 256;
+    parameter VPU_ADDR_WIDTH = 16;
     parameter WB_BANDWIDTH  = 256;
     parameter WB_ADDR_WIDTH = 512;
     parameter FP_CORE_NUM   = 8;
@@ -24,7 +24,7 @@ module tb_qa_unit;
     parameter MAX_CHANNEL_NUM = `MAX_CHANNEL_NUM;
 
     parameter CLK_PERIOD = 10;
-    parameter LANES = GB_BANDWIDTH / FP_WIDTH;
+    parameter LANES = VB_BANDWIDTH / FP_WIDTH;
     parameter BRAM_DEPTH = 4096;
 
     //==========================================================================
@@ -42,11 +42,11 @@ module tb_qa_unit;
     reg  [ADDR_WIDTH-1:0]       qa_scale_addr;
     reg  [ADDR_WIDTH-1:0]       qa_dst_addr;
 
-    wire [GB_ADDR_WIDTH-1:0]    gb_addrb;
-    wire [GB_BANDWIDTH-1:0]     gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]   gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]    gb_addrb;
+    wire [VB_BANDWIDTH-1:0]     gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]   gb_web;
     wire                        gb_enb;
-    wire [GB_BANDWIDTH-1:0]     gb_doutb;
+    wire [VB_BANDWIDTH-1:0]     gb_doutb;
 
     wire [WB_ADDR_WIDTH-1:0]    wb_addrb;
     wire [WB_BANDWIDTH-1:0]     wb_dinb;
@@ -73,7 +73,7 @@ module tb_qa_unit;
     // Global Buffer BRAM (real)
     //==========================================================================
     global_buffer_bram #(
-        .NB_COL(GB_BANDWIDTH/8),
+        .NB_COL(VB_BANDWIDTH/8),
         .COL_WIDTH(8),
         .RAM_DEPTH(BRAM_DEPTH),
         .RAM_PERFORMANCE("LOW_LATENCY"),
@@ -130,8 +130,8 @@ module tb_qa_unit;
     //==========================================================================
     qa_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .WB_BANDWIDTH(WB_BANDWIDTH),
         .WB_ADDR_WIDTH(WB_ADDR_WIDTH),
         .FP_CORE_NUM(FP_CORE_NUM),
@@ -212,8 +212,8 @@ module tb_qa_unit;
         int cycle_count, timeout;
 
         num_elements = num_c * num_h * num_w;
-        num_src_words = (num_elements * FP_WIDTH + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
-        num_dst_int8_words = (num_elements * Q_INT_WIDTH_OUT + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
+        num_src_words = (num_elements * FP_WIDTH + VB_BANDWIDTH - 1) / VB_BANDWIDTH;
+        num_dst_int8_words = (num_elements * Q_INT_WIDTH_OUT + VB_BANDWIDTH - 1) / VB_BANDWIDTH;
         src_word = src_byte_addr >> 5;
         dst_word = dst_byte_addr >> 5;
         test_errors = 0;
@@ -279,7 +279,7 @@ module tb_qa_unit;
             // Bit-exact verification: compare INT8 output vs golden model
             begin
                 int error_count = 0;
-                int int8_per_word = GB_BANDWIDTH / Q_INT_WIDTH_OUT;  // 32
+                int int8_per_word = VB_BANDWIDTH / Q_INT_WIDTH_OUT;  // 32
                 for (int elem = 0; elem < num_elements; elem++) begin
                     automatic int word_idx = elem / int8_per_word;
                     automatic int bit_offset = (elem % int8_per_word) * Q_INT_WIDTH_OUT;

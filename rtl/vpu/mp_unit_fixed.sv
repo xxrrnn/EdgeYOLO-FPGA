@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "chip_defines.vh"
 //==============================================================================
 // mp_unit_fixed - 可配置 MaxPool / Global Average Pool 单元
@@ -18,8 +18,8 @@
 
 module mp_unit_fixed #(
     parameter ADDR_WIDTH    = 32,
-    parameter GB_BANDWIDTH  = 128,
-    parameter GB_ADDR_WIDTH = 32,
+    parameter VB_BANDWIDTH  = `VB_BANDWIDTH,
+    parameter VB_ADDR_WIDTH = `VB_ADDR_WIDTH,
     parameter FP_WIDTH      = 32
 )(
     input  wire                          clk,
@@ -34,19 +34,19 @@ module mp_unit_fixed #(
     input  wire [ADDR_WIDTH-1:0]         mp_src_w,
     input  wire [ADDR_WIDTH-1:0]         mp_cfg,      // [1:0] = MODE
 
-    output logic [GB_ADDR_WIDTH-1:0]     gb_addrb,
-    output logic [GB_BANDWIDTH-1:0]      gb_dinb,
-    output logic [GB_BANDWIDTH/8-1:0]    gb_web,
+    output logic [VB_ADDR_WIDTH-1:0]     gb_addrb,
+    output logic [VB_BANDWIDTH-1:0]      gb_dinb,
+    output logic [VB_BANDWIDTH/8-1:0]    gb_web,
     output logic                         gb_enb,
-    input  wire  [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire  [VB_BANDWIDTH-1:0]      gb_doutb,
     input  wire                          gb_doutb_valid
 );
 
     // =========================================================================
     // 常量
     // =========================================================================
-    localparam LANES           = GB_BANDWIDTH / FP_WIDTH;        // 4
-    localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);       // 4
+    localparam LANES           = VB_BANDWIDTH / FP_WIDTH;        // 4
+    localparam BYTE_ADDR_SHIFT = $clog2(VB_BANDWIDTH / 8);       // 4
     localparam [FP_WIDTH-1:0] FP32_NEG_INF = 32'hFF80_0000;
     localparam FP32_ZERO       = 32'h0000_0000;
 
@@ -139,11 +139,11 @@ module mp_unit_fixed #(
     wire [ADDR_WIDTH-1:0] gap_load_addr = src_base_word + gap_pos_acc + cb_cnt;
     wire [ADDR_WIDTH-1:0] gap_save_addr = dst_base_word + cb_cnt;
 
-    reg  [GB_BANDWIDTH-1:0] max_reg;
+    reg  [VB_BANDWIDTH-1:0] max_reg;
     reg                      first_valid;
 
-    wire [GB_BANDWIDTH-1:0] new_data = in_bounds ? gb_doutb : {LANES{FP32_NEG_INF}};
-    wire [GB_BANDWIDTH-1:0] max_result;
+    wire [VB_BANDWIDTH-1:0] new_data = in_bounds ? gb_doutb : {LANES{FP32_NEG_INF}};
+    wire [VB_BANDWIDTH-1:0] max_result;
 
     genvar gi;
     generate
@@ -165,7 +165,7 @@ module mp_unit_fixed #(
     wire [LANES*FP_WIDTH-1:0] fp_add_result;
     wire [LANES-1:0]          fp_add_valid_out;
 
-    reg  [GB_BANDWIDTH-1:0]   acc_reg;
+    reg  [VB_BANDWIDTH-1:0]   acc_reg;
     reg  [3:0]                 gap_add_wait;  // latency counter
 
     assign fp_add_valid_in = (state == S_LOAD_CMP) && (mode_r == MP_MODE_GAP);
@@ -365,7 +365,7 @@ module mp_unit_fixed #(
                 S_SAVE: begin
                     gb_addrb <= (mode_r == MP_MODE_GAP) ? gap_save_addr : mp_save_addr;
                     gb_dinb  <= (mode_r == MP_MODE_GAP) ? acc_reg : max_reg;
-                    gb_web   <= {(GB_BANDWIDTH/8){1'b1}};
+                    gb_web   <= {(VB_BANDWIDTH/8){1'b1}};
                     gb_enb   <= 1'b1;
                     state    <= S_NEXT_CB;
                 end

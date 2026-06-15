@@ -11,7 +11,8 @@
 #   make sim-smoke       RTL 改完后推荐：小规模 unit+pipeline 冒烟（约十余个用例，远快于 sim-all）
 #   make sim-unit-smoke  仅 unit 冒烟子集
 #   make sim-pipeline-smoke  仅 pipeline 冒烟子集
-#   make sim-unit        跑完全部 unit（含 DCIM extreme 压力）
+#   make sim-unit-tb     PR 合并前门控：全量 unit INT8+INT16 + conv_pipeline（约 1~2 h）
+#   make sim-unit        跑完全部 unit（含 DCIM extreme 压力，约 3 h）
 #   make sim-pipeline    跑完全部 pipeline
 #   make sim-all         sim-unit + sim-pipeline
 #   make sim-results     扫描 sim/run_*/sim.log 汇总 PASS/FAIL
@@ -126,9 +127,22 @@ BATCH_SUITE_concat_smoke    := concat_2src_c64_c64_hw8x8
 BATCH_SUITE_conv_pipe_smoke := pipe_conv1_c16_to16 pipe_conv3_s2_c32_to64
 BATCH_SUITE_mini_network_smoke := mini_2conv_c16 mini_3conv_residual_c32
 
+# PR 门控（sim-unit-tb）：全量 unit INT8+INT16 + conv_pipeline，跳过 dcim_extreme / mini_network
+# 目标：≤2 h，覆盖所有正式路径的数值准确性；extreme / mini 延至 sim-unit / sim-all
+BATCH_SUITE_dcim_tb      := $(BATCH_SUITE_dcim_all)       # INT8+INT16，共 8 case
+BATCH_SUITE_qa_tb        := $(BATCH_SUITE_qa_all)         # qa_c16_signed / qa_c64_clip / qa_c128_dense + INT16
+BATCH_SUITE_dqa_tb       := $(BATCH_SUITE_dqa_all)        # relu/nrelu 全系 + accum16 INT8+INT16
+BATCH_SUITE_im2col_tb    := $(BATCH_SUITE_im2col_all)     # 1×1/3×3/6×6 全覆盖
+BATCH_SUITE_mp_tb        := $(BATCH_SUITE_mp_all)         # SPPF / ResNet stem / GAP
+BATCH_SUITE_us_tb        := $(BATCH_SUITE_us_all)         # 2 case
+BATCH_SUITE_add_tb       := $(BATCH_SUITE_add_all)        # residual 3 case
+BATCH_SUITE_concat_tb    := $(BATCH_SUITE_concat_all)     # 2src / 4src
+BATCH_SUITE_cdma_tb      := $(BATCH_SUITE_cdma_memtest_all)  # roundtrip + large
+BATCH_SUITE_conv_pipe_tb := $(BATCH_SUITE_conv_pipe_all)  # 含 tilepass（INT8+INT16）
+
 .PHONY: export compile sim sim-export run fsdb verdi data clean clean-compile help
 .PHONY: check-export sim-batch _sim_batch_run data-batch _data_batch_run
-.PHONY: sim-unit sim-pipeline sim-all sim-results sim-ps sim-watch sim-done
+.PHONY: sim-unit sim-unit-tb sim-pipeline sim-all sim-results sim-ps sim-watch sim-done
 .PHONY: sim-unit-smoke sim-pipeline-smoke sim-smoke
 .PHONY: list-cases list-suites
 
@@ -170,7 +184,35 @@ check-export:
 # 回归：unit / pipeline / all
 # ==============================================================================
 
-# sim-unit：各硬件 unit 独立数值验证
+# sim-unit-tb：PR 合并前门控（全量 unit INT8+INT16 + conv_pipeline，跳过 dcim_extreme/mini_network）
+# 覆盖：DCIM INT8/INT16 全 8 case、QA/DQA QUANT=all、im2col 全 4 case、
+#        MP(SPPF/stem/GAP)/US/ADD/concat 全量、cdma_memtest 全量、
+#        conv_pipeline INT8+INT16（im2col→CDMA→DCIM→DQA→QA 完整链路）
+# 排除：dcim_extreme（压力测试，归 sim-unit）、mini_network（多层链路，归 sim-pipeline）
+# 时长预估：约 1~2 h（backdoor 模式，单机 VCS）
+sim-unit-tb: check-export
+	@echo "========== [unit-tb] DCIM INT8+INT16（全 8 case）=========="
+	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_tb STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] QA  fp32→int8/int16 =========="
+	$(MAKE) sim-batch MODULE_CASE=qa BATCH_SUITE=qa_tb QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] DQA accum→fp32（relu/nrelu/accum16，INT8+INT16）=========="
+	$(MAKE) sim-batch MODULE_CASE=dqa BATCH_SUITE=dqa_tb QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] im2col（1×1/3×3/6×6，全 4 case）=========="
+	$(MAKE) sim-batch MODULE_CASE=im2col BATCH_SUITE=im2col_tb QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] MP / US / ADD 全量 =========="
+	$(MAKE) sim-batch MODULE_CASE=mp  BATCH_SUITE=mp_tb  QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	$(MAKE) sim-batch MODULE_CASE=us  BATCH_SUITE=us_tb  QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	$(MAKE) sim-batch MODULE_CASE=add BATCH_SUITE=add_tb QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] concat_by_cdma（2src/4src 全量）=========="
+	$(MAKE) sim-batch MODULE_CASE=concat_by_cdma BATCH_SUITE=concat_tb QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] cdma_memtest（OBUF↔IBUF 全量，含 large）=========="
+	$(MAKE) sim-batch MODULE_CASE=cdma_memtest BATCH_SUITE=cdma_tb QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "========== [unit-tb] conv_pipeline（im2col→CDMA→DCIM→DQA→QA，INT8+INT16）=========="
+	$(MAKE) sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_tb QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
+	@echo "=== sim-unit-tb DONE — make sim-results 查看汇总 ==="
+	@echo "=== 如需 extreme 压力 → make sim-unit；如需多层链路 → make sim-pipeline ==="
+
+# sim-unit：各硬件 unit 独立数值验证（含 dcim_extreme 压力）
 sim-unit: check-export
 	@echo "========== [unit] DCIM INT8+INT16 =========="
 	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all STOP_ON_FAIL=$(STOP_ON_FAIL)
@@ -342,10 +384,15 @@ list-cases:
 
 list-suites:
 	@echo "冒烟（改 RTL 后）：make sim-smoke | sim-unit-smoke | sim-pipeline-smoke"
-	@echo "全量：make sim-unit | sim-pipeline | sim-all"
+	@echo "PR 门控：        make sim-unit-tb  （全量 unit + conv_pipeline，约 1~2 h）"
+	@echo "全量：           make sim-unit | sim-pipeline | sim-all"
 	@echo ""
 	@echo "[smoke] dcim_smoke qa_smoke dqa_smoke im2col_smoke mp_smoke us_smoke add_smoke concat_smoke"
 	@echo "        conv_pipe_smoke mini_network_smoke"
+	@echo ""
+	@echo "[tb]    sim-unit-tb 已含 dcim_all + qa_all(QUANT=all) + dqa_all(QUANT=all) +"
+	@echo "                    im2col_all + mp_all + us_all + add_all + concat_all +"
+	@echo "                    cdma_memtest_all + conv_pipe_all(QUANT=all)"
 	@echo ""
 	@echo "[unit]  MODULE_CASE=dcim_matmul  BATCH_SUITE=dcim_all | dcim_extreme"
 	@echo "        MODULE_CASE=qa           BATCH_SUITE=qa_all    [QUANT=all]"
@@ -407,8 +454,9 @@ clean-compile:
 help:
 	@echo "工作目录: rtl/tb/lite_bd/module_tb"
 	@echo ""
-	@echo "冒烟：make sim-smoke | sim-unit-smoke | sim-pipeline-smoke"
-	@echo "全量：make sim-unit | sim-pipeline | sim-all | sim-results"
+	@echo "冒烟（改 RTL 后）：make sim-smoke | sim-unit-smoke | sim-pipeline-smoke"
+	@echo "PR 门控（合并前）：make sim-unit-tb  ← 全量 unit + conv_pipeline，约 1~2 h"
+	@echo "全量：             make sim-unit | sim-pipeline | sim-all | sim-results"
 	@echo ""
 	@echo "前提：make export（BD 变更）  make compile（RTL 变更）"
 	@echo "单用例：make sim MODULE_CASE=... MODULE_VARIANT=..."

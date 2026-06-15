@@ -35,7 +35,7 @@ chip-v3 架构中，VPU 算子（im2col/dqa/qa/mp/us/ad）与 DCIM 使用**完�
 `golden_module_tb.py` 中的 `OBUF_SRC0/FEAT0/IM2COL/DQA/SHORT` 等常量是**软件测试惯例**，不是硬件约束：
 
 - `im2col_unit` / `mp_unit` / `us_unit` / `ad_unit` RTL 接受任意 `src_addr`/`dst_addr`（32-bit，无固定偏移假设）
-- `GB_ADDR_WIDTH=24` 给出 16MB 字节寻址空间，完全覆盖 8MB VPU_BUF
+- `VPU_ADDR_WIDTH=24` 给出 16MB 字节寻址空间，完全覆盖 8MB VPU_BUF
 
 ---
 

@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 
 // ============================================================================
 // act_nibble_converter — 激活数据 INT8/INT16 → INT4（nibble）拆分器

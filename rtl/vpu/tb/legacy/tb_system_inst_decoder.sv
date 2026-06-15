@@ -4,16 +4,16 @@ module tb_system_inst_decoder;
 
     localparam CLK_PERIOD    = 4.0;
     localparam ADDR_WIDTH    = 32;
-    localparam GB_ADDR_WIDTH = 22;
+    localparam VPU_ADDR_WIDTH = 22;
     localparam WB_ADDR_WIDTH = 20;
-    localparam GB_BW         = 256;
+    localparam VPU_BW         = 256;
     localparam FP_W          = 32;
     localparam FP_CORE_NUM   = 8;
     localparam NB_COL        = 32;
     localparam COL_WIDTH     = 8;
     localparam RAM_DEPTH_GB  = 4096;
     localparam RAM_DEPTH_WB  = 4096;
-    localparam LANES         = GB_BW / FP_W;
+    localparam LANES         = VPU_BW / FP_W;
 
     localparam INST_BRAM_DEPTH = 1024;
     localparam INST_ADDR_WIDTH = 10;
@@ -43,7 +43,7 @@ module tb_system_inst_decoder;
     wire [31:0] vpu_addr_break, vpu_addr_s, vpu_addr_t;
 
     // GB port A signals (for TB writes)
-    reg  [GB_ADDR_WIDTH-1:0] gb_addra;
+    reg  [VPU_ADDR_WIDTH-1:0] gb_addra;
     reg  [NB_COL*COL_WIDTH-1:0] gb_dina;
     reg  [NB_COL-1:0] gb_wea;
     reg  gb_ena;
@@ -109,9 +109,9 @@ module tb_system_inst_decoder;
     // Global_VPU instance
     Global_VPU #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .WB_ADDR_WIDTH(WB_ADDR_WIDTH),
-        .BANDWIDTH(GB_BW),
+        .BANDWIDTH(VPU_BW),
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_TRAN_NUM(8),
         .FP_WIDTH(FP_W),
@@ -154,7 +154,7 @@ module tb_system_inst_decoder;
     );
 
     // Helper: write one 256-bit word to GB via port A
-    task write_gb_word(input [GB_ADDR_WIDTH-1:0] addr, input [GB_BW-1:0] data);
+    task write_gb_word(input [VPU_ADDR_WIDTH-1:0] addr, input [VPU_BW-1:0] data);
         begin
             @(posedge clk);
             gb_addra <= addr;
@@ -168,7 +168,7 @@ module tb_system_inst_decoder;
     endtask
 
     // Helper: read one 256-bit word from GB via port A
-    task read_gb_word(input [GB_ADDR_WIDTH-1:0] addr, output [GB_BW-1:0] data);
+    task read_gb_word(input [VPU_ADDR_WIDTH-1:0] addr, output [VPU_BW-1:0] data);
         begin
             @(posedge clk);
             gb_addra <= addr;
@@ -224,7 +224,7 @@ module tb_system_inst_decoder;
 
     // Test variables
     integer i, j, errors, total_inst_words;
-    reg [GB_BW-1:0] read_data;
+    reg [VPU_BW-1:0] read_data;
     reg [FP_W-1:0] actual_fp, expected_fp;
     real a_val, b_val, sum_val;
 
@@ -254,7 +254,7 @@ module tb_system_inst_decoder;
 
         // Write SRC1 data to GB word 0
         begin
-            reg [GB_BW-1:0] src1_data, src2_data;
+            reg [VPU_BW-1:0] src1_data, src2_data;
             src1_data = '0;
             src2_data = '0;
             for (i = 0; i < LANES; i++) begin
@@ -328,7 +328,7 @@ module tb_system_inst_decoder;
 
         // Write known data to GB (simple pattern)
         begin
-            reg [GB_BW-1:0] wd;
+            reg [VPU_BW-1:0] wd;
             integer h, w, c_blk;
             real fval;
             for (h = 0; h < 10; h++) begin
@@ -381,7 +381,7 @@ module tb_system_inst_decoder;
             integer h, w, c_idx, kh, kw, ih, iw;
             integer mp_errors, mp_checked;
             reg [FP_W-1:0] cur_max, val, actual_v, expected_v;
-            reg [GB_BW-1:0] out_word;
+            reg [VPU_BW-1:0] out_word;
             mp_errors = 0;
             mp_checked = 0;
             for (h = 0; h < 10; h++) begin
@@ -394,7 +394,7 @@ module tb_system_inst_decoder;
                                 ih = h + kh - 2;
                                 iw = w + kw - 2;
                                 if (ih >= 0 && ih < 10 && iw >= 0 && iw < 10) begin
-                                    reg [GB_BW-1:0] rd_w;
+                                    reg [VPU_BW-1:0] rd_w;
                                     read_gb_word((ih*10 + iw)*16 + c_idx/8, rd_w);
                                     val = rd_w[(c_idx%8)*FP_W +: FP_W];
                                     // FP32 max
@@ -434,7 +434,7 @@ module tb_system_inst_decoder;
         $display("\n--- TEST 3: US unit (Nearest-neighbor upsample x2) ---");
 
         begin
-            reg [GB_BW-1:0] wd;
+            reg [VPU_BW-1:0] wd;
             integer h, w;
             real fval;
             // Write 5x5x1_block = 25 words starting at word 100
@@ -486,7 +486,7 @@ module tb_system_inst_decoder;
         begin
             integer oh, ow, ih_gold, iw_gold;
             integer us_errors, us_checked;
-            reg [GB_BW-1:0] out_word, src_word;
+            reg [VPU_BW-1:0] out_word, src_word;
             reg [FP_W-1:0] actual_v, expected_v;
             us_errors = 0;
             us_checked = 0;

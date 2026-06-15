@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "chip_defines.vh"
 `include "chip_defines.vh"
 
@@ -167,8 +167,8 @@ module tb_im2col_dcim_joint;
     // =========================================================================
     im2col_unit #(
         .ADDR_WIDTH    (32),
-        .GB_BANDWIDTH  (BUF_DATA_WIDTH),
-        .GB_ADDR_WIDTH (24),
+        .VB_BANDWIDTH  (BUF_DATA_WIDTH),
+        .VPU_ADDR_WIDTH (24),
         .FP_WIDTH      (32)
     ) u_im2col (
         .clk               (clk),

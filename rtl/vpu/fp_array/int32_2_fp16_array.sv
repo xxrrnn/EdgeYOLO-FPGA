@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 
 // int32_2_fp16_array.sv  （带 clip 到 fp16 范围的版本）
 module int32_2_fp16_array #(

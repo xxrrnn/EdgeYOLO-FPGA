@@ -8,8 +8,8 @@
 #   4. VPU control infrastructure (RTL modules)
 #
 # Parameters from vpu_defines.vh are available via parse_vpu_defines.tcl:
-#   $::VPU_BANDWIDTH  = 256
-#   $::GB_SIZE_BYTES  = 524288
+#   $::VB_BANDWIDTH  = 256
+#   $::VPU_SIZE_BYTES  = 524288
 #   $::WB_SIZE_BYTES  = 32768
 # ==============================================================================
 
@@ -117,7 +117,7 @@ set_property -dict [list \
 
 # ==============================================================================
 # 3. VPU Buffer Controllers (GB/WB)
-#    DATA_WIDTH matches VPU_BANDWIDTH (256 bits) from vpu_defines.vh
+#    DATA_WIDTH matches VB_BANDWIDTH (256 bits) from vpu_defines.vh
 # ==============================================================================
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 vpu_gb_ctrl

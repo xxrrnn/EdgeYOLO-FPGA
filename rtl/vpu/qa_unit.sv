@@ -1,15 +1,15 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 module qa_unit #(
     parameter ADDR_WIDTH =      32,
-    parameter GB_BANDWIDTH =    256,
-    parameter GB_ADDR_WIDTH =   16,
-    parameter WB_BANDWIDTH =    256,
+    parameter VB_BANDWIDTH =    `VB_BANDWIDTH,
+    parameter VB_ADDR_WIDTH =   `VB_ADDR_WIDTH,
+    parameter WB_BANDWIDTH =    `VB_BANDWIDTH,
     parameter WB_ADDR_WIDTH =   15,   // 字节地址位宽
 
-    parameter FP_CORE_NUM =     8,
-    parameter FP_TRAN_NUM =     8,
+    parameter FP_CORE_NUM =     `FP_CORE_NUM,
+    parameter FP_TRAN_NUM =     `FP_TRAN_NUM,
     parameter FP_WIDTH    =     32,
     parameter Q_INT_WIDTH_OUT =   8,
 
@@ -37,11 +37,11 @@ module qa_unit #(
     input   wire [FP_CORE_NUM*FP_WIDTH-1:0]     fp_res,
     input   wire                                fp_res_tvalid,
 
-    output logic [GB_ADDR_WIDTH-1:0]    gb_addrb,
-    output logic [GB_BANDWIDTH-1:0]     gb_dinb,
-    output logic [GB_BANDWIDTH/8-1:0]   gb_web,
+    output logic [VB_ADDR_WIDTH-1:0]    gb_addrb,
+    output logic [VB_BANDWIDTH-1:0]     gb_dinb,
+    output logic [VB_BANDWIDTH/8-1:0]   gb_web,
     output logic                        gb_enb,
-    input  wire [GB_BANDWIDTH-1:0]      gb_doutb,
+    input  wire [VB_BANDWIDTH-1:0]      gb_doutb,
     input  wire                         gb_doutb_valid,  // OBUF 读数据有效（与 gb_doutb 同拍）
 
     output reg [WB_ADDR_WIDTH-1:0]      wb_addrb,
@@ -52,23 +52,23 @@ module qa_unit #(
 );
 
     localparam QA_FP_BITS        = FP_CORE_NUM * FP_WIDTH;
-    localparam FP32_PER_READ     = GB_BANDWIDTH / FP_WIDTH;
+    localparam FP32_PER_READ     = VB_BANDWIDTH / FP_WIDTH;
     localparam SAVE_DATA_BITS8   = FP_CORE_NUM * 8;
     localparam SAVE_DATA_BITS16  = FP_CORE_NUM * 16;
-    localparam SAVES_PER_WORD8   = GB_BANDWIDTH / SAVE_DATA_BITS8;
-    localparam SAVES_PER_WORD16  = GB_BANDWIDTH / SAVE_DATA_BITS16;
+    localparam SAVES_PER_WORD8   = VB_BANDWIDTH / SAVE_DATA_BITS8;
+    localparam SAVES_PER_WORD16  = VB_BANDWIDTH / SAVE_DATA_BITS16;
     localparam MAX_SAVES_PER_WORD = (SAVES_PER_WORD8 > SAVES_PER_WORD16) ? SAVES_PER_WORD8 : SAVES_PER_WORD16;
     localparam SLOT_IDX_BITS     = (MAX_SAVES_PER_WORD <= 1) ? 1 : $clog2(MAX_SAVES_PER_WORD);
     localparam FP_WIDTH_SHIFT    = $clog2(FP_WIDTH);
-    localparam GB_BW_SHIFT       = $clog2(GB_BANDWIDTH);
-    localparam BYTE_ADDR_SHIFT   = $clog2(GB_BANDWIDTH / 8);
+    localparam GB_BW_SHIFT       = $clog2(VB_BANDWIDTH);
+    localparam BYTE_ADDR_SHIFT   = $clog2(VB_BANDWIDTH / 8);
 
     // 对齐约束：一次 OBUF 读 = FP_CORE_NUM 个 FP32；INT8/INT16 运行时选择打包密度。
     initial begin
-        if (GB_BANDWIDTH % SAVE_DATA_BITS8 != 0)
-            $error("qa_unit: GB_BANDWIDTH must be multiple of FP_CORE_NUM*8");
-        if (GB_BANDWIDTH % SAVE_DATA_BITS16 != 0)
-            $error("qa_unit: GB_BANDWIDTH must be multiple of FP_CORE_NUM*16");
+        if (VB_BANDWIDTH % SAVE_DATA_BITS8 != 0)
+            $error("qa_unit: VB_BANDWIDTH must be multiple of FP_CORE_NUM*8");
+        if (VB_BANDWIDTH % SAVE_DATA_BITS16 != 0)
+            $error("qa_unit: VB_BANDWIDTH must be multiple of FP_CORE_NUM*16");
         if (FP32_PER_READ != FP_CORE_NUM)
             $error("qa_unit: one OBUF read must carry FP_CORE_NUM FP32 values");
         if (Q_INT_WIDTH_OUT != 8)
@@ -100,7 +100,7 @@ module qa_unit #(
     reg [FP_CORE_NUM * FP_WIDTH - 1 : 0]                qa_fp_in_reg;
     reg [FP_CORE_NUM * FP_WIDTH - 1 : 0]                qa_out_q_reg;
     reg [FP_TRAN_NUM*16-1:0]                            qa_quant_pack_data_reg;
-    reg [GB_BANDWIDTH-1:0]                              qa_word_buf;
+    reg [VB_BANDWIDTH-1:0]                              qa_word_buf;
 
     reg [ADDR_WIDTH - 1 : 0]                            qa_src_addr_reg;
     reg [ADDR_WIDTH - 1 : 0]                            qa_dst_addr_reg;
@@ -121,7 +121,7 @@ module qa_unit #(
     wire                                                pack_word_done;
     wire                                                qa_x_tran_done;
     wire                                                qa_done;
-    wire [GB_ADDR_WIDTH-1:0]                            qa_obuf_write_addr;
+    wire [VB_ADDR_WIDTH-1:0]                            qa_obuf_write_addr;
     wire [SLOT_IDX_BITS-1:0]                            saves_per_word_active;
     wire [6:0]                                          save_data_bits_active;
 
@@ -197,8 +197,8 @@ module qa_unit #(
                 QA_WAIT_X: begin
                     if (gb_doutb_valid) begin
                         qa_rd_wait_cnt <= '0;
-                        if (FP_CORE_NUM * FP_WIDTH > GB_BANDWIDTH)
-                            qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : GB_BANDWIDTH]};
+                        if (FP_CORE_NUM * FP_WIDTH > VB_BANDWIDTH)
+                            qa_fp_in_reg <= {gb_doutb, qa_fp_in_reg[FP_CORE_NUM * FP_WIDTH - 1 : VB_BANDWIDTH]};
                         else
                             qa_fp_in_reg <= gb_doutb[FP_CORE_NUM * FP_WIDTH - 1 : 0];
                     end else if (qa_rd_wait_cnt == QA_OBUF_READ_TIMEOUT) begin
@@ -238,7 +238,7 @@ module qa_unit #(
             QA_SAVE, QA_SAVE_HOLD: begin
                 gb_addrb = qa_obuf_write_addr;
                 gb_enb   = 1'b1;
-                gb_web   = {GB_BANDWIDTH/8{1'b1}};
+                gb_web   = {VB_BANDWIDTH/8{1'b1}};
                 gb_dinb  = qa_word_buf;
             end
             default: ;
@@ -342,9 +342,9 @@ module qa_unit #(
             end else if (c_state == QA_LOAD_X) begin
                 $display("[%0t][qa] LOAD_X addr=0x%0h iter=%0d/%0d",
                          $time, qa_x_load_addr, qa_iter_cnt, qa_total_iters_reg);
-            end else if (c_state == QA_WAIT_X) begin
-                $display("[%0t][qa] WAIT_X addr=0x%0h valid=%0b iter=%0d",
-                         $time, qa_x_load_addr, gb_doutb_valid, qa_iter_cnt);
+            end else if (c_state == QA_WAIT_X && gb_doutb_valid) begin
+                $display("[%0t][qa] WAIT_X_VALID addr=0x%0h iter=%0d",
+                         $time, qa_x_load_addr, qa_iter_cnt);
             end
         end
     end

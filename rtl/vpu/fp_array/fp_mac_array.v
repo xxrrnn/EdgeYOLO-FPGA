@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 
 module fp_mac_array #( 
     parameter integer FP_CORE_NUM = 4,

@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "chip_defines.vh"
 
 module nn_lut_unit#(
@@ -8,11 +8,11 @@ module nn_lut_unit#(
     parameter WEIGHT_WIDTH = 32,
     parameter BIAS_WIDTH = 32,
     parameter FP_WIDTH = 32,
-    parameter FP_CORE_NUM = 32,
-    parameter WB_BANDWIDTH = 256,
+    parameter FP_CORE_NUM = `FP_CORE_NUM,
+    parameter WB_BANDWIDTH = `VB_BANDWIDTH,
     parameter RAM_DEPTH_WB = 1024,
-    parameter GB_BANDWIDTH = 256,
-    parameter GB_ADDR_WIDTH = 256
+    parameter VB_BANDWIDTH = `VB_BANDWIDTH,
+    parameter VB_ADDR_WIDTH = `VB_ADDR_WIDTH
 
 )(
     input wire clk,
@@ -42,11 +42,11 @@ module nn_lut_unit#(
 
     /* mem part*/
     //  gb
-    output reg [GB_ADDR_WIDTH-1:0]      gb_addrb,
-    output reg [GB_BANDWIDTH-1:0]       gb_dinb, 
-    output reg [GB_BANDWIDTH/8-1:0]     gb_web,  
+    output reg [VB_ADDR_WIDTH-1:0]      gb_addrb,
+    output reg [VB_BANDWIDTH-1:0]       gb_dinb, 
+    output reg [VB_BANDWIDTH/8-1:0]     gb_web,  
     output reg                          gb_enb,    
-    input wire [GB_BANDWIDTH-1:0]       gb_doutb,
+    input wire [VB_BANDWIDTH-1:0]       gb_doutb,
     input wire                          gb_doutb_valid,  // OBUF 读数据有效（与 gb_doutb 同拍）
 
     output reg [$clog2(RAM_DEPTH_WB)-1:0]   wb_addrb,
@@ -69,13 +69,13 @@ module nn_lut_unit#(
     localparam GB_DATALENGTH_R = FP_CORE_NUM*FP_WIDTH;                                //R->read  W;write
     localparam GB_DATALENGTH_W = FP_CORE_NUM*FP_WIDTH;                               //total bit length write back to globalbuffer
 //counters for read/write globalbuffer
-    localparam integer R_BEATS=(GB_DATALENGTH_R+GB_BANDWIDTH-1)/GB_BANDWIDTH;
-    localparam integer W_BEATS=(GB_DATALENGTH_W+GB_BANDWIDTH-1)/GB_BANDWIDTH;
+    localparam integer R_BEATS=(GB_DATALENGTH_R+VB_BANDWIDTH-1)/VB_BANDWIDTH;
+    localparam integer W_BEATS=(GB_DATALENGTH_W+VB_BANDWIDTH-1)/VB_BANDWIDTH;
 
     localparam WB_ADDR_WIDTH = $clog2(RAM_DEPTH_WB);
     localparam FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
-    localparam GB_BW_SHIFT = $clog2(GB_BANDWIDTH);
-    localparam BYTE_ADDR_SHIFT = $clog2(GB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+    localparam GB_BW_SHIFT = $clog2(VB_BANDWIDTH);
+    localparam BYTE_ADDR_SHIFT = $clog2(VB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
 
     // Precomputed: total X beats (registered, not combinational)
     reg [ADDR_WIDTH - 1 : 0] x_beats_reg;
@@ -105,8 +105,8 @@ module nn_lut_unit#(
 
     assign nn_unit_ready = c_state == IDLE;
     // addr generate part
-    wire [GB_ADDR_WIDTH-1:0]                 nn_src_addr_block;
-    wire [GB_ADDR_WIDTH-1:0]                 nn_src_save_addr_block;
+    wire [VB_ADDR_WIDTH-1:0]                 nn_src_addr_block;
+    wire [VB_ADDR_WIDTH-1:0]                 nn_src_save_addr_block;
     assign nn_src_addr_block = nn_src_addr >> BYTE_ADDR_SHIFT;   
     assign nn_src_save_addr_block = nn_dst_addr >> BYTE_ADDR_SHIFT;   
 
@@ -302,14 +302,14 @@ endgenerate
 
     always_comb begin
         gb_enb = 1'b0;
-        gb_dinb = {GB_BANDWIDTH{1'b0}};
+        gb_dinb = {VB_BANDWIDTH{1'b0}};
         gb_web = 0;
         case (c_state)
             //---------------------------------
             IDLE: begin
                 gb_enb = 1'b0;
                 gb_addrb = 0;
-                gb_dinb = {GB_BANDWIDTH{1'b0}};
+                gb_dinb = {VB_BANDWIDTH{1'b0}};
                 gb_web = 0;
             end
 
@@ -327,15 +327,15 @@ endgenerate
             //---------------------------------
             NN_SAVE: begin
                 if (!save_done) begin
-                    gb_web = {(GB_BANDWIDTH / 8){1'b1}};
+                    gb_web = {(VB_BANDWIDTH / 8){1'b1}};
                     gb_enb = 1'b1;
-                    gb_dinb = silu_out_total[nn_w_cnt*GB_BANDWIDTH +: GB_BANDWIDTH];          
+                    gb_dinb = silu_out_total[nn_w_cnt*VB_BANDWIDTH +: VB_BANDWIDTH];          
                     gb_addrb = nn_src_save_addr_block + nn_w_cnt + (x_loads << $clog2(W_BEATS));
                 end else begin
                     gb_web = 1'b0;
                     gb_enb = 1'b0;
-                    gb_dinb = {GB_BANDWIDTH{1'b0}};
-                    gb_addrb = {GB_ADDR_WIDTH{1'b0}};
+                    gb_dinb = {VB_BANDWIDTH{1'b0}};
+                    gb_addrb = {VB_ADDR_WIDTH{1'b0}};
                 end
             end
 
@@ -343,8 +343,8 @@ endgenerate
             default: begin
                 gb_enb = 0;
                 gb_web = 0;
-                gb_dinb = {GB_BANDWIDTH{1'b0}};
-                gb_addrb = {GB_ADDR_WIDTH{1'b0}};
+                gb_dinb = {VB_BANDWIDTH{1'b0}};
+                gb_addrb = {VB_ADDR_WIDTH{1'b0}};
             end
         endcase
     end
@@ -358,11 +358,11 @@ endgenerate
             case(c_state)
             NN_WAIT_X: begin
                     if (gb_doutb_valid) begin
-                        if (GB_DATALENGTH_R > GB_BANDWIDTH) begin
-                            if ((nn_r_cnt + 1) * GB_BANDWIDTH <= GB_DATALENGTH_R) begin
-                                x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_BANDWIDTH]};
+                        if (GB_DATALENGTH_R > VB_BANDWIDTH) begin
+                            if ((nn_r_cnt + 1) * VB_BANDWIDTH <= GB_DATALENGTH_R) begin
+                                x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:VB_BANDWIDTH]};
                             end else begin
-                                x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_DATALENGTH_R-(R_BEATS-1)*GB_BANDWIDTH]};
+                                x_regs <= {gb_doutb, x_regs[GB_DATALENGTH_R-1:GB_DATALENGTH_R-(R_BEATS-1)*VB_BANDWIDTH]};
                             end
                         end else begin
                             x_regs <= gb_doutb;

@@ -48,6 +48,14 @@ make sim-smoke       # 约 14 个用例：unit 冒烟 + pipeline 冒烟（远快
 make sim-results
 ```
 
+PR 合并前门控（推荐）：
+
+```bash
+make compile
+make sim-unit-tb     # 全量 unit INT8+INT16 + conv_pipeline（约 1~2 h）
+make sim-results
+```
+
 全量回归：
 
 ```bash
@@ -71,6 +79,86 @@ make list-cases MODULE_CASE=dcim_matmul
 make list-cases MODULE_CASE=qa
 make list-cases MODULE_CASE=dqa
 make list-cases MODULE_CASE=im2col
+```
+
+---
+
+## PR 合并前门控测试（sim-unit-tb）
+
+`sim-unit-tb` 是为新代码合入设计的门控测试 target，覆盖所有正式功能路径、双精度（INT8+INT16），时间控制在约 1~2 h 以内（backdoor 模式）。
+
+### 适用场景
+
+| 触发条件 | 推荐操作 |
+|----------|----------|
+| 修改了任意 RTL（VPU 子模块 / DCIM / CDMA / BD 接口） | `make compile && make sim-unit-tb` |
+| 修改了 `golden_module_tb.py`（golden 生成逻辑） | `make sim-unit-tb`（无需重编） |
+| 修改了 `chip_defines.vh` 或 BD 拓扑 | `make export && make compile && make sim-unit-tb` |
+| PR 提交 / code review 合并前 | `make sim-unit-tb && make sim-results` |
+
+### 执行方法
+
+首次或 BD 结构变更后（完整流程）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+make export          # BD/IP/地址映射变更后必须
+make compile         # 编译共享 simv
+make sim-unit-tb     # PR 门控回归
+make sim-results     # 汇总 PASS/FAIL
+```
+
+仅改 RTL / golden 后（日常流程）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+make compile         # RTL 改动后重编 simv
+make sim-unit-tb
+make sim-results
+```
+
+带超时保护（CI / 后台运行）：
+
+```bash
+cd rtl/tb/lite_bd/module_tb
+timeout 7200 make sim-unit-tb STOP_ON_FAIL=0 LOG=1
+make sim-results
+```
+
+### 覆盖内容
+
+| 阶段 | 模块 | Suite | QUANT | 用例数 | 说明 |
+|------|------|-------|-------|--------|------|
+| 1 | `dcim_matmul` | `dcim_all` | INT8+INT16（case 决定） | 8 | 1×1/3×3/6×6、4 Tile×64×64 |
+| 2 | `qa` | `qa_all` | all（int8+int16） | 3×2=6 | FP32→INT8/INT16 量化 |
+| 3 | `dqa` | `dqa_all` | all（int8+int16） | 10×2=20 | relu/nrelu/accum16 全系 |
+| 4 | `im2col` | `im2col_all` | int8 | 4 | 1×1/3×3/6×6 全 4 case |
+| 5 | `mp` | `mp_all` | int8 | 3 | SPPF / ResNet stem / GAP |
+| 6 | `us` | `us_all` | int8 | 2 | Upsample 2× |
+| 7 | `add` | `add_all` | int8 | 3 | Residual add |
+| 8 | `concat_by_cdma` | `concat_all` | int8 | 3 | 2src/4src CDMA 拼接 |
+| 9 | `cdma_memtest` | `cdma_memtest_all` | int8 | 4 | OBUF↔IBUF roundtrip + large |
+| 10 | `conv_pipeline` | `conv_pipe_all` | all（int8+int16） | 3×2=6 | im2col→CDMA→DCIM→DQA→QA 完整链路 |
+
+**不含以下内容**（归入 `sim-unit` / `sim-pipeline` / `sim-all`）：
+
+- `dcim_extreme`（高 acc_depth / 大通道压力，约额外 1 h）
+- `mini_network`（多层 conv + residual，约额外 1~2 h）
+- `PRELOAD_MODE=axi`（AXI 总线 smoke，单独触发）
+
+### 通过标准
+
+`make sim-results` 输出的所有条目为 `PASS`，无 `FAIL`。
+
+失败时排查入口：
+
+```bash
+# 查看具体失败 case 的日志
+less sim/run_<MODULE_CASE>_<VARIANT>_<mode>/sim.log
+
+# 波形调试
+make fsdb MODULE_CASE=<case> MODULE_VARIANT=<variant>
+make verdi MODULE_CASE=<case> MODULE_VARIANT=<variant>
 ```
 
 ---
@@ -782,6 +870,71 @@ head -4 sim/suite_dcim_matmul/run_dcim_tiny_1x1/weight_tile0.hex
 | FP32（`is_fp32=1`） | 容差 `1e-2 × (|exp| + 1.0)` | ⚠️ **ReLU 截断边界（expected ≈ 0）处容差退化为 0.01 绝对值**；RTL 若在 0 附近有 0.01 以内的数值偏差不会被报告 MISMATCH。这是已知局限，对功能正确性判断影响有限 |
 | 地址路由 | `preload.txt` 物理地址 → tile_ibuf / tile_obuf / vpu_buf | Golden 与 RTL 使用同一套地址常量（`TILE_IBUF_PHY_BASES` 等），属隐式约定而非 assert 防护；但已通过 e2e pipeline 验证 |
 | `INST_BRAM` 加载 | `$readmemh` backdoor 直写内存 | 绕过 AXI 接口，不验证 host AXI 写路径（由 `PRELOAD_MODE=axi` 单独覆盖） |
+
+---
+
+## 测试充分性评估（sim-unit-tb 视角）
+
+本节回答"目前的 `sim-unit-tb` 测试够不够"的问题，分三个维度分析：**已充分覆盖**、**已知缺口**和**上板前必须补的测试**。
+
+### 已充分覆盖的功能路径
+
+| 功能路径 | 覆盖状态 | 说明 |
+|----------|---------|------|
+| DCIM INT8 矩阵乘（1×1/3×3/6×6，全 acc_depth 范围） | ✅ 充分 | `dcim_all` 5 case，共 1272 word 全量 bit-exact |
+| DCIM INT16（tilepass、全 4 Tile） | ✅ 充分 | `int16_tiny_1x1` / `int16_conv3` / `int16_conv1` 3 case |
+| im2col（stride 1/2，cin 3/32/128/512，kernel 1×1/3×3/6×6） | ✅ 充分 | 4 case，逐 word 验证 |
+| QA（FP32→INT8 量化，c16/c64/c128） | ✅ 充分 | `qa_all` 3 case |
+| QA INT16（FP32→INT16） | ✅ 充分（行为模型） | `qa_int16_c32_signed`，真实 IP 通过 `FP32_2_INT16_BEHAVIORAL=0` 抽查 |
+| DQA ReLU（accum INT8→FP32，c16/c32/c64/c128/c256） | ✅ 充分 | `dqa_c16~c256` 5 case |
+| DQA 无 ReLU（head 输出层，c24） | ✅ 充分 | `dqa_nrelu` 3 case（in64/in128/in256） |
+| DQA accum16（INT16 累加→FP32） | ✅ 充分 | `dqa_accum16_c32` / `dqa_accum16_c64` INT8+INT16 |
+| MaxPool SPPF 5×5 / ResNet stem 3×3 / GAP sum | ✅ 充分 | `mp_all` 3 case |
+| Upsample 2× | ✅ 充分 | `us_all` 2 case（c64/c128，10×10→20×20 / 20×20→40×40） |
+| Residual Add（FP32 element-wise） | ✅ 充分 | `add_all` 3 case（c16/c32/c64） |
+| CDMA concat（2src/4src） | ✅ 充分 | `concat_all` 3 case（含 4src SPPF） |
+| CDMA memtest（OBUF↔IBUF 延迟，含 large 跨 bank） | ✅ 充分 | `cdma_memtest_all` 4 case |
+| 单层卷积完整链路（im2col→CDMA→DCIM→DQA→QA） | ✅ 充分 | `conv_pipe_all` 3 case INT8+INT16 |
+
+### 已知缺口（`sim-unit-tb` 不覆盖）
+
+| 缺口 | 影响等级 | 何时补 |
+|------|---------|--------|
+| **DCIM extreme**（c512×512、高 acc_depth 压力） | 中 | `make sim-unit`（dcim_extreme 4 case） |
+| **mini_network 多层链路**（residual，INT8+INT16） | 中 | `make sim-pipeline` |
+| **实际推理分辨率（160×160）**（从未仿真过） | **高** | 上板验证（仿真太慢） |
+| **INT16 conv_pipeline**（`native_int16=False`，当前 skip） | 中 | golden 代码待补全，再跑 `conv_pipe_all QUANT=int16` |
+| **DCIM 网络真实尺寸 smoke**（model.3/5/7，3 case） | 低 | `make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_network` |
+| **tile 数 = 3**（奇数 tile，未测试） | 低 | 需专用 case，当前不急 |
+| **非对称 padding** | 低 | 网络内无该层，暂不影响 |
+| **AXI preload 地址映射 smoke** | 低 | `PRELOAD_MODE=axi make sim-unit-tb ...` |
+| **FP32→INT16 真实 IP 一致性**（非行为模型） | 低 | `FP32_2_INT16_BEHAVIORAL=0` 单独抽查 QA INT16 |
+
+### 上板前必须补的测试
+
+按优先级排序：
+
+1. **`make sim-unit`**（在 `sim-unit-tb` 基础上补跑 `dcim_extreme`）
+   - 覆盖：c512×512 tilepass、高 acc_depth（INT8/INT16）
+   - 命令：`timeout 2h make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_extreme STOP_ON_FAIL=0 LOG=1`
+
+2. **`make sim-pipeline`**（mini_network 多层链路）
+   - 覆盖：2层/3层+residual，INT8+INT16
+   - 命令：`timeout 4h make rebuild-suite MODULE_CASE=mini_network BATCH_SUITE=mini_network_all QUANT=all STOP_ON_FAIL=0 LOG=1`
+
+3. **`pipe_conv1_c512_to64_tilepass` QUANT=int16 重跑**
+   - 当前状态：INT16 路径 SKIP（golden `native_int16=False`）
+   - 建议：补全 golden 后加入 `conv_pipe_tb`
+
+4. **AXI smoke 确认**（一次性验证，不需要每次跑）
+   - 命令：`PRELOAD_MODE=axi timeout 1h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_smoke STOP_ON_FAIL=0 LOG=1`
+
+5. **综合/实现后板上验证**（60 层完整推理）
+   - 仿真不能替代，必须上板：`tests/chip/` 流程
+
+### 评估结论
+
+`sim-unit-tb` 对于 PR 合并前的 RTL 功能验证是**充分的**，覆盖了所有算子在正常参数范围内的数值准确性（INT8+INT16），以及单层完整卷积链路。对上板前整体验证而言，它是**必要但不充分**的——剩余缺口主要集中在极端压力、多层链路和实际推理分辨率三个维度，后者必须依赖综合实现后的板上测试。
 
 ---
 

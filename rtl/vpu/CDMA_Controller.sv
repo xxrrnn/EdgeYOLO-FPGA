@@ -1,4 +1,4 @@
-`timescale 1 ns / 1 ps
+`timescale 1ns / 1ns
 
 `include "chip_defines.vh"
 `ifndef CDMA_COOLDOWN_CYCLES

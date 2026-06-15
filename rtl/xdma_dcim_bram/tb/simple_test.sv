@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "../dcim_defs.vh"
 
 module simple_test;

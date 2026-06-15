@@ -47,14 +47,14 @@ module tb_ad_unit;
     // 参数定义
     //==========================================================================
     localparam ADDR_WIDTH    = 32;
-    localparam GB_BANDWIDTH  = 256;      // 256 bits = 8 FP32
-    localparam GB_ADDR_WIDTH = 16;
+    localparam VB_BANDWIDTH  = 256;      // 256 bits = 8 FP32
+    localparam VPU_ADDR_WIDTH = 16;
     localparam FP_CORE_NUM   = 8;        // 每次处理 8 个 FP32
     localparam FP_WIDTH      = 32;
     
     localparam BRAM_DEPTH    = 4096;     // BRAM 深度 (words)
-    localparam LANES         = GB_BANDWIDTH / FP_WIDTH;  // 8
-    localparam NB_COL        = GB_BANDWIDTH / 8;         // 32 bytes
+    localparam LANES         = VB_BANDWIDTH / FP_WIDTH;  // 8
+    localparam NB_COL        = VB_BANDWIDTH / 8;         // 32 bytes
     localparam COL_WIDTH     = 8;
     
     localparam CLK_PERIOD    = 4.0;      // 250 MHz
@@ -81,11 +81,11 @@ module tb_ad_unit;
     reg  [ADDR_WIDTH-1:0]       ad_src_w;
     reg  [ADDR_WIDTH-1:0]       ad_dst_addr;
     
-    wire [GB_ADDR_WIDTH-1:0]    gb_addrb;
-    wire [GB_BANDWIDTH-1:0]     gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]   gb_web;
+    wire [VPU_ADDR_WIDTH-1:0]    gb_addrb;
+    wire [VB_BANDWIDTH-1:0]     gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]   gb_web;
     wire                        gb_enb;
-    wire [GB_BANDWIDTH-1:0]     gb_doutb;
+    wire [VB_BANDWIDTH-1:0]     gb_doutb;
     
     //==========================================================================
     // 真实 BRAM 实例化 (global_buffer_bram)
@@ -99,8 +99,8 @@ module tb_ad_unit;
     ) u_bram (
         .clka(clk),
         // Port A - 未使用，接地
-        .addra({GB_ADDR_WIDTH{1'b0}}),
-        .dina({GB_BANDWIDTH{1'b0}}),
+        .addra({VPU_ADDR_WIDTH{1'b0}}),
+        .dina({VB_BANDWIDTH{1'b0}}),
         .wea({NB_COL{1'b0}}),
         .ena(1'b0),
         .rsta(1'b0),
@@ -121,8 +121,8 @@ module tb_ad_unit;
     //==========================================================================
     ad_unit #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BANDWIDTH),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VB_BANDWIDTH),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .FP_CORE_NUM(FP_CORE_NUM),
         .FP_WIDTH(FP_WIDTH)
     ) dut (
@@ -210,7 +210,7 @@ module tb_ad_unit;
             // Extract written data from ad_out_reg (the source of gb_dinb)
             // Use ad_save_cnt to index into ad_out_reg
             for (int i = 0; i < LANES; i++) begin
-                automatic int bit_offset = dut.ad_save_cnt * GB_BANDWIDTH + i * FP_WIDTH;
+                automatic int bit_offset = dut.ad_save_cnt * VB_BANDWIDTH + i * FP_WIDTH;
                 actual_results[i] = fp32_to_real(dut.ad_out_reg[bit_offset +: FP_WIDTH]);
             end
             
@@ -388,7 +388,7 @@ module tb_ad_unit;
         input int num_words
     );
         for (int i = 0; i < num_words; i++) begin
-            u_bram.BRAM[start_word + i] = {GB_BANDWIDTH{1'b0}};
+            u_bram.BRAM[start_word + i] = {VB_BANDWIDTH{1'b0}};
         end
     endtask
     
@@ -416,7 +416,7 @@ module tb_ad_unit;
         
         // Calculate expected loop count
         // ad_x_total_blocks = (num_elements * 32 + 255) / 256
-        expected_loops = (num_elements * FP_WIDTH + GB_BANDWIDTH - 1) / GB_BANDWIDTH;
+        expected_loops = (num_elements * FP_WIDTH + VB_BANDWIDTH - 1) / VB_BANDWIDTH;
         
         $display("\n" + "="*70);
         $display("Test: %s", test_name);
@@ -494,17 +494,17 @@ module tb_ad_unit;
         $display("Configuration:");
         $display("  FP_CORE_NUM   = %0d", FP_CORE_NUM);
         $display("  FP_WIDTH      = %0d bits", FP_WIDTH);
-        $display("  GB_BANDWIDTH  = %0d bits", GB_BANDWIDTH);
+        $display("  VB_BANDWIDTH  = %0d bits", VB_BANDWIDTH);
         $display("  LANES         = %0d FP32/word", LANES);
         $display("  BRAM_DEPTH    = %0d words", BRAM_DEPTH);
         $display("");
         $display("Key design parameters:");
-        $display("  ad_single_compute_blocks = FP_CORE_NUM * FP_WIDTH / GB_BANDWIDTH");
+        $display("  ad_single_compute_blocks = FP_CORE_NUM * FP_WIDTH / VB_BANDWIDTH");
         $display("                           = %0d * %0d / %0d = %0d", 
-            FP_CORE_NUM, FP_WIDTH, GB_BANDWIDTH, 
-            (FP_CORE_NUM * FP_WIDTH) / GB_BANDWIDTH);
+            FP_CORE_NUM, FP_WIDTH, VB_BANDWIDTH, 
+            (FP_CORE_NUM * FP_WIDTH) / VB_BANDWIDTH);
         $display("  This means each loop processes %0d BRAM word (%0d FP32)",
-            (FP_CORE_NUM * FP_WIDTH) / GB_BANDWIDTH, FP_CORE_NUM);
+            (FP_CORE_NUM * FP_WIDTH) / VB_BANDWIDTH, FP_CORE_NUM);
         $display("======================================================================\n");
         
         // 初始化
@@ -530,7 +530,7 @@ module tb_ad_unit;
         //======================================================================
         // 
         // FP_CORE_NUM = 8 means processing 8 FP32 at a time
-        // GB_BANDWIDTH = 256 bits = 8 FP32
+        // VB_BANDWIDTH = 256 bits = 8 FP32
         // Therefore ad_single_compute_blocks = 8*32/256 = 1
         // 
         // Test case design:

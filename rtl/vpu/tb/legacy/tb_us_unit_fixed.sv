@@ -9,11 +9,11 @@
 
 module tb_us_unit_fixed;
 
-    localparam GB_BW     = 256;
+    localparam VPU_BW     = 256;
     localparam FP_W      = 32;
-    localparam LANES     = GB_BW / FP_W;      // 8
+    localparam LANES     = VPU_BW / FP_W;      // 8
     localparam ADDR_WIDTH = 32;
-    localparam GB_ADDR_WIDTH = 32;
+    localparam VPU_ADDR_WIDTH = 32;
     localparam CLK_PERIOD = 4.0; // 250 MHz
 
     // =========================================================================
@@ -30,17 +30,17 @@ module tb_us_unit_fixed;
     reg  [ADDR_WIDTH-1:0]    us_src_c;
     reg  [ADDR_WIDTH-1:0]    us_dst_addr;
 
-    wire [GB_ADDR_WIDTH-1:0] gb_addrb;
-    wire [GB_BW-1:0]         gb_dinb;
-    wire [GB_BW/8-1:0]       gb_web;
+    wire [VPU_ADDR_WIDTH-1:0] gb_addrb;
+    wire [VPU_BW-1:0]         gb_dinb;
+    wire [VPU_BW/8-1:0]       gb_web;
     wire                     gb_enb;
-    reg  [GB_BW-1:0]         gb_doutb;
+    reg  [VPU_BW-1:0]         gb_doutb;
 
     // =========================================================================
     // BRAM 模型 (足够大以容纳最大测试: 40×40×8 = 12800 words 输出)
     // =========================================================================
     localparam BRAM_DEPTH = 16384;
-    reg [GB_BW-1:0] bram [0:BRAM_DEPTH-1];
+    reg [VPU_BW-1:0] bram [0:BRAM_DEPTH-1];
 
     always @(posedge clk) begin
         if (gb_enb && gb_web == '0) begin
@@ -56,8 +56,8 @@ module tb_us_unit_fixed;
     // =========================================================================
     us_unit_fixed #(
         .ADDR_WIDTH(ADDR_WIDTH),
-        .GB_BANDWIDTH(GB_BW),
-        .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+        .VB_BANDWIDTH(VPU_BW),
+        .VPU_ADDR_WIDTH(VPU_ADDR_WIDTH),
         .FP_WIDTH(FP_W)
     ) dut (
         .clk(clk),

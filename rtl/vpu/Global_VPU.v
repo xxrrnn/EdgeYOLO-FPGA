@@ -1,12 +1,12 @@
-`timescale 1ns/1ps
+`timescale 1ns/1ns
 `include "chip_defines.vh"
 
 module Global_VPU #(
     parameter ADDR_WIDTH = `VPU_DATA_WIDTH,
     
-    parameter GB_ADDR_WIDTH = `GB_ADDR_WIDTH,
+    parameter VB_ADDR_WIDTH = `VB_ADDR_WIDTH,
     parameter C_INT_WIDTH_IN = `C_INT_WIDTH_IN,
-    parameter BANDWIDTH = `VPU_BANDWIDTH,
+    parameter BANDWIDTH = `VB_BANDWIDTH,
 
     parameter FP_CORE_NUM = `FP_CORE_NUM,
     parameter FP_TRAN_NUM = `FP_TRAN_NUM,
@@ -69,7 +69,7 @@ module Global_VPU #(
   localparam WEIGHT_WIDTH = FP_WIDTH;
   localparam BIAS_WIDTH = FP_WIDTH;
 
-  localparam GB_BANDWIDTH = BANDWIDTH;
+  localparam VB_BANDWIDTH = BANDWIDTH;
   localparam WB_BANDWIDTH = BANDWIDTH;
   // -------------------------------
   // Local parameters
@@ -113,6 +113,10 @@ module Global_VPU #(
     reg [ADDR_WIDTH-1:0]            unit_running_reg;
     reg [3:0]                       vpu_flags_reg;
     reg                             vpu_running;
+
+    // 前向声明：unit ready 信号在 vpu_running always 块（第 120 行之后）中使用
+    wire mp_unit_ready_fwd, us_unit_ready_fwd, qa_unit_ready_fwd;
+    wire dqa_unit_ready_fwd, ad_unit_ready_fwd, im2col_unit_ready_fwd;
 
   // start 延迟一拍，切断 inst_decoder → VPU 组合路径
   // INST_Decoder 时序保证：参数在 start 前一拍稳定并锁入 *_reg
@@ -164,7 +168,10 @@ module Global_VPU #(
       end
       if (start_d1) begin
         vpu_running      <= 1'b1;
-      end else if (vpu_running && config_ready) begin
+      end else if (vpu_running && mp_unit_ready_fwd && us_unit_ready_fwd && qa_unit_ready_fwd
+                               && dqa_unit_ready_fwd && ad_unit_ready_fwd && im2col_unit_ready_fwd) begin
+        // 子单元全部完成即可退出 vpu_running；
+        // 不能用 config_ready（它依赖 ready_delay_sr，SR 仅在 start/start_d1 时清零）
         vpu_running <= 1'b0;
       end
     end
@@ -188,21 +195,22 @@ module Global_VPU #(
   wire                  active_int16_mode  = active_vpu_flags[VPU_FLAG_INT16];
 
 
-    wire [GB_ADDR_WIDTH-1:0]    gb_addrb, dqa_gb_addrb, nn_gb_addrb, qa_gb_addrb, mp_gb_addrb, us_gb_addrb, ad_gb_addrb, im2col_gb_addrb;
-    wire [GB_BANDWIDTH-1:0]     gb_dinb, dqa_gb_dinb, nn_gb_dinb, qa_gb_dinb, mp_gb_dinb, us_gb_dinb, ad_gb_dinb, im2col_gb_dinb;
-    wire [GB_BANDWIDTH/8-1:0]   gb_web, dqa_gb_web, nn_gb_web, qa_gb_web, mp_gb_web, us_gb_web, ad_gb_web, im2col_gb_web;
+    wire [VB_ADDR_WIDTH-1:0]    gb_addrb, dqa_gb_addrb, nn_gb_addrb, qa_gb_addrb, mp_gb_addrb, us_gb_addrb, ad_gb_addrb, im2col_gb_addrb;
+    wire [VB_BANDWIDTH-1:0]     gb_dinb, dqa_gb_dinb, nn_gb_dinb, qa_gb_dinb, mp_gb_dinb, us_gb_dinb, ad_gb_dinb, im2col_gb_dinb;
+    wire [VB_BANDWIDTH/8-1:0]   gb_web, dqa_gb_web, nn_gb_web, qa_gb_web, mp_gb_web, us_gb_web, ad_gb_web, im2col_gb_web;
     wire                        gb_enb, dqa_gb_enb, nn_gb_enb, qa_gb_enb, mp_gb_enb, us_gb_enb, ad_gb_enb, im2col_gb_enb;
-    wire [GB_BANDWIDTH-1:0]     gb_doutb;
+    wire [VB_BANDWIDTH-1:0]     gb_doutb;
     
     wire [WB_ADDR_WIDTH-1:0]    wb_addrb, dqa_wb_addrb, nn_wb_addrb, qa_wb_addrb;
     wire [WB_BANDWIDTH-1:0]     wb_dinb, dqa_wb_dinb, nn_wb_dinb, qa_wb_dinb;
     wire [WB_BANDWIDTH/8-1:0]   wb_web, dqa_wb_web, nn_wb_web, qa_wb_web;
     wire                        wb_enb, dqa_wb_enb, nn_wb_enb, qa_wb_enb;
+
+    // 前向声明（已移至模块顶部，此处删除）
     wire [WB_BANDWIDTH-1:0]     wb_doutb;
 
     wire  dqa_fp_array_tvalid, nn_fp_array_tvalid, qa_fp_array_tvalid;
     wire mp_unit_start, us_unit_start, nn_unit_start, qa_unit_start, dqa_unit_start, ad_unit_start, im2col_unit_start;
-    wire mp_unit_ready, us_unit_ready, nn_unit_ready, qa_unit_ready, dqa_unit_ready, ad_unit_ready, im2col_unit_ready;
 
     wire [FP_CORE_NUM*FP_WIDTH-1:0] fp_res;
     wire fp_res_tvalid;
@@ -224,8 +232,8 @@ module Global_VPU #(
     // mp_unit_fixed: 可配置 MaxPool/GAP (MODE 由 mp_cfg = addr_break[1:0] 选择)
     mp_unit_fixed #(
       .ADDR_WIDTH         (ADDR_WIDTH),
-      .GB_BANDWIDTH       (GB_BANDWIDTH),
-      .GB_ADDR_WIDTH      (GB_ADDR_WIDTH),
+      .VB_BANDWIDTH       (VB_BANDWIDTH),
+      .VB_ADDR_WIDTH      (VB_ADDR_WIDTH),
       .FP_WIDTH           (FP_WIDTH)
   ) i_mp_unit (
       .clk                (clk),
@@ -252,8 +260,8 @@ module Global_VPU #(
     // us_unit_fixed: Nearest Neighbor Upsample ×2
     us_unit_fixed #(
       .ADDR_WIDTH         (ADDR_WIDTH),
-      .GB_BANDWIDTH       (GB_BANDWIDTH),
-      .GB_ADDR_WIDTH      (GB_ADDR_WIDTH),
+      .VB_BANDWIDTH       (VB_BANDWIDTH),
+      .VB_ADDR_WIDTH      (VB_ADDR_WIDTH),
       .FP_WIDTH           (FP_WIDTH)
   ) i_us_unit (
       .clk                (clk),
@@ -286,8 +294,8 @@ module Global_VPU #(
 //     .FP_WIDTH(FP_WIDTH),
 //     .WB_BANDWIDTH(WB_BANDWIDTH),
 //     .RAM_DEPTH_WB(RAM_DEPTH_WB),
-//     .GB_BANDWIDTH(GB_BANDWIDTH),
-//     .GB_ADDR_WIDTH(GB_ADDR_WIDTH)
+//     .VB_BANDWIDTH(VB_BANDWIDTH),
+//     .VB_ADDR_WIDTH(VB_ADDR_WIDTH)
 // )nn_lut_inst(
 //     .clk(clk),
 //     .rst_n(rst_n_local),
@@ -324,9 +332,9 @@ module Global_VPU #(
 // nn_lut_unit 输出信号 tie-off（避免 undriven wire warning）
 assign nn_unit_ready      = 1'b1;
 assign nn_unit_start      = 1'b0;
-assign nn_gb_addrb        = {GB_ADDR_WIDTH{1'b0}};
-assign nn_gb_dinb         = {GB_BANDWIDTH{1'b0}};
-assign nn_gb_web          = {GB_BANDWIDTH/8{1'b0}};
+assign nn_gb_addrb        = {VB_ADDR_WIDTH{1'b0}};
+assign nn_gb_dinb         = {VB_BANDWIDTH{1'b0}};
+assign nn_gb_web          = {VB_BANDWIDTH/8{1'b0}};
 assign nn_gb_enb          = 1'b0;
 assign nn_wb_addrb        = {WB_ADDR_WIDTH{1'b0}};
 assign nn_wb_dinb         = {WB_BANDWIDTH{1'b0}};
@@ -343,8 +351,8 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
   qa_unit #(
       // --- Parameter Overrides ---
       .ADDR_WIDTH(ADDR_WIDTH),
-      .GB_BANDWIDTH(GB_BANDWIDTH),
-      .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+      .VB_BANDWIDTH(VB_BANDWIDTH),
+      .VB_ADDR_WIDTH(VB_ADDR_WIDTH),
       .WB_BANDWIDTH(WB_BANDWIDTH),
       .WB_ADDR_WIDTH(WB_ADDR_WIDTH),
       .FP_CORE_NUM(FP_CORE_NUM),
@@ -396,8 +404,8 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
 
     ad_unit #(
       .ADDR_WIDTH(ADDR_WIDTH),
-      .GB_BANDWIDTH(GB_BANDWIDTH),
-      .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+      .VB_BANDWIDTH(VB_BANDWIDTH),
+      .VB_ADDR_WIDTH(VB_ADDR_WIDTH),
       .FP_CORE_NUM(FP_CORE_NUM),
       .FP_WIDTH(FP_WIDTH)
     ) ad_unit_inst (
@@ -425,8 +433,8 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
     // lite 新增: im2col_unit - 硬件 im2col 引擎
     im2col_unit #(
       .ADDR_WIDTH(ADDR_WIDTH),
-      .GB_BANDWIDTH(GB_BANDWIDTH),
-      .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+      .VB_BANDWIDTH(VB_BANDWIDTH),
+      .VB_ADDR_WIDTH(VB_ADDR_WIDTH),
       .FP_WIDTH(FP_WIDTH)
     ) im2col_inst (
         .clk(clk),
@@ -464,8 +472,8 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
 
     dqa_relu_unit #(
       .ADDR_WIDTH(ADDR_WIDTH),
-      .GB_BANDWIDTH(GB_BANDWIDTH),
-      .GB_ADDR_WIDTH(GB_ADDR_WIDTH),
+      .VB_BANDWIDTH(VB_BANDWIDTH),
+      .VB_ADDR_WIDTH(VB_ADDR_WIDTH),
       .C_INT_WIDTH_IN(C_INT_WIDTH_IN),
       .FP_CORE_NUM(FP_CORE_NUM),
       .FP_TRAN_NUM(FP_TRAN_NUM),
@@ -514,8 +522,20 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
 
     wire units_all_ready = (1'b1/*nn_unit_ready*/ & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready);
 
+    // 连接前向声明的 _fwd 别名到真实信号
+    assign mp_unit_ready_fwd    = mp_unit_ready;
+    assign us_unit_ready_fwd    = us_unit_ready;
+    assign qa_unit_ready_fwd    = qa_unit_ready;
+    assign dqa_unit_ready_fwd   = dqa_unit_ready;
+    assign ad_unit_ready_fwd    = ad_unit_ready;
+    assign im2col_unit_ready_fwd = im2col_unit_ready;
+
     // config_ready 延迟：VPU 子单元 ready 后需等 URAM write pipeline flush
     // 才允许下一条指令（drain CDMA）读取刚写入的数据。
+    //
+    // 重要：执行期间（vpu_running / start / start_d1）必须强制清零 SR。
+    // 否则 SR 里残留的旧"全 ready"状态会在子单元刚启动后的头 READY_DELAY 拍内
+    // 使 config_ready 短暂为高，导致 INST_Decoder 的 S_WAIT_VPU_DONE 提前通过。
     localparam READY_DELAY = `VPU_READY_DELAY_CYCLES;
     reg [READY_DELAY-1:0] ready_delay_sr;
     wire units_ready_delayed = ready_delay_sr[READY_DELAY-1];
@@ -523,11 +543,14 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             ready_delay_sr <= {READY_DELAY{1'b0}};
+        else if (start || start_d1)
+            ready_delay_sr <= {READY_DELAY{1'b0}};  // 仅在新指令发射时清零，防止旧 ready 泄漏
         else
             ready_delay_sr <= {ready_delay_sr[READY_DELAY-2:0], units_all_ready};
     end
 
-    assign config_ready = ~start & ~start_d1 & units_ready_delayed;
+    // config_ready: vpu_running 退出后再等 READY_DELAY 拍（URAM write pipeline flush）
+    assign config_ready = ~start & ~start_d1 & ~vpu_running & units_ready_delayed;
     // unit_active 使用 _reg（start_d1 拍已稳定）
     assign dqa_unit_start = (unit_active == UNIT_DQA) ? start_d1 : 1'b0;
     assign qa_unit_start  = (unit_active == UNIT_QA ) ? start_d1 : 1'b0;
@@ -546,7 +569,7 @@ assign gb_addrb = (unit_active == UNIT_DQA) ? dqa_gb_addrb :
                   (unit_active == UNIT_US) ? us_gb_addrb : 
                   (unit_active == UNIT_AD) ? ad_gb_addrb : 
                   (unit_active == UNIT_IM2COL) ? im2col_gb_addrb :
-                                                  {GB_ADDR_WIDTH{1'b0}};
+                                                  {VB_ADDR_WIDTH{1'b0}};
 
 // GB Data Input (Output from Unit to BRAM write port)
 assign gb_dinb = (unit_active == UNIT_DQA) ? dqa_gb_dinb : 
@@ -556,7 +579,7 @@ assign gb_dinb = (unit_active == UNIT_DQA) ? dqa_gb_dinb :
                   (unit_active == UNIT_US) ? us_gb_dinb  : 
                   (unit_active == UNIT_AD) ? ad_gb_dinb  : 
                   (unit_active == UNIT_IM2COL) ? im2col_gb_dinb :
-                                                  {GB_BANDWIDTH{1'b0}};
+                                                  {VB_BANDWIDTH{1'b0}};
 
 // GB Write Enable (Output from Unit to BRAM)
 assign gb_web  = (unit_active == UNIT_DQA) ? dqa_gb_web  : 
@@ -566,7 +589,7 @@ assign gb_web  = (unit_active == UNIT_DQA) ? dqa_gb_web  :
                   (unit_active == UNIT_US) ? us_gb_web  : 
                   (unit_active == UNIT_AD) ? ad_gb_web  : 
                   (unit_active == UNIT_IM2COL) ? im2col_gb_web :
-                                                  {GB_BANDWIDTH/8{1'b0}};
+                                                  {VB_BANDWIDTH/8{1'b0}};
 
 // GB Enable (Output from Unit to BRAM)
 assign gb_enb  = (unit_active == UNIT_DQA) ? dqa_gb_enb  : 
@@ -657,7 +680,7 @@ assign fp_c_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_c_tdata  :
   // --------------------------------------------------
   // chip-v3: VPU 内部 gb_* 信号经 1 级 pipeline 输出到 vpu_buf（8MB, ADDR_WIDTH=19）
   //   - 加 pipeline 是为了打断 addr 计算 + MUX → URAM 的组合路径，消除 setup violation
-  //   - gb_addrb 是 GB_ADDR_WIDTH (24) 位字节地址 → obuf_addr 是 VPU_BUF_ADDR_WIDTH (19) 位 128-bit 字地址
+  //   - gb_addrb 是 VB_ADDR_WIDTH (24) 位字节地址 → obuf_addr 是 VPU_BUF_ADDR_WIDTH (19) 位 128-bit 字地址
   //   - gb_dinb/gb_doutb 128-bit 直通 obuf_din/obuf_dout
   //   - gb_web (NB_COL=16 bit byte enable) 直通 obuf_we
   //   - gb_enb 直通 obuf_en
@@ -670,7 +693,7 @@ assign fp_c_tdata   = (unit_active == UNIT_DQA) ? dqa_fp_c_tdata  :
 
   always @(posedge clk) begin
       obuf_addr_r <= (unit_active == UNIT_IM2COL) ?
-                     gb_addrb[GB_ADDR_WIDTH-1 : 4] :  // im2col: 字节地址 >> 4
+                     gb_addrb[VB_ADDR_WIDTH-1 : 4] :  // im2col: 字节地址 >> 4
                      gb_addrb[`VPU_BUF_ADDR_WIDTH-1 : 0];  // 其他 unit: 已是 word 地址
       obuf_en_r   <= gb_enb;
       obuf_we_r   <= gb_web;

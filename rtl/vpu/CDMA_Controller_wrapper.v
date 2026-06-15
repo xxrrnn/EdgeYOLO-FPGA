@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 //////////////////////////////////////////////////////////////////////////////////
 // CDMA_Controller_wrapper - Verilog wrapper for SystemVerilog CDMA_Controller
 //

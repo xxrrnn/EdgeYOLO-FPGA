@@ -1,4 +1,4 @@
-`timescale 1ns / 1ps
+`timescale 1ns / 1ns
 `include "dcim_defs.vh"
 
 // Verilog wrapper used only for Vivado IP Integrator module reference.
