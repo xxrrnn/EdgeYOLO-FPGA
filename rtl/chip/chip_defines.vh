@@ -104,6 +104,12 @@
 // CDMA cooldown
 `define CDMA_COOLDOWN_CYCLES    2000
 
+// VPU ready 延迟：VPU 子单元 assert ready 后，config_ready 需延迟若干拍再
+// 允许下一条指令（通常是 drain CDMA）执行。确保最后一笔写操作经过 1 级 pipeline
+// + URAM 写入后，数据对 Port B（CDMA/XDMA）可见。
+// 保守值：1(pipeline) + 1(URAM write) + 10(margin) = 12
+`define VPU_READY_DELAY_CYCLES  12
+
 // 辅助宏
 `define BYTE_TO_WORD_ADDR(byte_addr)  ((byte_addr) >> `VPU_BYTE_ADDR_SHIFT)
 `define WORD_TO_BYTE_ADDR(word_addr)  ((word_addr) << `VPU_BYTE_ADDR_SHIFT)
