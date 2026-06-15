@@ -1,4 +1,10 @@
 `timescale 1 ns / 1 ps
+
+`include "chip_defines.vh"
+`ifndef CDMA_COOLDOWN_CYCLES
+`define CDMA_COOLDOWN_CYCLES 2000
+`endif
+
 	module CDMA_Controller # (
         parameter int CDMA_BASE_ADDR = 0,
         parameter int C_CDMA_AXILM_ADDR_WIDTH = 32,
