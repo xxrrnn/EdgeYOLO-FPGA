@@ -512,7 +512,22 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
         .wb_doutb(wb_doutb)
     );
 
-    assign config_ready = ~start & ~start_d1 & (1'b1/*nn_unit_ready*/ & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready);
+    wire units_all_ready = (1'b1/*nn_unit_ready*/ & us_unit_ready & mp_unit_ready & qa_unit_ready & dqa_unit_ready& ad_unit_ready & im2col_unit_ready);
+
+    // config_ready 延迟：VPU 子单元 ready 后需等 URAM write pipeline flush
+    // 才允许下一条指令（drain CDMA）读取刚写入的数据。
+    localparam READY_DELAY = `VPU_READY_DELAY_CYCLES;
+    reg [READY_DELAY-1:0] ready_delay_sr;
+    wire units_ready_delayed = ready_delay_sr[READY_DELAY-1];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            ready_delay_sr <= {READY_DELAY{1'b0}};
+        else
+            ready_delay_sr <= {ready_delay_sr[READY_DELAY-2:0], units_all_ready};
+    end
+
+    assign config_ready = ~start & ~start_d1 & units_ready_delayed;
     // unit_active 使用 _reg（start_d1 拍已稳定）
     assign dqa_unit_start = (unit_active == UNIT_DQA) ? start_d1 : 1'b0;
     assign qa_unit_start  = (unit_active == UNIT_QA ) ? start_d1 : 1'b0;

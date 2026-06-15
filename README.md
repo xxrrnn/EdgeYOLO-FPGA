@@ -584,3 +584,5 @@ make build  # 或手动 vivado flow
 | data1_reg MAX_FANOUT | XDC 加 `set_property MAX_FANOUT 64` | 强制复制到就近位置 |
 | 加回 soft Pblock (1/1/2) | XDC 加 IS_SOFT=TRUE hint | 给 Vivado 一个起点但不强制 |
 
+RTL fix needed — vpu_ready timing
+vpu_ready 在最后若干 VPU_BUF AXI 写的 BVALID 尚未返回前拉高。需要在 VPU 内部等待最后一笔写完成（outstanding write counter 清零）后再拉高 vpu_ready。

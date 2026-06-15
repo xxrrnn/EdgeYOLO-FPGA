@@ -159,18 +159,16 @@ Port B 同理。修改后 `men_pipe_a` 与 `douta_valid` 的推入条件完全�
 
 | 属性 | 内容 |
 |------|------|
-| **文件** | `rtl/vpu/Global_VPU.v` |
+| **文件** | `rtl/vpu/Global_VPU.v`, `rtl/chip/chip_defines.vh` |
 | **影响** | dqa/qa 通过 HBM drain 路径读出时，个别 word（1-4 个）与 expected 不一致 |
 | **症状** | dqa_c16_small 在重复运行中约 30% 出现 1-4 word mismatch |
 | **严重程度** | Medium —— 偶发，不影响 preload path |
 
 **动机**：dqa 测试在大部分情况下 PASS，但在 HBM drain 路径下偶尔 FAIL。
 
-**根因**：`Global_VPU.v` 的 `config_ready` 在 VPU 子单元 `xxx_unit_ready` 全部 assert 时拉高，允许下一条 ISA 指令（通常是 drain CDMA）开始执行。但 VPU 子单元（如 dqa）的 ready 在内部计算完成时 assert，此时最后的写操作可能仍在 URAM write pipeline 中（NBPIPE+2=10 拍）。若 drain CDMA 立即读取刚写入的 VPU_BUF 区域，可能读到旧值。
+**根因**：`Global_VPU.v` 的 `config_ready` 在 VPU 子单元 `xxx_unit_ready` 全部 assert 时拉高，允许下一条 ISA 指令（通常是 drain CDMA）开始执行。但 VPU 子单元（如 dqa）的 ready 在内部计算完成时 assert，此时最后的写操作可能仍在 URAM write pipeline 中（1 级 Global_VPU pipeline + 1 拍 URAM 写入 = 2 拍）。若 drain CDMA 立即读取刚写入的 VPU_BUF 区域，可能读到旧值。
 
-**当前临时缓解**：在 `hbm_flow.py` 中 VPU WAIT 与 drain CDMA 之间插入 `_VPU_SETTLE_NOPS = 256` 个 NOP 指令（约 0.85μs），给 URAM write pipeline 时间完成。
-
-**推荐永久修复**（待实施）：在 VPU 子单元内部，将 ready 信号延迟到最后一笔写操作经过 URAM write pipeline 后再 assert（约延迟 NBPIPE+2 拍）。
+**修复**：在 `Global_VPU.v` 中对 `config_ready` 加 `VPU_READY_DELAY_CYCLES = 12` 拍 shift register 延迟（定义在 `chip_defines.vh`）。确保 VPU 最后一笔写操作完全写入 URAM `mem[]` 后，decoder 才允许下一条指令执行。
 
 ---
 
@@ -178,14 +176,12 @@ Port B 同理。修改后 `men_pipe_a` 与 `douta_valid` 的推入条件完全�
 
 | 属性 | 内容 |
 |------|------|
-| **文件** | 同问题 3（URAM write pipeline latency） |
+| **文件** | `rtl/vpu/CDMA_Controller.sv`, `rtl/chip/chip_defines.vh` |
 | **影响** | qa_c16_signed 在 hbm path 下个别 word mismatch |
 | **症状** | Scale/Bias 通过 CDMA 写入 WB BRAM 后，qa 立即读取时部分数据未就绪 |
 | **严重程度** | Medium |
 
-**当前临时缓解**：在 `hbm_flow.py` 中 WB CDMA 写入指令后插入 `_WB_SETTLE_NOPS = 512` 个 NOP。
-
-**推荐永久修复**：与问题 3 相同思路——CDMA done 信号应等 URAM pipeline flush 后再 assert。
+**修复**：已被问题 2 的 `CDMA_COOLDOWN_CYCLES = 2000` 覆盖。CDMA 完成后等 2000 周期再 assert `cdma_config_ready`，远超 BRAM 1 拍写延迟。
 
 ---
 
@@ -209,7 +205,10 @@ Port B 同理。修改后 `men_pipe_a` 与 `douta_valid` 的推入条件完全�
 | 1 | `rtl/common/uram_tdp_bytewrite.v` | `men_pipe_a/b` 推入条件：`mem_ena` → `mem_ena & ~\|wea` | ✅ 已改 |
 | 2 | `rtl/vpu/CDMA_Controller.sv` | 加 `ifndef CDMA_COOLDOWN_CYCLES` 默认 2000 | ✅ 已改 |
 | 3 | `rtl/chip/chip_defines.vh` | 定义 `CDMA_COOLDOWN_CYCLES 2000` | ✅ 已有 |
-| 4 | `rtl/vpu/Global_VPU.v` | ready 延迟 NBPIPE+2 拍 | 🔲 待实施 |
+| 4 | `rtl/vpu/Global_VPU.v` | `config_ready` 加 12 拍 delay shift register | ✅ 已改 |
+| 5 | `rtl/chip/chip_defines.vh` | 定义 `VPU_READY_DELAY_CYCLES 12` | ✅ 已改 |
+
+综合后 `hbm_flow.py` 中的 `_VPU_SETTLE_NOPS` 和 `_WB_SETTLE_NOPS` 可移除（RTL 层面已保证时序安全）。
 
 ---
 
