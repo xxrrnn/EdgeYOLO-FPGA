@@ -184,6 +184,15 @@
 // tile_obuf 输入寄存 1 级 + 安全余量 1 = 2 周期
 `define DCIM_OBUF_WR_DRAIN      2
 
+// tile_obuf bank 参数（obuf_bank.v default parameter 引用）
+// 8-bank 结构：256KB / 8 = 32KB/bank = 2048×16B words → BANK_ADDR_WIDTH=11
+// NBPIPE = READ_LATENCY - 1（URAM 1 cycle read + NBPIPE pipeline stages = 10 total）
+`define DCIM_TILE_OBUF_BANK_ADDR_WIDTH  11
+`define DCIM_TILE_OBUF_NBPIPE           9
+
+// tile_obuf 总读延迟（= 1 URAM read + NBPIPE = 10；tb standalone 引用）
+`define DCIM_OBUF_RD_TOTAL_PIPE         `DCIM_TILE_OBUF_RD_LATENCY
+
 // 向后兼容: OBUF 地址宽度别名（用于 DCIM out_base_addr 字段宽度）
 // DCIM Tile 写 tile_obuf 时使用 tile_obuf 内部地址
 `define DCIM_OBUF_ADDR_WIDTH    `DCIM_TILE_OBUF_ADDR_WIDTH
