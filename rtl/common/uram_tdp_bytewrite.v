@@ -63,13 +63,14 @@ module uram_tdp_bytewrite #(
     end
 
     // Port A 使能流水
-    // 仅在读操作（mem_ena & ~|wea）时推入 1，写操作不推进数据 pipeline。
-    // No-Change 模式下写时 memrega 不更新，若写时推入 1 会让 dat_pipe_a
-    // 在后续级传播陈旧的 memrega 值，导致 douta 数据与 douta_valid 不同步。
+    // 使用 mem_ena（不含 |wea 归约）：保持 CE 路径为单比特 FDRE，
+    // 避免 Vivado 将 CE 转为 URAM DOUT→FDRE.D 的 LUT MUX（会增加 6~8 逻辑级，
+    // 叠加 7 级 URAM cascade 后 data path 超出 4ns 周期导致 timing violation）。
+    // douta_valid 的正确性（写时不置 1）由上层 vpu_buf.v 的 rd_valid_pipe_a
+    // 单独保证（mem_ena & ~wr_en_a），此处无需在 pipeline CE 中过滤写操作。
     reg [NBPIPE:0] men_pipe_a;
-    wire rd_en_a = mem_ena & ~(|wea);
     always @(posedge clk)
-        men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
+        men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};
 
     // Port A 数据流水
     reg [DWIDTH-1:0] dat_pipe_a [0:NBPIPE-1];
@@ -105,11 +106,10 @@ module uram_tdp_bytewrite #(
         end
     end
 
-    // Port B 使能流水（同 Port A 修复）
+    // Port B 使能流水（同 Port A：使用 mem_enb，不含 |web 归约）
     reg [NBPIPE:0] men_pipe_b;
-    wire rd_en_b = mem_enb & ~(|web);
     always @(posedge clk)
-        men_pipe_b <= {men_pipe_b[NBPIPE-1:0], rd_en_b};
+        men_pipe_b <= {men_pipe_b[NBPIPE-1:0], mem_enb};
 
     // Port B 数据流水
     reg [DWIDTH-1:0] dat_pipe_b [0:NBPIPE-1];

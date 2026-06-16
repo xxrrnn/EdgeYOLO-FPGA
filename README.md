@@ -586,3 +586,121 @@ make build  # 或手动 vivado flow
 
 RTL fix needed — vpu_ready timing
 vpu_ready 在最后若干 VPU_BUF AXI 写的 BVALID 尚未返回前拉高。需要在 VPU 内部等待最后一笔写完成（outstanding write counter 清零）后再拉高 vpu_ready。
+
+---
+
+## Timing 失败根因分析：8tile_v4 URAM cascade timing violation（2026-06-16）
+
+### 现象
+
+`8tile_v4` 实现（place + phys_opt + route）全程无法收敛，**WNS = -2.3 ~ -2.8 ns**，phys_opt 完全无改善效果。`8tile_v3` 在相同约束下正常出 bitstream（WNS = +0.000 ns）。
+
+各阶段 WNS/TNS 对比：
+
+| 阶段 | v3 WNS | v3 Failing EP | v4 WNS | v4 Failing EP |
+|---|---|---|---|---|
+| post_place attempt1 | -0.912 ns | 68 | **-2.521 ns** | 18007 |
+| post_place attempt2 | -0.062 ns | 6200 | **-2.834 ns** | 20369 |
+| post_phys_opt attempt1 | **+0.031 ns ✅** | 0 | **-2.321 ns** | 16289 |
+| post_phys_opt attempt2 | **+0.037 ns ✅** | 0 | **-2.685 ns** | 18901 |
+| post_route attempt2 | -0.019 ns | 18 | **-2.615 ns** | 171812 |
+| 最终结果 | **出 bitstream ✅** | — | **从未收敛 ❌** | — |
+
+### 违例路径特征（v4）
+
+全部违例集中在同一类路径（`post_phys_opt_attempt1_failing.rpt` / `post_route_attempt2_failing.rpt`）：
+
+```
+Source:      lite_i/vpu_0/inst/u_vpu_buf/u_uram/mem_reg_uram_N/CLK   (URAM288)
+Destination: lite_i/vpu_0/inst/u_vpu_buf/u_uram/dat_pipe_a_reg[0][X]/D (FDRE)
+Logic Levels: 13~15 (URAM288×7 + LUT5×6~8)
+Data Path Delay: 5.9~6.7 ns  (period = 4.0 ns)
+Slack: -2.3 ~ -2.8 ns
+```
+
+路径组成：
+
+```
+URAM_N → CAS_OUT(2.15ns) → URAM_N+1 → CAS_OUT(0.19ns) × 6 → URAM_N+6/DOUT_B
+→ [route ~1.2~1.6ns] → LUT5 × 6~8 级 MUX 树 → FDRE dat_pipe_a_reg[0][X]/D
+```
+
+v3 的最差路径是 inst_decoder→DCIM 的纯路由路径（Logic Levels=0，WNS=-0.912 ns），phys_opt 可修复；v4 是结构性的逻辑级超限，phys_opt 对 URAM 物理延迟无能为力。
+
+### 根因定位：commit `98045d9` 对 `uram_tdp_bytewrite.v` 的修改
+
+**v3（commit `c5be628`）**：
+```verilog
+reg [NBPIPE:0] men_pipe_a;
+always @(posedge clk)
+    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};  // 简单单比特信号
+```
+
+**v4（commit `98045d9`）**：
+```verilog
+wire rd_en_a = mem_ena & ~(|wea);   // ← 新增：16-bit wea 归约 OR
+always @(posedge clk)
+    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
+```
+
+`wea` 是 16-bit byte-enable 向量（`NUM_COL=16`），`|wea` 需要若干 LUT6 归约树。由于 `men_pipe_a[0..N]` 用作 `dat_pipe_a` 各级的 CE（clock enable），Vivado 在 FDRE CE 逻辑较复杂时会**将 CE 转为数据路径 MUX**（`dat_pipe_a[0] <= men_pipe_a[0] ? memrega : dat_pipe_a[0]`），从而在 URAM DOUT → FDRE.D 之间插入 6~8 级 LUT5 MUX 树。叠加 7 级 URAM cascade chain（3.3 ns），总逻辑延迟突破 4 ns 周期。
+
+v3 中 `men_pipe_a[0]` 仅是 `mem_ena` 延迟一拍的简单 FDRE 输出，Vivado 使用 FDRE CE pin，数据路径上无 LUT，URAM cascade 不是瓶颈。
+
+### 修复方案
+
+#### 方案 A：`rd_en` 提前一拍寄存（中等复杂度）
+
+```verilog
+// uram_tdp_bytewrite.v
+reg rd_valid_a, rd_valid_b;
+always @(posedge clk) rd_valid_a <= mem_ena & ~(|wea);  // 寄存后使用
+always @(posedge clk) rd_valid_b <= mem_enb & ~(|web);
+always @(posedge clk)
+    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_valid_a};
+always @(posedge clk)
+    men_pipe_b <= {men_pipe_b[NBPIPE-1:0], rd_valid_b};
+```
+
+`|wea` 归约结果先打一拍再进入 pipeline，不出现在 URAM→FDRE 关键路径。**代价**：总延迟变为 NBPIPE+3 拍（+1），需将 `RD_LATENCY` 从 10 改为 11（`NBPIPE` 从 8 改为 9）。
+
+#### 方案 B：回退 `men_pipe` 使用 `mem_ena`，`valid` 由上层管理（推荐）
+
+```verilog
+// uram_tdp_bytewrite.v — 仅改这两行，回到 v3 行为
+always @(posedge clk)
+    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};
+always @(posedge clk)
+    men_pipe_b <= {men_pipe_b[NBPIPE-1:0], mem_enb};
+```
+
+v4 想修复的问题（写时 `douta_valid` 误为 1 导致 VPU 读到脏数据）已由 `vpu_buf.v` 的 `rd_valid_pipe_a` 正确处理（`mem_ena & ~wr_en_a`）。`dat_pipe_a` 数据流水中写周期传播的是 stale `memrega`，但 URAM No-Change 模式保证写时 `memrega` 不更新，且消费方（VPU）只在 `douta_valid=1` 时使用 `douta`，**Port A 功能安全**。Port B（AXI BRAM Controller 侧）在写操作时本身不读 `doutb`，同样安全。
+
+**优点**：改动量最小（2 行），不改接口，不改延迟，timing 立即恢复 v3 水平。
+
+#### 方案 C：方案 A 的精确版（`|wea` 单独寄存，不影响延迟）
+
+```verilog
+// uram_tdp_bytewrite.v
+reg wea_any_r, web_any_r;
+always @(posedge clk) wea_any_r <= |wea;   // 16-bit 归约先寄存
+always @(posedge clk) web_any_r <= |web;
+wire rd_en_a = mem_ena & ~wea_any_r;       // wea_any_r 是纯 FDRE，不在关键路径
+wire rd_en_b = mem_enb & ~web_any_r;
+always @(posedge clk)
+    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
+always @(posedge clk)
+    men_pipe_b <= {men_pipe_b[NBPIPE-1:0], rd_en_b};
+```
+
+`wea_any_r` 是寄存器输出，进入 `men_pipe_a` 的 CE 路径时不含组合逻辑。**代价**：写后立刻读时，`rd_en_a` 的判断比实际读操作晚 1 拍，即写操作发出后若紧接读，pipeline 使能会晚一拍——需要在 `vpu_buf.v` 的 `rd_valid_pipe_a` 对应调整，或接受写-读间至少 1 拍气泡（通常 VPU 软件已满足此要求）。实际延迟不变（NBPIPE 不变），但写→读的最小间隔变为 2 拍而非 1 拍。
+
+### 选用方案与改动
+
+**选用方案 B**（`rtl/common/uram_tdp_bytewrite.v`，改动 2 行）：
+
+- timing 立即恢复（关键路径 LUT5×6~8 消失）
+- 功能正确性由 `vpu_buf.v` 层保证，无需修改其他文件
+- 不改接口，不改 `RD_LATENCY`，不影响 testbench/仿真
+
+改动后需重新跑 `8tile_v4` 实现（预期 WNS ≥ 0，与 v3 基本一致）。
