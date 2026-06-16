@@ -398,7 +398,23 @@ module tb_lite_bd_module;
                     i = max_words;
             end
 
-            if (addr_in_range(base_addr, E2E_IBUF_TILE0_BASE, E2E_IBUF_TILE_SIZE)) begin
+            if (addr_in_range(base_addr, 64'h0, 64'h0002_0000)) begin
+                // HBM stub：地址 0x0 起始，128KB，256-bit word = 32B/word
+                // hbm_stub mem 是 256-bit（32B/word），而 mem[] 是 128-bit（16B/word）
+                // 每两个 128-bit word 打包成一个 256-bit HBM word
+                begin : hbm_load
+                    integer j;
+                    reg [31:0] hbm_waddr;
+                    hbm_waddr = base_addr >> 5;  // 256-bit word 地址（32B/word）
+                    for (j = 0; j < nwords; j = j + 2) begin
+                        // 两个 128-bit words → 一个 256-bit HBM word [255:128]=odd, [127:0]=even
+                        if ((j+1) < nwords)
+                            dut.lite_i.hbm_0.mem[hbm_waddr + j/2] = {mem[j+1], mem[j]};
+                        else
+                            dut.lite_i.hbm_0.mem[hbm_waddr + j/2] = {128'b0, mem[j]};
+                    end
+                end
+            end else if (addr_in_range(base_addr, E2E_IBUF_TILE0_BASE, E2E_IBUF_TILE_SIZE)) begin
                 word_addr = (base_addr - E2E_IBUF_TILE0_BASE) >> 4;
                 for (i = 0; i < nwords; i = i + 1)
                     backdoor_write_ibuf_word(0, word_addr + i, mem[i]);
@@ -651,18 +667,32 @@ module tb_lite_bd_module;
 
     task automatic run_one_case(input string case_dir, input int case_idx);
         int inst_count;
-        string inst_path, preload_path, checks_path, manifest_path;
+        string inst_path, preload_path, checks_path, manifest_path, hbm_image_path;
         begin
             run_dir = case_dir;
-            inst_path = run_path("inst.hex");
-            preload_path = run_path("preload.txt");
-            checks_path = run_path("checks.txt");
-            manifest_path = run_path("manifest.txt");
+            inst_path       = run_path("inst.hex");
+            preload_path    = run_path("preload.txt");
+            checks_path     = run_path("checks.txt");
+            manifest_path   = run_path("manifest.txt");
+            hbm_image_path  = run_path("hbm_image.hex");
 
             $display("============================================================");
             $display("  MODULE_TB CASE[%0d] run_dir=%s", case_idx, run_dir);
             $display("  manifest=%s", manifest_path);
             $display("============================================================");
+
+            // 先加载 HBM image（feature map staging area），再加载其他 backdoor preloads
+            // 检查 hbm_src_addrs.txt 是否存在（由 golden 脚本生成，仅 HBM-staged case 有此文件）
+            // concat/mp/us 等算子的 hbm_image.hex 仅供参考，无需写入 HBM stub
+            begin : hbm_stage
+                integer fd_hbm_addrs;
+                fd_hbm_addrs = $fopen(run_path("hbm_src_addrs.txt"), "r");
+                if (fd_hbm_addrs) begin
+                    $fclose(fd_hbm_addrs);
+                    $display("[%0t] MODULE_TB: hbm_src_addrs.txt found, loading hbm_image -> HBM stub @ 0x0", $time);
+                    backdoor_load_memh128(hbm_image_path, 64'h0);
+                end
+            end
 
             run_preloads(preload_path);
             count_inst_words(inst_path, inst_count);

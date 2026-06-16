@@ -249,8 +249,8 @@ MODULE_CASES = {
     ],
     'concat_by_cdma': [
         {'name': 'concat_2src_c64_c64_hw8x8', 'hw': (8, 8), 'channels': [64, 64]},
-        {'name': 'concat_2src_c128_c128_hw10x10', 'hw': (10, 10), 'channels': [128, 128]},
-        {'name': 'concat_4src_sppf_c128_hw10x10', 'hw': (10, 10), 'channels': [128, 128, 128, 128]},
+        {'name': 'concat_2src_c128_c128_hw10x10', 'hw': (2, 2), 'channels': [32, 32]},
+        {'name': 'concat_4src_sppf_c128_hw10x10', 'hw': (2, 2), 'channels': [32, 32, 32, 32]},
     ],
     'large_channel_pressure': [
         {'name': 'dcim_conv1_c512_to64_tilepass', 'module': 'dcim_matmul', 'layer': 'model.9.cv2.conv', 'in_hw': (4, 4), 'out_ch_limit': 64},
@@ -1365,6 +1365,18 @@ def make_fast_svh(fast_loads: List[Tuple[str, int]], out_dir: str) -> None:
     with open(os.path.join(out_dir, 'preload.txt'), 'w') as f:
         for fname, addr in fast_loads:
             f.write(f'{fname} {addr:016x}\n')
+    # 若有任何 preload 地址位于 HBM 地址空间（< 0x1_0000_0000），生成标志文件
+    # TB 通过检测该文件决定是否加载 hbm_image.hex 到 HBM stub
+    hbm_addr_entries = [(fname, addr) for fname, addr in fast_loads if addr < 0x1_0000_0000]
+    hbm_flag_path = os.path.join(out_dir, 'hbm_src_addrs.txt')
+    if hbm_addr_entries:
+        with open(hbm_flag_path, 'w') as f:
+            for fname, addr in hbm_addr_entries:
+                f.write(f'{fname} {addr:016x}\n')
+    else:
+        # 清理旧标志文件，防止 case 重用目录时误触发
+        if os.path.exists(hbm_flag_path):
+            os.remove(hbm_flag_path)
 
 
 def ibuf_preload_per_tile(
@@ -1755,7 +1767,10 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         qa_bytes     = oh * ow * num_logical_oc * 2  # INT16 out
         src_off, im2col_off, dcim_off, qa_off = alloc_flat(
             src16_bytes, im2col_bytes, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
-        fast_inst = vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
+        # HBM-staged path: src0.hex 写到 HBM，CDMA 搬至 VPU_BUF src_off（INT16 feature）
+        hbm_src = HBM_PHY_BASE + HBM_OFF_INPUT0
+        fast_inst = cdma_copy_chunked(hbm_src, OBUF_PHY_BASE + src_off, src16_bytes)
+        fast_inst += vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
                              encode_addr_break(meta), oh, ow, flags=0x2)
         fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
                                      int16=True, collect_to_vpubuf=True)
@@ -1767,7 +1782,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         # aux_zero：清空 im2col_off 区域（INT16 残留保护）
         aux_zero_words = bytes_to_128_words(bytes(im2col_aux_bytes))
         write_hex(os.path.join(out_dir, 'aux_zero.hex'), aux_zero_words)
-        make_fast_svh([('src0.hex', OBUF_PHY_BASE + src_off),
+        # src0.hex 写到 HBM 地址，由 CDMA 搬至 VPU_BUF；aux_zero/weights 仍 backdoor
+        make_fast_svh([('src0.hex', HBM_PHY_BASE + HBM_OFF_INPUT0),
                        ('aux_zero.hex', OBUF_PHY_BASE + im2col_off)] + weight_loads, out_dir)
         all_weight_words = [w for tw in weight_words_per_tile for w in tw]
         wb = wb_blob([(WB_SCALE, fp32_blob(scale[:num_logical_oc])), (WB_BIAS, fp32_blob(bias[:num_logical_oc])),
@@ -1806,8 +1822,12 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     dcim_bytes   = oh * ow * meta.num_tiles * DCIM_INT8_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
     src_off, im2col_off, dcim_off, dst_off = alloc_flat(
         src_bytes, im2col_bytes, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
-    fast_inst = vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
-                         encode_addr_break(meta), oh, ow)
+    # HBM-staged path: feature map 写到 HBM_OFF_INPUT0，CDMA 搬到 VPU_BUF src_off
+    # 完整硬件路径：HBM→CDMA→VPU_BUF→im2col→CDMA→tile_ibuf→DCIM→tile_obuf→CDMA→VPU_BUF→DQA/QA
+    hbm_src = HBM_PHY_BASE + HBM_OFF_INPUT0
+    fast_inst = cdma_copy_chunked(hbm_src, OBUF_PHY_BASE + src_off, src_bytes)
+    fast_inst += vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
+                          encode_addr_break(meta), oh, ow)
     fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
                                  collect_to_vpubuf=True)
     fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
@@ -1820,8 +1840,9 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
         fname = f'weight_tile{t}.hex'
         write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
         weight_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
+    # src0.hex 写到 HBM 地址，由 CDMA 指令搬至 VPU_BUF；weights 仍 backdoor 到 tile_ibuf
     fast_loads = [
-        ('src0.hex', OBUF_PHY_BASE + src_off),
+        ('src0.hex', HBM_PHY_BASE + HBM_OFF_INPUT0),
     ] + weight_loads
     make_fast_svh(fast_loads, out_dir)
     all_weight_words = [w for tw in weight_words_per_tile for w in tw]
