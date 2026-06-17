@@ -84,10 +84,13 @@ set routeDirective      AggressiveExplore
 # run.tcl 在 post-route timing 失败时，从 post_opt.dcp 重新尝试下一组 directive。
 # 每组策略跑 place → phys_opt → route 完整流程。
 # 策略名 | place | phys_opt | route
+# 注意：SSI_SpreadLogic 在 Vivado 2024.2 中已无效（Constraints 18-641），
+#       替换为 SSI_SpreadSLLs（专用于 SSI 跨 SLR SLL 分散）
 set retryStrategies {
     {Default         AggressiveExplore  AggressiveExplore}
     {ExtraTimingOpt  AggressiveExplore  NoTimingRelaxation}
-    {SSI_SpreadLogic AggressiveExplore  Explore}
+    {AltSpreadLogic  AggressiveExplore  AggressiveExplore}
+    {SSI_SpreadSLLs  AggressiveExplore  Explore}
 }
 
 # --- DSP 用量说明 ---
