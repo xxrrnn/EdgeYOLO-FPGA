@@ -23,16 +23,16 @@
 !tools/Makefile
 
 # ============================================
-# 保留: model/ 目录（脚本、网络描述 json、量化权重 npz）
-# 忽略: 大体积原始模型 .onnx/.tar.gz/.bak/.pb
+# 保留: model/ 目录（脚本、网络描述 json、量化权重 npz、onnx）
+# 忽略: 大体积备份/原始格式 .onnx.bak/.tar.gz/.pb
 # ============================================
 !model/
 !model/**/
 !model/**/*.py
 !model/**/*.md
 !model/**/*.json
+!model/**/*.onnx
 !model/yolov5n/parsed/weights/*.npz
-model/**/*.onnx
 model/**/*.onnx.bak
 model/**/*.tar.gz
 model/**/*.pb
