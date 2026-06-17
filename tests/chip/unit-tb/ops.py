@@ -1,0 +1,482 @@
+"""
+ops.py  ——  YOLOv5n FPGA 算子库（可拼接）
+
+所有算子均已通过片上硬件验证（见 tests/chip/README.md）：
+  - conv    : DCIM + im2col_unit + DQA + QA 全链路（L3~L4 PASS）
+  - add     : VPU element-wise add INT8（L1 PASS）
+  - concat  : channel-wise concat（host numpy，L1 PASS）
+  - mp      : MaxPool INT8（L1 PASS，host numpy 模拟）
+  - us      : Upsample nearest neighbor（L1 PASS，host numpy 模拟）
+  - qa      : FP32 → INT8 量化（host numpy）
+  - dqa     : INT32 → FP32 反量化（host numpy，FPGA DQA 单元集成在 conv 内）
+
+使用方法
+--------
+    from ops import FPGAOps, HostOps
+
+    ops = FPGAOps(runner)           # runner = ChipRunnerWin()
+    host = HostOps()                # CPU 算子（add / concat / mp / us）
+
+    # 单层 conv（自动 cout-tiling）
+    out = ops.conv(feat, "model.0.conv", case_name="m0")
+
+    # 链式执行
+    x = ops.conv(img, "model.0.conv", case_name="net_0")
+    x = ops.conv(x,   "model.1.conv", case_name="net_1")
+    skip = x
+    cv1 = ops.conv(x, "model.2.cv1.conv", case_name="net_2_cv1")
+    cv2 = ops.conv(x, "model.2.cv2.conv", case_name="net_2_cv2")
+    m0  = ops.conv(cv1, "model.2.m.0.cv1.conv", case_name="net_2_m0cv1")
+    m0  = ops.conv(m0,  "model.2.m.0.cv2.conv", case_name="net_2_m0cv2")
+    m0  = host.add(cv1, m0)       # shortcut
+    cat = host.concat([m0, cv2])
+    x   = ops.conv(cat, "model.2.cv3.conv", case_name="net_2_cv3")
+
+数据约定
+--------
+- 所有激活（包括 FPGA 输出）：INT8 numpy array，shape (H, W, C)
+- 所有输出 channel 已截断到真实值（DCIM 16ch 填充部分已去除）
+- cout-tiling 在 FPGAOps.conv 内部自动处理（out_ch > 128 自动分 pass）
+"""
+from __future__ import annotations
+
+import sys
+import numpy as np
+from pathlib import Path
+from typing import Optional
+
+_THIS = Path(__file__).resolve()
+_REPO = _THIS.parents[3]
+sys.path.insert(0, str(_THIS.parent))
+sys.path.insert(0, str(_REPO / "rtl" / "tb" / "lite_bd" / "module_tb"))
+sys.path.insert(0, str(_REPO / "tools"))
+
+from golden_module_tb import (
+    make_conv_pipeline_case, load_network, conv_meta,
+    write_inst, bytes_to_128_words, write_hex as _write_hex,
+)
+
+# ─── 常量 ──────────────────────────────────────────────────────────────────
+_NETWORK_JSON = str(_REPO / "model" / "yolov5n" / "parsed" / "network.json")
+_TILE_SIZE    = 128   # 硬件单 pass 最大输出通道数（8 tiles × 16 ch）
+
+_net_cache: Optional[dict] = None
+
+def _net():
+    global _net_cache
+    if _net_cache is None:
+        _net_cache = load_network(_NETWORK_JSON)
+    return _net_cache
+
+
+# ─── FPGAOps ───────────────────────────────────────────────────────────────
+
+class FPGAOps:
+    """FPGA 硬件算子封装。所有 conv 类操作均在 FPGA 上执行。"""
+
+    def __init__(self, runner, runs_base: str = "./runs/ops", verbose: bool = False):
+        """
+        runner   : ChipRunnerWin 实例（None = dry-run 模式，返回 numpy golden）
+        runs_base: 测试 case 文件存放根目录
+        verbose  : 是否打印详细信息
+        """
+        self.runner   = runner
+        self.runs_base = Path(runs_base)
+        self.verbose  = verbose
+
+    def conv(
+        self,
+        feat_in: np.ndarray,
+        layer_name: str,
+        case_name: str,
+        out_ch_limit: int = 0,
+        out_ch_offset: int = 0,
+        seed: int = 0,
+    ) -> np.ndarray:
+        """执行单个 conv_pipeline（im2col + DCIM + DQA + QA）。
+
+        feat_in      : INT8 (H, W, C_in)
+        layer_name   : 如 "model.0.conv"
+        case_name    : run 目录名（唯一标识，如 "net_0"）
+        out_ch_limit : 0=不截断；>0=截断到该通道数（cout-tiling 分 pass 时使用）
+        out_ch_offset: 输出通道起始偏移（cout-tiling 分 pass 时使用）
+        返回: INT8 (OH, OW, C_out)，已去除 DCIM 填充 pad
+        """
+        run_dir = self.runs_base / case_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        h, w, _ = feat_in.shape
+        spec: dict = {"name": case_name, "layer": layer_name, "in_hw": (h, w)}
+        if out_ch_limit > 0:
+            spec["out_ch_limit"] = out_ch_limit
+        if out_ch_offset > 0:
+            spec["out_ch_offset"] = out_ch_offset
+
+        rng = np.random.default_rng(seed)
+        md  = make_conv_pipeline_case(str(run_dir), _net(), spec, rng, feat=feat_in)
+
+        # 写运行时文件
+        write_inst(str(run_dir / "inst.hex"), md["fast_inst"])
+        (run_dir / "checks.txt").write_text(
+            f"{case_name} expected.hex {md['dst']:06x} {md['words']} 0\n"
+        )
+        wb_data = md.get("wb", b"")
+        if wb_data:
+            _write_hex(str(run_dir / "wb_init.hex"), bytes_to_128_words(wb_data))
+            pf = run_dir / "preload.txt"
+            txt = pf.read_text() if pf.exists() else ""
+            if "wb_init.hex" not in txt:
+                with open(pf, "a") as f:
+                    f.write(f"wb_init.hex {0x1030_0000_0:016x}\n")
+
+        # 计算输出 shape
+        meta    = conv_meta(_net(), layer_name)
+        oh      = (h + 2 * meta.pad_h0 - meta.kh) // meta.stride_h + 1
+        ow      = (w + 2 * meta.pad_w0 - meta.kw) // meta.stride_w + 1
+        eff_cout = meta.out_ch if out_ch_limit <= 0 else min(meta.out_ch - out_ch_offset, out_ch_limit)
+        eff_ch   = ((eff_cout + 15) // 16) * 16  # DCIM 16-ch 对齐
+
+        if self.verbose:
+            print(f"  [{layer_name}] {md['shape']}")
+
+        if self.runner is None:
+            # dry-run：返回 numpy golden
+            exp_flat = np.frombuffer(
+                b"".join(bytes.fromhex(l.strip())
+                         for l in open(run_dir / "expected.hex")),
+                dtype=np.int8)
+            try:
+                return exp_flat.reshape(oh, ow, eff_ch)
+            except ValueError:
+                return exp_flat.reshape(oh, ow, exp_flat.size // (oh * ow))
+
+        # FPGA 执行
+        results = self.runner.run_case(run_dir, staging="hbm")
+        ok = all(r.get("pass", False) for r in results)
+        passed = sum(r.get("passed", 0) for r in results)
+        total  = sum(r.get("total_words", 0) for r in results)
+        if not ok:
+            print(f"  [FAIL] {layer_name} {passed}/{total} words")
+        elif self.verbose:
+            print(f"  [PASS] {layer_name} {total}/{total} words")
+
+        # 从 VPU_BUF 读原始字节（传递给下一层；注意与 expected.hex 的 word 字节序不同，
+        # 但这里我们只是传递原始 INT8 数据给下游算子，双方保持一致）
+        from xdma_win import VPU_BUF_BASE
+        raw = self.runner.x.read(VPU_BUF_BASE + md["dst"], md["words"] * 16)
+        got = np.frombuffer(raw, dtype=np.int8)
+        try:
+            return got.reshape(oh, ow, eff_ch)
+        except ValueError:
+            return got
+
+    def conv_tiled(
+        self,
+        feat_in: np.ndarray,
+        layer_name: str,
+        case_name: str,
+        tile_size: int = _TILE_SIZE,
+    ) -> np.ndarray:
+        """自动 cout-tiling：out_ch > tile_size 时分多 pass 执行，结果 concat。
+
+        适用于 model.7/8/9/23 等 256-ch 输出层。
+        """
+        meta    = conv_meta(_net(), layer_name)
+        total_ch = meta.out_ch
+        n_tiles  = (total_ch + tile_size - 1) // tile_size
+        outputs  = []
+        for i in range(n_tiles):
+            offset = i * tile_size
+            limit  = min(tile_size, total_ch - offset)
+            if self.verbose:
+                print(f"  [{layer_name}] cout-tile {i}/{n_tiles} ch[{offset}:{offset+limit}]")
+            out_i = self.conv(feat_in, layer_name,
+                              case_name=f"{case_name}_ctile{i}",
+                              out_ch_limit=limit, out_ch_offset=offset)
+            valid = ((limit + 15) // 16) * 16
+            outputs.append(out_i[:, :, :valid])
+        full = np.concatenate(outputs, axis=-1)
+        return full[:, :, :total_ch]
+
+    def conv_oh_tiled(
+        self,
+        feat_in: np.ndarray,
+        layer_name: str,
+        case_name: str,
+        max_pixels: int = 400,
+        out_ch_limit: int = 0,
+        out_ch_offset: int = 0,
+    ) -> np.ndarray:
+        """OH-tiling：当 oh*ow > max_pixels 时沿 OH 方向分 tile 执行。
+
+        每个 OH tile 独立送入 FPGA，结果按行拼接后返回完整输出。
+        适用于 IBUF 容量不足（max_pixels = IBUF_ACT_BYTES / (acc_depth * 16)）的大 feature map。
+
+        max_pixels : IBUF 最大像素数（默认 400，对应 acc=5, in_ch=32 时的安全上限）
+        """
+        from golden_module_tb import conv_meta as _conv_meta, out_hw, alloc_flat
+        import numpy as _np
+
+        meta     = _conv_meta(_net(), layer_name)
+        h, w, _  = feat_in.shape
+        oh_full, ow = out_hw(h, w, meta)
+
+        # 若不需要 OH-tiling，直接走普通路径
+        if oh_full * ow <= max_pixels:
+            return self.conv(feat_in, layer_name, case_name,
+                             out_ch_limit=out_ch_limit, out_ch_offset=out_ch_offset)
+
+        # 计算每 tile 的 OH 行数，使 tile_oh * ow ≤ max_pixels
+        tile_oh = max(1, max_pixels // ow)
+        if self.verbose:
+            n_tiles = (oh_full + tile_oh - 1) // tile_oh
+            print(f"  [{layer_name}] OH-tiling: oh={oh_full} ow={ow} → {n_tiles} tiles (tile_oh={tile_oh})")
+
+        tiles_out = []
+        oh_start = 0
+        while oh_start < oh_full:
+            oh_end = min(oh_start + tile_oh, oh_full)
+            tile_cname = f"{case_name}_ohtile{oh_start}"
+
+            run_dir = self.runs_base / tile_cname
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            spec: dict = {
+                "name": tile_cname,
+                "layer": layer_name,
+                "in_hw": (h, w),
+                "oh_tile_start": oh_start,
+                "oh_tile_end":   oh_end,
+            }
+            if out_ch_limit > 0:
+                spec["out_ch_limit"] = out_ch_limit
+            if out_ch_offset > 0:
+                spec["out_ch_offset"] = out_ch_offset
+
+            rng = np.random.default_rng(0)
+            md  = make_conv_pipeline_case(str(run_dir), _net(), spec, rng, feat=feat_in)
+
+            write_inst(str(run_dir / "inst.hex"), md["fast_inst"])
+            tile_words = md["words"]
+            (run_dir / "checks.txt").write_text(
+                f"{tile_cname} expected.hex {md['dst']:06x} {tile_words} 0\n"
+            )
+            wb_data = md.get("wb", b"")
+            if wb_data:
+                _write_hex(str(run_dir / "wb_init.hex"), bytes_to_128_words(wb_data))
+                pf = run_dir / "preload.txt"
+                txt = pf.read_text() if pf.exists() else ""
+                if "wb_init.hex" not in txt:
+                    with open(pf, "a") as f:
+                        f.write(f"wb_init.hex {0x1030_0000_0:016x}\n")
+
+            tile_oh_actual = oh_end - oh_start
+            eff_cout = meta.out_ch if out_ch_limit <= 0 else min(meta.out_ch - out_ch_offset, out_ch_limit)
+            eff_ch   = ((eff_cout + 15) // 16) * 16
+
+            if self.runner is None:
+                # dry-run
+                exp_flat = np.frombuffer(
+                    b"".join(bytes.fromhex(l.strip())
+                             for l in open(run_dir / "expected.hex")),
+                    dtype=np.int8)
+                tile_out = exp_flat.reshape(tile_oh_actual, ow, eff_ch)
+            else:
+                results = self.runner.run_case(run_dir, staging="hbm")
+                ok = all(r.get("pass", False) for r in results)
+                passed = sum(r.get("passed", 0) for r in results)
+                total  = sum(r.get("total_words", 0) for r in results)
+                if not ok:
+                    print(f"  [FAIL] {layer_name} oh[{oh_start}:{oh_end}] {passed}/{total} words")
+                elif self.verbose:
+                    print(f"  [PASS] {layer_name} oh[{oh_start}:{oh_end}] {total}/{total} words")
+
+                from xdma_win import VPU_BUF_BASE
+                raw = self.runner.x.read(VPU_BUF_BASE + md["dst"], tile_words * 16)
+                tile_out = np.frombuffer(raw, dtype=np.int8).reshape(tile_oh_actual, ow, eff_ch)
+
+            tiles_out.append(tile_out)
+            oh_start = oh_end
+
+        full = np.concatenate(tiles_out, axis=0)  # (OH, OW, eff_ch)
+        return full
+
+
+
+class HostOps:
+    """Host CPU 算子（add/concat/mp/us/qa）——在 numpy 上执行。
+
+    这些算子已在 L1 硬件验证，此处用于完整网络中连接 FPGA conv 层的中间处理。
+    后续可替换为 on-chip 版本（CDMA concat / VPU add）。
+    """
+
+    @staticmethod
+    def add(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """INT8 逐元素加（饱和截断），对应 YOLOv5 Bottleneck shortcut。"""
+        return np.clip(
+            a.astype(np.int16) + b.astype(np.int16), -128, 127
+        ).astype(np.int8)
+
+    @staticmethod
+    def concat(feats: list[np.ndarray], axis: int = -1) -> np.ndarray:
+        """沿通道轴拼接，对应 YOLOv5 Concat 算子。"""
+        return np.concatenate(feats, axis=axis)
+
+    @staticmethod
+    def upsample(feat: np.ndarray, scale: int = 2) -> np.ndarray:
+        """最近邻上采样（对应 Upsample）。"""
+        return np.repeat(np.repeat(feat, scale, axis=0), scale, axis=1)
+
+    @staticmethod
+    def maxpool(feat: np.ndarray, k: int = 5) -> np.ndarray:
+        """MaxPool（same padding），对应 SPPF 中的 MaxPool。"""
+        pad = k // 2
+        h, w, c = feat.shape
+        padded = np.pad(feat.astype(np.int16),
+                        [(pad, pad), (pad, pad), (0, 0)],
+                        mode="constant", constant_values=-128)
+        out = np.empty((h, w, c), dtype=np.int16)
+        for i in range(h):
+            for j in range(w):
+                out[i, j] = padded[i:i+k, j:j+k, :].max(axis=(0, 1))
+        return out.astype(np.int8)
+
+    @staticmethod
+    def qa(feat_fp: np.ndarray, act_scale: float) -> np.ndarray:
+        """FP32 → INT8 量化（网络输入 QA）。"""
+        return np.clip(
+            np.round(feat_fp / act_scale), -128, 127
+        ).astype(np.int8)
+
+    @staticmethod
+    def dqa(feat_int32: np.ndarray, scale: np.ndarray,
+            bias: np.ndarray, relu: bool = True) -> np.ndarray:
+        """INT32 → FP32 反量化（逐通道 scale/bias + ReLU）。"""
+        fp = feat_int32.astype(np.float32) * scale + bias
+        if relu:
+            fp = np.maximum(fp, 0.0)
+        return fp
+
+
+# ─── C3Block ───────────────────────────────────────────────────────────────
+
+class C3Block:
+    """YOLOv5 C3 block（含 Bottleneck shortcut）。
+
+    结构: input
+      ├─ cv1 ─→ [bottleneck × n] ─→ add(shortcut) ─┐
+      └─ cv2 ────────────────────────────────────────┤ concat → cv3 → output
+
+    所有 conv 在 FPGA 上执行；add/concat 在 host 执行。
+    """
+
+    def __init__(self, fpga_ops: FPGAOps, host_ops: HostOps,
+                 model_id: str, n_bottleneck: int = 1):
+        self.ops = fpga_ops
+        self.host = host_ops
+        self.mid = model_id
+        self.n   = n_bottleneck
+
+    def __call__(self, feat_in: np.ndarray) -> np.ndarray:
+        p = f"model.{self.mid}"
+        o = self.ops
+
+        def _conv(name, feat, **kw):
+            cname = f"c3_{self.mid}_{name.replace('.','_')}"
+            m  = conv_meta(_net(), f"{p}.{name}")
+            h, w, _ = feat.shape
+            from golden_module_tb import out_hw as _out_hw
+            oh, ow = _out_hw(h, w, m)
+            # 计算 IBUF 安全容量（acc_depth 决定每像素占 IBUF 行数）
+            ibuf_act = 4 * 512 * 16  # 32KB
+            max_pix = max(1, ibuf_act // (m.acc_depth * 16))
+            if m.out_ch > _TILE_SIZE:
+                return o.conv_tiled(feat, f"{p}.{name}", case_name=cname)
+            elif oh * ow > max_pix:
+                return o.conv_oh_tiled(feat, f"{p}.{name}", case_name=cname, max_pixels=max_pix)
+            return o.conv(feat, f"{p}.{name}", case_name=cname, **kw)
+
+        cv1 = _conv("cv1.conv", feat_in)
+        cv2 = _conv("cv2.conv", feat_in)
+        x   = cv1
+        for i in range(self.n):
+            shortcut = x
+            x = _conv(f"m.{i}.cv1.conv", x)
+            x = _conv(f"m.{i}.cv2.conv", x)
+            if shortcut.shape == x.shape:
+                x = self.host.add(shortcut, x)
+        cat = self.host.concat([x, cv2], axis=-1)
+        return _conv("cv3.conv", cat)
+
+
+# ─── 验证函数 ─────────────────────────────────────────────────────────────
+
+def verify_op(
+    fpga_ops: FPGAOps,
+    layer_name: str,
+    case_name: str,
+    in_hw: tuple[int, int],
+    out_ch_limit: int = 0,
+    out_ch_offset: int = 0,
+    seed: int = 42,
+    verbose: bool = True,
+) -> bool:
+    """验证单个 conv 算子：FPGA 输出与 numpy golden 字节级精确比对。
+
+    比对在 run_case 内部进行（逐 128-bit word 精确比对）：
+      - expected.hex 按 FPGA 写入格式（bytes_to_128_words 反转）存储
+      - run_case 从 VPU_BUF 读原始字节后与 expected.hex 做 word-level 比对
+      - PASS N/N 意味着 N 个 128-bit word 与 numpy golden 字节级完全一致
+
+    返回 True=PASS，False=FAIL。
+    """
+    if fpga_ops.runner is None:
+        raise ValueError("verify_op 需要 FPGA runner，dry-run 下无法验证")
+
+    meta  = conv_meta(_net(), layer_name)
+    h, w  = in_hw
+    in_ch = meta.in_ch
+    feat  = np.random.default_rng(seed).integers(
+        -128, 128, (h, w, in_ch), dtype=np.int16).astype(np.int8)
+
+    if verbose:
+        print(f"验证 {layer_name} [{h}×{w}×{in_ch}] "
+              f"out_ch_limit={out_ch_limit} out_ch_offset={out_ch_offset}")
+
+    # 生成 case 文件并执行（run_case 内部做精确 word-level 比对）
+    run_dir = Path(fpga_ops.runs_base) / case_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    spec: dict = {"name": case_name, "layer": layer_name, "in_hw": (h, w)}
+    if out_ch_limit > 0:
+        spec["out_ch_limit"] = out_ch_limit
+    if out_ch_offset > 0:
+        spec["out_ch_offset"] = out_ch_offset
+
+    from golden_module_tb import (make_conv_pipeline_case, write_inst,
+                                   bytes_to_128_words, write_hex as _wh)
+    rng = np.random.default_rng(seed)
+    md  = make_conv_pipeline_case(str(run_dir), _net(), spec, rng, feat=feat)
+    write_inst(str(run_dir / "inst.hex"), md["fast_inst"])
+    (run_dir / "checks.txt").write_text(
+        f"{case_name} expected.hex {md['dst']:06x} {md['words']} 0\n"
+    )
+    wb_data = md.get("wb", b"")
+    if wb_data:
+        _wh(str(run_dir / "wb_init.hex"), bytes_to_128_words(wb_data))
+        pf = run_dir / "preload.txt"
+        txt = pf.read_text() if pf.exists() else ""
+        if "wb_init.hex" not in txt:
+            with open(pf, "a") as f:
+                f.write(f"wb_init.hex {0x1030_0000_0:016x}\n")
+
+    results = fpga_ops.runner.run_case(run_dir, staging="hbm")
+    ok      = all(r.get("pass", False) for r in results)
+    passed  = sum(r.get("passed", 0) for r in results)
+    total   = sum(r.get("total_words", 0) for r in results)
+    status  = "PASS" if ok else "FAIL"
+    if verbose or not ok:
+        print(f"  {status}  {passed}/{total} words（字节级精确）")
+        for r in results:
+            if r.get("first_mismatch"):
+                print(f"  首个不匹配: {r['first_mismatch']}")
+    return ok

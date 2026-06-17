@@ -1,253 +1,362 @@
-# tests/chip/ - End-to-End FPGA Board Test Suite
+# tests/chip/ — FPGA 板上端到端测试套件
 
-EdgeYOLO-FPGA-lite 板上端到端测试，支持 ResNet18 和 YOLOv5n。
+EdgeYOLO-FPGA-lite 片上测试，覆盖从单算子到完整 YOLOv5n W8A8 网络的渐进验证。
+
+---
 
 ## 目录结构
 
 ```
 tests/chip/
-├── compiler/               # 编译器 (ONNX parsed → ISA binary)
+├── compiler/               # 编译器 (network.json → ISA binary)
 │   ├── compile.py          # 主入口
 │   ├── ir_schema.py        # IR 模式定义
-│   ├── lowering/           # 网络降低 (graph → primitive ops)
-│   │   ├── lower.py        # Conv-only lowering
-│   │   ├── lower_full.py   # 全网络 lowering (Add/Concat/US/MP/Tiling)
+│   ├── lowering/
+│   │   ├── lower.py        # Conv-only lowering (L4 当前路径)
+│   │   ├── lower_full.py   # 全网络 lowering（含 Add/Concat/US/MP/Tiling，规划中）
 │   │   ├── yolov5n_schedule.py  # YOLOv5n 静态调度表
-│   │   ├── memory_plan.py  # OBUF/IBUF 内存规划
-│   │   ├── hw_caps.yaml    # 硬件能力描述
+│   │   ├── memory_plan.py  # VPU_BUF / IBUF / WB 地址规划
+│   │   ├── hw_caps.yaml    # 硬件能力参数（acc_depth_max, num_tiles 等）
 │   │   └── op_rules.py     # 算子合法性检查
-│   ├── codegen/            # ISA 编码
+│   ├── codegen/
 │   │   └── encode_isa.py   # OP → 32-bit words
-│   └── packer/             # 权重/WB 打包
-├── runtime/                # 板上运行时
-│   ├── xdma_driver.py      # XDMA 驱动封装 (Linux)
-│   └── hw_runner.py        # 高层运行器
-├── golden/                 # Golden 参考脚本
-├── unit-tb/                # Windows 片上单元测试
-│   ├── xdma_win.py         # XDMA 驱动 + HBM 流程 runner
-│   ├── hbm_flow.py         # inst 补丁: HBM↔片内 CDMA
-│   ├── gen_data.py         # 调用 module_tb golden 生成测试数据
-│   └── run_unit_test.ipynb # 主 Notebook
-├── step0_single_layer/     # Phase 0: 单层验证
-├── step1_resnet18_w8a8/    # Phase 1: ResNet18 W8A8 全网
-├── step2_yolov5n_w8a8/     # Phase 2: YOLOv5n W8A8 全网
-└── step3_w16a16/           # Phase 3: W16A16 双网络
+│   └── packer/
+│       ├── weights_packer.py  # INT8 权重打包 → IBUF nibble 格式
+│       └── wb_packer.py       # Scale/Bias 打包 → WB 格式
+├── unit-tb/                # Windows 片上单元测试（主要测试目录）
+│   ├── xdma_win.py         # XDMA 驱动封装 + ChipRunnerWin
+│   ├── hbm_flow.py         # inst 补丁: HBM↔片内 CDMA 生成
+│   ├── gen_data.py         # 调用 golden_module_tb.py 生成测试数据
+│   ├── run_unit_test.ipynb # 主交互 Notebook（L1/L2/L3 全覆盖）
+│   ├── _l3_rerun.py        # L3 批量重跑脚本（conv_pipeline + mini_network）
+│   └── ...                 # 其余 _xxx.py 为调试临时脚本
+├── dist/                   # 编译器输出目录（运行时生成）
+│   └── yolov5n_N/          # --max-layers N 的编译结果
+└── step0~step3/            # 未来完整网络验证阶段目录
 ```
 
-## 快速开始
+---
 
-### 0. Windows 片上单元测试（推荐首次使用）
+## 快速开始（复现步骤）
 
-复用 `golden_module_tb.py` 生成向量；**Host 仅通过 XDMA 读写 HBM 与 INST_BRAM**（默认 `staging=hbm`）。
-片内数据经 inst 中的 CDMA 在 HBM ↔ tile_ibuf/VPU_BUF/WB ↔ tile_obuf/VPU_BUF 间搬运。
+### 前提条件
 
+1. FPGA 已烧录 bitstream（`scripts/ip/bd/chip/` 生成）
+2. `xdma_info.exe` 能看到设备（位于 `tests/xdma_exe/`）
+3. conda 环境 `chip_test_env` 已安装
+
+```bash
+# 验证 XDMA 连接
+tests\xdma_exe\xdma_info.exe
+
+# 进入测试目录
+cd tests/chip/unit-tb
+conda activate chip_test_env
 ```
-Host ──XDMA──> HBM (hbm_image.hex + wb @ 0xC0000 + output @ 0x100000)
-Host ──XDMA──> INST_BRAM (inst + HBM CDMA 补丁)
-                    │
-                    ├─ CDMA: HBM → tile_ibuf / VPU_BUF / WB
-                    ├─ DCIM / VPU 计算
-                    └─ CDMA: tile_obuf / VPU_BUF → HBM
-Host <──XDMA── HBM (结果读回, 与 expected.hex 逐 word 比对)
-```
 
-Lab 回退：`staging="preload"` 直写片内 + scatter 读 obuf。
+---
 
-**前提**: FPGA 已烧录 bitstream；`tests/xdma_exe/xdma_info.exe` 可见设备；conda 环境 `chip_test_env`。
+## L1：基础算子验证（全部通过 ✅）
+
+### 运行方式
 
 ```bash
 cd tests/chip/unit-tb
 jupyter notebook run_unit_test.ipynb
 ```
 
-或使用 Python 脚本:
+或直接用脚本：
 
 ```python
+# 单个 case
+import sys; sys.path.insert(0, '.')
 from xdma_win import ChipRunnerWin
 from gen_data import generate_case
 
-# 生成最小 DCIM 测试数据 + 片上执行 + golden 比对
-run_dir = generate_case("dcim_matmul", "dcim_tiny_1x1")
 runner = ChipRunnerWin()
-results = runner.run_case(run_dir)  # staging="hbm" by default
+run_dir = generate_case("dcim_matmul", "dcim_tiny_1x1")
+result = runner.run_case(run_dir, staging="hbm")
+print(result)
 ```
 
-**可用测试 case** (与 module_tb 仿真完全一致):
+### 覆盖的 case（均 preload + hbm 双路径）
 
-| 模块 | 典型 variant | 验证内容 |
-|------|-------------|----------|
-| `dcim_matmul` | dcim_tiny_1x1, conv3_s2_c32_to64 | DCIM 矩阵乘 |
-| `qa` | qa_c16_signed, qa_c64_clip | FP32→INT8 量化 |
-| `dqa` | dqa_c16_small, dqa_c32_mid | INT32→FP32 反量化 |
-| `im2col` | im2col_6x6_s2_c3, im2col_3x3_s1_c128 | im2col 变换 |
-| `mp` | mp_sppf_128_10, mp_resnet_stem | MaxPool |
-| `us` | us_128_10_to20 | Upsample 2x |
+| 模块 | variant | 输入规模 |
+|------|---------|--------|
+| `dcim_matmul` | dcim_tiny_1x1 | 1×1 pixel, 16ch |
+| `dcim_matmul` | conv6_s2_c64_to128 | 6×6 kernel |
+| `dcim_matmul` | conv3_s2_c32_to64 | 3×3, 3 tiles |
+| `qa` | qa_c16_signed, qa_c64_clip, qa_int16_c32_signed | FP32→INT8/16 |
+| `dqa` | dqa_c16_small, dqa_c32_mid, dqa_accum16_c32/c64 | INT32→FP32 |
+| `im2col` | im2col_6x6_s2_c3, im2col_3x3_s1_c128 | 各种 kernel |
+| `mp` | mp_sppf_128_10, mp_resnet_stem | MaxPool 5×5 |
+| `us` | us_128_10_to20 | Upsample 2× |
 | `add` | add_residual_16, add_pan_64 | Residual Add |
-| `conv_pipeline` | pipe_conv3_s2_c32_to64 | 单层 conv 全链路 |
-| `mini_network` | mini_2conv_c16, mini_3conv_residual_c32 | 多层网络 |
+
+批量运行脚本（`_all_cases.py`）：
+
+```bash
+python _all_cases.py
+```
 
 ---
 
-## RTL 问题汇总与修复记录
+## L2：大规模 DCIM 验证（全部通过 ✅）
 
-### 问题 1：URAM 数据 Pipeline 与 Valid 不同步（im2col 数据错误 + AXI Hang）
+针对真实 YOLOv5n 中各层的通道数（16→32→64→128）进行 DCIM 全规格测试。
+
+```python
+# 批量运行 L2（在 tests/chip/unit-tb/ 下）
+import subprocess
+subprocess.run(["python", "_batch_hbm.py"])
+```
+
+批量脚本（`_batch_hbm.py`）覆盖：
+- `dcim_model_0_conv` ~ `dcim_model_7_conv`（对应真实层权重形状）
+- `qa_int16_c32_signed`, `dqa_accum16_c32`, `dqa_accum16_c64`（需要 `quant='int16'`）
+
+---
+
+## L3：端到端 conv_pipeline 和 mini_network（全部通过 ✅）
+
+多算子组合测试：CDMA + DCIM + DQA + QA + ADD 全链路。
+
+```bash
+# 重跑所有 L3 case（tests/chip/unit-tb/ 下）
+python _l3_rerun.py
+```
+
+### L3 测试矩阵
+
+| case | preload | hbm | 说明 |
+|------|---------|-----|------|
+| `pipe_conv1_c16_to16` | ✅ | ✅ | 单层 conv + DQA + QA |
+| `pipe_conv3_s2_c32_to64` | ✅ | ✅ | 3×3 stride-2 |
+| `pipe_conv3_s2_c64_to128` | ✅ | ✅ | 多 tile |
+| `mini_2conv_c16` | ✅ | ✅ | 两层 conv 串联 |
+| `mini_3conv_residual_c32` | ✅ | ✅ | 两层 + residual add |
+
+### L3 `_l3_rerun.py` 关键代码
+
+```python
+# tests/chip/unit-tb/_l3_rerun.py
+import sys; sys.path.insert(0, '.')
+from xdma_win import ChipRunnerWin
+from gen_data import generate_case
+
+runner = ChipRunnerWin()
+
+CONV_PIPELINE_CASES = [
+    ("conv_pipeline", "pipe_conv1_c16_to16"),
+    ("conv_pipeline", "pipe_conv3_s2_c32_to64"),
+    ("conv_pipeline", "pipe_conv3_s2_c64_to128"),
+]
+MINI_NETWORK_CASES = [
+    ("mini_network", "mini_2conv_c16"),
+    ("mini_network", "mini_3conv_residual_c32"),
+]
+
+for mod, var in CONV_PIPELINE_CASES + MINI_NETWORK_CASES:
+    run_dir = generate_case(mod, var)
+    for staging in ["preload", "hbm"]:
+        r = runner.run_case(run_dir, staging=staging)
+        status = "PASS" if r["pass"] else f"FAIL {r['pass_words']}/{r['total_words']}"
+        print(f"  {var:35s} {staging:8s}: {status}")
+```
+
+---
+
+## Test Code 历史 Bug 修复记录
+
+以下 bug 已全部修复，请勿回滚：
+
+| # | 文件 | Bug | 修复方法 |
+|---|------|-----|---------|
+| 1 | `xdma_win.py` | `active_tiles` 超过 `DCIM_NUM_TILES`，CDMA 访问未映射地址 → IP 锁死 | `min(active_tiles, DCIM_NUM_TILES)` |
+| 2 | `hbm_flow.py` | `src1.hex` 与 `src0.hex` 用同一 HBM offset，`add` 算子 hbm 输出全零 | `src1.hex` → `HBM_OFF_INPUT1` |
+| 3 | `hbm_flow.py` | `build_hbm_input_cdma` 对已在 HBM 空间的 preload 目标生成重复 CDMA | `dst < TILE_IBUF_BASE` 时 `continue` |
+| 4 | `hbm_flow.py` | VPU_BUF drain CDMA 在 URAM pipeline 未完成时读取 → 全零 | VPU_BUF 路径不追加 drain，主机直读 VPU_BUF |
+| 5 | `hbm_flow.py` | `nbytes=0` 的 CDMA 指令触发 Xilinx AXI CDMA IP 锁死 | 过滤 `nbytes == 0` |
+
+---
+
+## 地址映射（chip-lite BD）
+
+| 段 | 地址 | 大小 | 访问方式 |
+|----|------|------|---------|
+| HBM | `0x0_0000_0000` | 4GB | Host XDMA 读写 |
+| tile_ibuf[t] | `0x1_0000_0000 + t×0x80000` | 512KB/tile | CDMA only |
+| tile_obuf[t] | `0x1_0100_0000 + t×0x40000` | 256KB/tile | CDMA only |
+| VPU_BUF | `0x1_0200_0000` | 8MB | Host + CDMA |
+| VPU WB | `0x1_0300_0000` | 32KB | CDMA only |
+| INST_BRAM | `0x1_0400_0000` | 128KB | Host XDMA 读写 |
+| VPU_AXI_Regs | `0x1_0500_0000` | 4KB | Host 控制 |
+
+### VPU_BUF 内存布局（L4 逐层执行）
+
+每层可独占全部 8MB，ping/pong 各 4MB 交替：
+
+```
+偏移          大小    用途
+0x000000     4MB    输入激活（偶数层） / 输出激活（奇数层）
+0x400000     4MB    输出激活（偶数层） / 输入激活（奇数层）
+0x600000     2MB    skip 连接（residual save）
+```
+
+---
+
+## 已修复的 RTL 问题
+
+### 问题 1：URAM 数据 Pipeline 与 Valid 不同步
 
 | 属性 | 内容 |
 |------|------|
 | **文件** | `rtl/common/uram_tdp_bytewrite.v` |
-| **影响** | `vpu_buf`, `tile_ibuf`, `tile_obuf`（所有使用该模块的 buffer） |
-| **症状** | im2col 输出 bit-flip（1-2 bit 翻转），im2col 执行后 VPU_BUF AXI 端口间歇性锁死 |
-| **严重程度** | Critical —— im2col 100% 不通过 |
-
-**动机**：im2col 单元测试始终 FAIL（234/256 words pass），且有约 50% 概率在执行后导致整个 FPGA AXI 总线锁死（需要硬件重置）。
-
-**根因分析**：
-
-`uram_tdp_bytewrite.v` 中数据输出 pipeline 的使能 shift register `men_pipe_a` 使用 `mem_ena`（读写均推入 1）作为推进条件。但在 No-Change 模式下，写操作时 `memrega` **不更新**。当 im2col 在同一 URAM 端口快速交替执行 WRITE → READ 时：
-
-1. WRITE 操作在 `men_pipe_a` 中推入一个 1
-2. 这个"脏 1"让 `dat_pipe_a` 在后续级传播旧的 `memrega` 值
-3. 真正 READ 的新数据与"脏数据"在 pipeline 中混合
-4. 最终 `douta` 在 `douta_valid` assert 时输出了部分旧数据
-
-而外部的 `douta_valid`（在 `vpu_buf.v`/`tile_ibuf.v`/`tile_obuf.v` 中）使用 `mem_ena & ~|wea`（仅读时推 1），二者不同步。
-
-**验证证据**：
-- im2col 错误位置在多次运行中**完全确定性**（同样的 word/byte 位置）
-- 错误是 1-2 bit 翻转（bit5/bit7 最多），不是整字错误
-- 错误集中在 oh=3~5（pipeline 累积效应在中后期放大）
-- `qa`/`dqa`（仅连续读或连续写 VPU_BUF）通过，`im2col`（频繁交替读写）失败
-- 源/目标 URAM word 地址无重叠（排除 RAW hazard）
+| **症状** | im2col 输出 bit-flip；im2col 后偶发 AXI 总线锁死 |
+| **严重程度** | Critical |
 
 **修复**：
-
 ```verilog
-// 修改前（line 68）：
+// 修改前：
 men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};
-
 // 修改后：
 wire rd_en_a = mem_ena & ~(|wea);
 men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
 ```
 
-Port B 同理。修改后 `men_pipe_a` 与 `douta_valid` 的推入条件完全一致，写操作不再污染数据 pipeline。
-
-**URAM 推断安全性**：Vivado URAM 推断基于 `(* ram_style = "ultra" *)` 和内存阵列的 No-Change 读写编码，不依赖输出 pipeline 使能逻辑。此修改不影响 URAM 映射。
-
----
-
-### 问题 2：CDMA_COOLDOWN_CYCLES 未定义（多 Tile drain HBM 失败）
+### 问题 2：CDMA_COOLDOWN_CYCLES 未定义
 
 | 属性 | 内容 |
 |------|------|
 | **文件** | `rtl/vpu/CDMA_Controller.sv`, `rtl/chip/chip_defines.vh` |
-| **影响** | conv3 等多 Tile DCIM 在 `staging="hbm"` 路径下 drain 到 HBM 时数据错误 |
-| **症状** | tile_obuf → HBM 的背靠背 CDMA 操作中，后续传输覆盖/混入前一传输的残留数据 |
-| **严重程度** | High —— 多 Tile hbm 路径不通过 |
+| **症状** | 多 tile drain HBM 时背靠背 CDMA 数据竞争 |
 
-**动机**：dcim_matmul conv3（3 Tile 活跃）在 `staging="hbm"` 模式下始终 FAIL，表现为 obuf drain 到 HBM 的数据有数个 word 错位。`staging="preload"` 通过。
+**修复**：在 `chip_defines.vh` 中定义 `` `define CDMA_COOLDOWN_CYCLES 2000 ``
 
-**根因**：`CDMA_Controller.sv` 中引用了 `` `CDMA_COOLDOWN_CYCLES `` 宏来控制两次 CDMA 传输之间的 AXI 写事务隔离等待周期。但该宏在模块内部**无默认值**，若 include 顺序问题导致未定义则为 0，等同于无冷却——连续 CDMA 的 AXI 写事务在 SmartConnect 中产生竞争。
-
-**修复**：
-1. 在 `rtl/chip/chip_defines.vh` 中定义 `` `define CDMA_COOLDOWN_CYCLES 2000 ``（保守值，约 6.7μs @ 300MHz）
-2. 在 `CDMA_Controller.sv` 头部加 `` `ifndef/`define `` 兜底
-
----
-
-### 问题 3：VPU `config_ready` 信号过早 assert（dqa 偶发 mismatch）
+### 问题 3：VPU `config_ready` 信号过早 assert
 
 | 属性 | 内容 |
 |------|------|
 | **文件** | `rtl/vpu/Global_VPU.v`, `rtl/chip/chip_defines.vh` |
-| **影响** | dqa/qa 通过 HBM drain 路径读出时，个别 word（1-4 个）与 expected 不一致 |
-| **症状** | dqa_c16_small 在重复运行中约 30% 出现 1-4 word mismatch |
-| **严重程度** | Medium —— 偶发，不影响 preload path |
+| **症状** | dqa/qa 偶发 1-4 word mismatch |
 
-**动机**：dqa 测试在大部分情况下 PASS，但在 HBM drain 路径下偶尔 FAIL。
-
-**根因**：`Global_VPU.v` 的 `config_ready` 在 VPU 子单元 `xxx_unit_ready` 全部 assert 时拉高，允许下一条 ISA 指令（通常是 drain CDMA）开始执行。但 VPU 子单元（如 dqa）的 ready 在内部计算完成时 assert，此时最后的写操作可能仍在 URAM write pipeline 中（1 级 Global_VPU pipeline + 1 拍 URAM 写入 = 2 拍）。若 drain CDMA 立即读取刚写入的 VPU_BUF 区域，可能读到旧值。
-
-**修复**：在 `Global_VPU.v` 中对 `config_ready` 加 `VPU_READY_DELAY_CYCLES = 12` 拍 shift register 延迟（定义在 `chip_defines.vh`）。确保 VPU 最后一笔写操作完全写入 URAM `mem[]` 后，decoder 才允许下一条指令执行。
+**修复**：`config_ready` 加 `VPU_READY_DELAY_CYCLES = 12` 拍延迟
 
 ---
 
-### 问题 4：WB CDMA 写入后立即读取导致数据未就绪
+## L4：YOLOv5n 完整网络渐进验证（进行中）
 
-| 属性 | 内容 |
-|------|------|
-| **文件** | `rtl/vpu/CDMA_Controller.sv`, `rtl/chip/chip_defines.vh` |
-| **影响** | qa_c16_signed 在 hbm path 下个别 word mismatch |
-| **症状** | Scale/Bias 通过 CDMA 写入 WB BRAM 后，qa 立即读取时部分数据未就绪 |
-| **严重程度** | Medium |
+### 当前进展（2026-06-17 更新）
 
-**修复**：已被问题 2 的 `CDMA_COOLDOWN_CYCLES = 2000` 覆盖。CDMA 完成后等 2000 周期再 assert `cdma_config_ready`，远超 BRAM 1 拍写延迟。
+已完成 YOLOv5n **逐层算子 FPGA 测试**（`_l4_model0_test.py`），结果如下：
+
+| 层 | 参数 | 小图尺寸 | FPGA 结果 |
+|----|------|---------|-----------|
+| model.0.conv | k=6×6, stride=2, in_ch=3, 3→16ch | 32×32 in | ✅ **PASS** |
+| model.1.conv | k=3×3, stride=2, in_ch=16, 16→32ch | 16×16 in | ✅ **PASS** |
+| model.2.cv1.conv | k=1×1, stride=1, in_ch=32, 32→16ch | 16×16 in | ✅ **PASS** |
+| model.2.cv2.conv | k=1×1, stride=1, in_ch=32, 32→16ch | 16×16 in | ✅ **PASS** |
+
+#### 修复的测试代码 Bug（#6）：conv_pipeline in_ch<16 时 CDMA 搬运量不足
+
+**现象**：model.0.conv（in_ch=3）conv_pipeline 测试 FAIL，前 2 行正确后续全错
+
+**根因**：`golden_module_tb.py` 的 `make_conv_pipeline_case` 中：
+- `src0.hex` 按 `int8_hwc_words(feat)` 生成（**16B/pixel 对齐格式**，总 16384B）
+- 但 CDMA 指令搬运量用 `src_bytes = h*w*in_ch = 3072B`（**紧排大小**）
+- 导致 VPU_BUF 中只有前 3KB 有数据，im2col_unit 从第 3 行起读到零/残留值
+
+**修复**（`golden_module_tb.py` line 1827）：
+```python
+# 修复前（错误）
+src_bytes = h * w * meta.in_ch
+
+# 修复后（正确）
+src_bytes_aligned = h * w * (((meta.in_ch + 15) // 16) * 16)
+# CDMA 搬运量改为对齐大小，与 int8_hwc_words(feat) 生成的数据量一致
+```
+
+**影响范围**：所有 `in_ch % 16 != 0` 的层（YOLOv5n 中只有 model.0.conv 的 in_ch=3）
+
+### 硬件约束
+
+| 约束 | 值 | 说明 |
+|------|-----|------|
+| 最大单 pass cout | 128 | `DCIM_INT8_OUT_CH_PER_TILE=16` × `NUM_TILES=8` |
+| 最大 acc_depth | 80 | `DCIM_ACC_MAX=80` |
+| VPU_BUF 半区 | 4MB | 最大单层激活 `160×160×128×4B = 13MB` → **需 Tiling** |
+| im2col_unit 限制 | in_ch ≥ 1 稳定 | RTL 正确，支持任意 in_ch（通过 16B/pixel 对齐格式存储）|
+
+### L4 渐进测试计划
+
+```
+L4-A（已验证）：model.0~2（stem + C3 block，含 in_ch=3 / stride=2）→ PASS ✅
+L4-B（已验证 ✅）：cout-tiling  out_ch=256 层分 2 pass × 128ch 执行
+  model.7.conv → tile0 PASS 32/32 words，tile1 PASS 32/32 words
+  字节级精确：128-bit word level 完全一致（run_case 内 expected.hex vs VPU_BUF）
+  实现方式：golden_module_tb.py out_ch_offset + ops.py FPGAOps.conv_tiled()
+L4-C（FPGA 执行大部分 PASS ✅）：57 层全 conv 算子链式执行
+  _l4_full_network_test.py: run_yolov5n_backbone_neck()
+  Add / Concat / MaxPool / Upsample 在 host numpy 执行
+  FPGA 执行所有 DCIM+im2col 算子
+  已修复 BUG-1：DQA FP32 scratch 空间分配不足（acc=1 out_ch=in_ch 时溢出 dcim 区）
+    → alloc_flat: im2col_alloc = max(im2col_bytes, dqa_fp32_bytes)
+  已修复 BUG-2：im2col golden 函数 pad 参数错误（H/W 方向共用 pad_h0，不支持非对称 pad）
+    → im2col / im2col_int16 改为分别使用 meta.pad_h0 / meta.pad_w0
+  已验证 OH-tiling（L4-D）：model.4/6/8/17/20 等含大图 conv.m.cv2 层（acc=5, 40×40 等）
+    全部 PASS（字节级精确），30×30 / 40×40 输入均通过 FPGA 验证 ✓
+  当前状态（FPGA 完整网络测试）：
+    model.2 及之后所有层（~55 层）：全部 PASS ✓（含 cout-tiling、OH-tiling）
+    model.0.conv（320×320→160×160）：FAIL（级联失败，源头 IBUF overflow）
+    model.1.conv（160×160→80×80）：FAIL（依赖 model.0 输出）
+    model.3.conv（下采样后 80×80→40×40）：FAIL 11/6400（依赖 model.1 输出）
+L4-D（已实现 ✅）：OH-tiling，大 feature map（IBUF pixel 数超限时分 tile 执行）
+  实现：golden_module_tb.py make_conv_pipeline_case 支持 oh_tile_start/oh_tile_end 参数
+  FPGA 测试：30×30 / 40×40 × acc=5 层 PASS 100%
+  ops.py FPGAOps.conv_oh_tiled()：自动计算 ibuf max_pixels，拆分 OH tile 执行
+  C3Block 自动选择 OH-tiling（acc_depth 超限时）
+  待完成：model.0/1（320×320/160×160 输入）需要更大规模 OH-tiling（~40 tiles）
+```
+
+### 快速运行方式
+
+```bash
+cd tests/chip/unit-tb
+
+# 1. 验证所有 YOLOv5n conv 层（小图 dry-run，不上 FPGA）
+python _gen_all_cases.py
+
+# 2. cout-tiling 单算子验证（model.7.conv 256ch, 2 pass）
+python _cout_tiling_test.py --fpga    # FPGA 执行，PASS 32/32 words（字节级精确）
+
+# 3. 完整网络渐进测试（stop-at 控制层数）
+python _l4_full_network_test.py --dry-run --stop-at model.5.conv  # numpy golden
+python _l4_full_network_test.py --stop-at model.5.conv            # FPGA 执行
+
+# 4. 算子库直接调用（链式）
+python -c "
+from ops import FPGAOps, HostOps, verify_op
+from xdma_win import ChipRunnerWin
+runner = ChipRunnerWin()
+fpga = FPGAOps(runner)
+verify_op(fpga, 'model.0.conv', 'test_m0', (4,4))  # PASS 检验
+"
+
+# 5. Jupyter 交互测试
+jupyter notebook run_unit_test.ipynb
+# → Cell 9: cout-tiling 验证
+# → Cell 10: 完整网络渐进测试
+```
 
 ---
 
-### 测试现状总结
+## 测试现状总结
 
-| 测试 Case | preload | hbm | 状态 |
-|-----------|---------|-----|------|
-| dcim_matmul/dcim_tiny_1x1 | ✅ PASS | ✅ PASS | OK |
-| dcim_matmul/conv6 (单Tile) | ✅ PASS | ✅ PASS | OK |
-| dcim_matmul/conv3 (3Tile) | ✅ PASS | ❌ FAIL | 待修复：问题 2（CDMA_COOLDOWN） |
-| qa/qa_c16_signed | ✅ PASS | ⚠️ 偶发 | 问题 4 + NOP 缓解后稳定 |
-| dqa/dqa_c16_small | ✅ PASS | ⚠️ 偶发 | 问题 3 + NOP 缓解后大幅改善 |
-| im2col/im2col_6x6_s2_c3 | ❌ FAIL | ❌ FAIL | 待修复：问题 1（URAM pipeline） |
-
----
-
-### 待下次综合验证的 RTL 修改清单
-
-| # | 文件 | 修改内容 | 状态 |
-|---|------|---------|------|
-| 1 | `rtl/common/uram_tdp_bytewrite.v` | `men_pipe_a/b` 推入条件：`mem_ena` → `mem_ena & ~\|wea` | ✅ 已改 |
-| 2 | `rtl/vpu/CDMA_Controller.sv` | 加 `ifndef CDMA_COOLDOWN_CYCLES` 默认 2000 | ✅ 已改 |
-| 3 | `rtl/chip/chip_defines.vh` | 定义 `CDMA_COOLDOWN_CYCLES 2000` | ✅ 已有 |
-| 4 | `rtl/vpu/Global_VPU.v` | `config_ready` 加 12 拍 delay shift register | ✅ 已改 |
-| 5 | `rtl/chip/chip_defines.vh` | 定义 `VPU_READY_DELAY_CYCLES 12` | ✅ 已改 |
-
-综合后 `hbm_flow.py` 中的 `_VPU_SETTLE_NOPS` 和 `_WB_SETTLE_NOPS` 可移除（RTL 层面已保证时序安全）。
-
----
-
-## 支持的算子
-
-| 算子 | RTL 单元 | 编译器支持 | 状态 |
-|------|----------|-----------|------|
-| Conv | im2col + CDMA + DCIM + DQA | ✅ | 仿真 PASS |
-| Add (residual) | ad_unit | ✅ | 仿真 PASS |
-| Concat | OP_CDMA_STRIDE | ✅ | 仿真 PASS |
-| Upsample 2x | us_unit_fixed | ✅ | 仿真 PASS |
-| MaxPool 5x5 s1 | mp_unit_fixed | ✅ | 仿真 PASS |
-| QA (FP32→INT8/16) | qa_unit | ✅ | 仿真 PASS |
-| DQA (INT32→FP32) | dqa_relu_unit | ✅ | 仿真 PASS |
-
-## 硬件限制与解决方案
-
-- **cout > 128**: 自动 cout tiling（多次 DCIM pass，每次 8 tiles）
-- **MaxPool 3x3 s2**: host 预处理（mp_unit_fixed 仅支持 5x5 s1 p2）
-- **Detect Head**: host 后处理（model.24 的 3 个 1x1 Conv + reshape + sigmoid）
-- **AvgPool + FC**: host 后处理
-
-## 地址映射 (chip-lite BD, 来自 scripts/ip/bd/lite/address.tcl)
-
-| 段 | 地址 | 大小 | Host XDMA | 说明 |
-|----|------|------|-----------|------|
-| HBM | 0x0_0000_0000 | 4GB | **读写** | 输入/输出 staging |
-| tile_ibuf[t] | 0x1_0000_0000 + t×0x80000 | 512KB/tile | CDMA only | DCIM 输入 |
-| tile_obuf[t] | 0x1_0100_0000 + t×0x40000 | 256KB/tile | CDMA only | DCIM 输出 |
-| VPU_BUF | 0x1_0200_0000 | 8MB | CDMA only | VPU 特征图 |
-| VPU WB | 0x1_0300_0000 | 32KB | CDMA only | Scale/Bias |
-| INST_BRAM | 0x1_0400_0000 | 128KB | **读写** | 指令 |
-| VPU_AXI_Regs | 0x1_0500_0000 | 4KB | 控制* | Decoder 启停 |
-
-### VPU_AXI_Regs 寄存器偏移
-
-| 偏移 | 名称 | 方向 | 说明 |
-|------|------|------|------|
-| 0x04 | STATUS | R | [0] VPU ready |
-| 0x38 | DECODER_CTRL | W | [0] 写 1 启动 decoder (脉冲) |
-| 0x3C | INST_COUNT | RW | 指令总数 (32-bit words) |
-| 0x40 | DECODER_STATUS | R | [0] busy, [1] done, [31] error |
+| 层级 | 覆盖内容 | preload | hbm | 状态 |
+|------|---------|---------|-----|------|
+| L1 基础算子 | dcim_matmul × 8, qa, dqa, im2col, mp, us, add | ✅ | ✅ | **PASS** |
+| L2 大规模 DCIM | dcim_model_0~7, qa_int16, dqa_accum16 | ✅ | ✅ | **PASS** |
+| L3 端到端 | conv_pipeline × 3, mini_network × 2 | ✅ | ✅ | **PASS** |
+| L4-A model.0~2 | model.0/1/2.cv1/cv2（含 in_ch=3 stem 层）| ✅ | ✅ | **PASS** |
+| L4-B cout-tiling | model.7.conv (128→256, 2 pass × 128ch) | — | ✅ | **PASS** |
+| L4-C 全网络 | 所有 57 个 conv 层 + Concat/Add/US/MP | — | dry-run ✅ | 进行中 |

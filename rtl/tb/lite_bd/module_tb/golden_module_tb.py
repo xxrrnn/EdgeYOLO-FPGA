@@ -246,6 +246,76 @@ MODULE_CASES = {
         {'name': 'pipe_conv1_c16_to16',      'layer': 'model.2.m.0.cv1.conv', 'in_hw': (4, 4)},  # CH_OUT=16 → eff_ch=32
         {'name': 'pipe_conv3_s2_c32_to64',   'layer': 'model.3.conv',         'in_hw': (8, 8)},
         {'name': 'pipe_conv1_c512_to64_tilepass', 'layer': 'model.9.cv2.conv', 'in_hw': (4, 4), 'out_ch_limit': 64},
+        # ----- L4 YOLOv5n 真实层（小图快速验证，地址计算 100% 对齐真实权重）-----
+        # model.0~2（stem + C3 block）
+        {'name': 'pipe_model0_conv_32x32',   'layer': 'model.0.conv',          'in_hw': (32, 32)},  # 3→16, k=6 s=2
+        {'name': 'pipe_model1_conv_16x16',   'layer': 'model.1.conv',          'in_hw': (16, 16)},  # 16→32, k=3 s=2
+        {'name': 'pipe_model2_cv1_16x16',    'layer': 'model.2.cv1.conv',      'in_hw': (16, 16)},  # 32→16, k=1
+        {'name': 'pipe_model2_cv2_16x16',    'layer': 'model.2.cv2.conv',      'in_hw': (16, 16)},  # 32→16, k=1
+        {'name': 'pipe_model2_m0cv1_16x16',  'layer': 'model.2.m.0.cv1.conv', 'in_hw': (16, 16)},  # 16→16, k=1
+        {'name': 'pipe_model2_m0cv2_16x16',  'layer': 'model.2.m.0.cv2.conv', 'in_hw': (16, 16)},  # 16→16, k=3
+        {'name': 'pipe_model2_cv3_16x16',    'layer': 'model.2.cv3.conv',      'in_hw': (16, 16)},  # 32→32, k=1
+        # model.3~4（DownSample + C3）
+        {'name': 'pipe_model3_conv_16x16',   'layer': 'model.3.conv',          'in_hw': (16, 16)},  # 32→64, k=3 s=2
+        {'name': 'pipe_model4_cv1_8x8',      'layer': 'model.4.cv1.conv',      'in_hw': (8, 8)},    # 64→32, k=1
+        {'name': 'pipe_model4_cv2_8x8',      'layer': 'model.4.cv2.conv',      'in_hw': (8, 8)},    # 64→32, k=1
+        {'name': 'pipe_model4_m0cv1_8x8',    'layer': 'model.4.m.0.cv1.conv', 'in_hw': (8, 8)},    # 32→32, k=1
+        {'name': 'pipe_model4_m0cv2_8x8',    'layer': 'model.4.m.0.cv2.conv', 'in_hw': (8, 8)},    # 32→32, k=3
+        {'name': 'pipe_model4_m1cv1_8x8',    'layer': 'model.4.m.1.cv1.conv', 'in_hw': (8, 8)},    # 32→32, k=1
+        {'name': 'pipe_model4_m1cv2_8x8',    'layer': 'model.4.m.1.cv2.conv', 'in_hw': (8, 8)},    # 32→32, k=3
+        {'name': 'pipe_model4_cv3_8x8',      'layer': 'model.4.cv3.conv',      'in_hw': (8, 8)},    # 64→64, k=1
+        # model.5~6（DownSample + C3）
+        {'name': 'pipe_model5_conv_8x8',     'layer': 'model.5.conv',          'in_hw': (8, 8)},    # 64→128, k=3 s=2
+        {'name': 'pipe_model6_cv1_4x4',      'layer': 'model.6.cv1.conv',      'in_hw': (4, 4)},    # 128→64, k=1
+        {'name': 'pipe_model6_cv2_4x4',      'layer': 'model.6.cv2.conv',      'in_hw': (4, 4)},    # 128→64, k=1
+        {'name': 'pipe_model6_m0cv1_4x4',    'layer': 'model.6.m.0.cv1.conv', 'in_hw': (4, 4)},    # 64→64, k=1
+        {'name': 'pipe_model6_m0cv2_4x4',    'layer': 'model.6.m.0.cv2.conv', 'in_hw': (4, 4)},    # 64→64, k=3
+        {'name': 'pipe_model6_m1cv1_4x4',    'layer': 'model.6.m.1.cv1.conv', 'in_hw': (4, 4)},
+        {'name': 'pipe_model6_m1cv2_4x4',    'layer': 'model.6.m.1.cv2.conv', 'in_hw': (4, 4)},
+        {'name': 'pipe_model6_m2cv1_4x4',    'layer': 'model.6.m.2.cv1.conv', 'in_hw': (4, 4)},
+        {'name': 'pipe_model6_m2cv2_4x4',    'layer': 'model.6.m.2.cv2.conv', 'in_hw': (4, 4)},
+        {'name': 'pipe_model6_cv3_4x4',      'layer': 'model.6.cv3.conv',      'in_hw': (4, 4)},    # 128→128, k=1
+        # model.7~9（DownSample + C3 with out_ch_limit 因 256ch 需多 pass）
+        {'name': 'pipe_model7_conv_4x4',     'layer': 'model.7.conv',          'in_hw': (4, 4), 'out_ch_limit': 128},  # 128→256(→128), k=3 s=2
+        # cout-tiling 验证：两个 pass 各出 128ch，合并即完整 256ch
+        {'name': 'pipe_model7_tile0',         'layer': 'model.7.conv',          'in_hw': (4, 4), 'out_ch_limit': 128, 'out_ch_offset': 0},
+        {'name': 'pipe_model7_tile1',         'layer': 'model.7.conv',          'in_hw': (4, 4), 'out_ch_limit': 128, 'out_ch_offset': 128},
+        {'name': 'pipe_model8_cv1_4x4',      'layer': 'model.8.cv1.conv',      'in_hw': (4, 4), 'out_ch_limit': 128},
+        {'name': 'pipe_model8_cv2_4x4',      'layer': 'model.8.cv2.conv',      'in_hw': (4, 4), 'out_ch_limit': 128},
+        {'name': 'pipe_model8_m0cv1_4x4',    'layer': 'model.8.m.0.cv1.conv', 'in_hw': (4, 4)},
+        {'name': 'pipe_model8_m0cv2_4x4',    'layer': 'model.8.m.0.cv2.conv', 'in_hw': (4, 4)},
+        {'name': 'pipe_model8_cv3_4x4',      'layer': 'model.8.cv3.conv',      'in_hw': (4, 4), 'out_ch_limit': 128},
+        {'name': 'pipe_model9_cv1_4x4',      'layer': 'model.9.cv1.conv',      'in_hw': (4, 4), 'out_ch_limit': 128},
+        {'name': 'pipe_model9_cv2_4x4',      'layer': 'model.9.cv2.conv',      'in_hw': (4, 4), 'out_ch_limit': 64},
+        {'name': 'pipe_model10_conv_4x4',    'layer': 'model.10.conv',         'in_hw': (4, 4), 'out_ch_limit': 128},
+        # model.13~24（Neck：C3 + FPN + PAN）
+        {'name': 'pipe_model13_cv1_4x4',     'layer': 'model.13.cv1.conv',     'in_hw': (4, 4)},
+        {'name': 'pipe_model13_cv2_4x4',     'layer': 'model.13.cv2.conv',     'in_hw': (4, 4)},
+        {'name': 'pipe_model13_m0cv1_4x4',   'layer': 'model.13.m.0.cv1.conv','in_hw': (4, 4)},
+        {'name': 'pipe_model13_m0cv2_4x4',   'layer': 'model.13.m.0.cv2.conv','in_hw': (4, 4)},
+        {'name': 'pipe_model13_cv3_4x4',     'layer': 'model.13.cv3.conv',     'in_hw': (4, 4)},
+        {'name': 'pipe_model14_conv_4x4',    'layer': 'model.14.conv',         'in_hw': (4, 4)},
+        {'name': 'pipe_model17_cv1_4x4',     'layer': 'model.17.cv1.conv',     'in_hw': (4, 4)},
+        {'name': 'pipe_model17_cv2_4x4',     'layer': 'model.17.cv2.conv',     'in_hw': (4, 4)},
+        {'name': 'pipe_model17_m0cv1_4x4',   'layer': 'model.17.m.0.cv1.conv','in_hw': (4, 4)},
+        {'name': 'pipe_model17_m0cv2_4x4',   'layer': 'model.17.m.0.cv2.conv','in_hw': (4, 4)},
+        {'name': 'pipe_model17_cv3_4x4',     'layer': 'model.17.cv3.conv',     'in_hw': (4, 4)},
+        {'name': 'pipe_model18_conv_4x4',    'layer': 'model.18.conv',         'in_hw': (4, 4)},
+        {'name': 'pipe_model20_cv1_3x3',     'layer': 'model.20.cv1.conv',     'in_hw': (3, 3)},
+        {'name': 'pipe_model20_cv2_3x3',     'layer': 'model.20.cv2.conv',     'in_hw': (3, 3)},
+        {'name': 'pipe_model20_m0cv1_3x3',   'layer': 'model.20.m.0.cv1.conv','in_hw': (3, 3)},
+        {'name': 'pipe_model20_m0cv2_3x3',   'layer': 'model.20.m.0.cv2.conv','in_hw': (3, 3)},
+        {'name': 'pipe_model20_cv3_3x3',     'layer': 'model.20.cv3.conv',     'in_hw': (3, 3)},
+        {'name': 'pipe_model21_conv_3x3',    'layer': 'model.21.conv',         'in_hw': (3, 3), 'out_ch_limit': 128},
+        # model.23~24（Head）
+        {'name': 'pipe_model23_cv1_3x3',     'layer': 'model.23.cv1.conv',     'in_hw': (3, 3), 'out_ch_limit': 128},
+        {'name': 'pipe_model23_cv2_3x3',     'layer': 'model.23.cv2.conv',     'in_hw': (3, 3), 'out_ch_limit': 128},
+        {'name': 'pipe_model23_m0cv1_3x3',   'layer': 'model.23.m.0.cv1.conv','in_hw': (3, 3)},
+        {'name': 'pipe_model23_m0cv2_3x3',   'layer': 'model.23.m.0.cv2.conv','in_hw': (3, 3)},
+        {'name': 'pipe_model23_cv3_3x3',     'layer': 'model.23.cv3.conv',     'in_hw': (3, 3), 'out_ch_limit': 128},
+        # 全尺寸（秒级生成 + 数 MB 传输，按需运行）
+        {'name': 'pipe_model0_conv_full',    'layer': 'model.0.conv',          'in_hw': (320, 320)},
+        {'name': 'pipe_model1_conv_full',    'layer': 'model.1.conv',          'in_hw': (160, 160)},
     ],
     'concat_by_cdma': [
         {'name': 'concat_2src_c64_c64_hw8x8', 'hw': (8, 8), 'channels': [64, 64]},
@@ -1072,9 +1142,9 @@ def im2col(feat: np.ndarray, meta: ConvMeta, acc_override: int = None) -> np.nda
             dst = oy * ow + ox
             k = 0
             for ky in range(meta.kh):
-                iy = oy * meta.stride + ky - meta.pad
+                iy = oy * meta.stride_h + ky - meta.pad_h0
                 for kx in range(meta.kw):
-                    ix = ox * meta.stride + kx - meta.pad
+                    ix = ox * meta.stride_w + kx - meta.pad_w0
                     for ch in range(c):
                         if 0 <= iy < h and 0 <= ix < w:
                             out[dst, k] = feat[iy, ix, ch]
@@ -1098,9 +1168,9 @@ def im2col_int16(feat: np.ndarray, meta: ConvMeta, acc_override: int = None) -> 
             dst = oy * ow + ox
             k = 0
             for ky in range(meta.kh):
-                iy = oy * meta.stride + ky - meta.pad
+                iy = oy * meta.stride_h + ky - meta.pad_h0
                 for kx in range(meta.kw):
-                    ix = ox * meta.stride + kx - meta.pad
+                    ix = ox * meta.stride_w + kx - meta.pad_w0
                     for ch in range(c):
                         if 0 <= iy < h and 0 <= ix < w:
                             out[dst, k] = int(feat[iy, ix, ch])  # sign-extend int8→int16
@@ -1715,22 +1785,79 @@ def make_im2col_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.ran
             'shape': f'{h}x{w}x{meta.in_ch} k={meta.kh} s={meta.stride} p={meta.pad} -> rows={oh * ow} acc_depth={meta.acc_depth}'}
 
 
-def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random.Generator) -> dict:
+def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
+                             rng: np.random.Generator,
+                             feat: np.ndarray = None) -> dict:
+    """生成 conv_pipeline case。
+
+    feat: 可选，指定输入激活（INT8 NHWC），用于链式测试。为 None 时生成随机数据。
+    oh_tile_start / oh_tile_end: 可选，OH-tiling 时指定本 tile 对应的输出行范围 [start, end)。
+      输入 feature 会自动裁剪到对应的输入行范围（含 padding overlap）。
+    """
     meta = conv_meta(net, spec['layer'])
     h, w = spec['in_hw']
-    oh, ow = out_hw(h, w, meta)
+    oh_full, ow = out_hw(h, w, meta)
+
+    # OH-tiling 支持
+    oh_tile_start: int = int(spec.get('oh_tile_start', 0))
+    oh_tile_end: int   = int(spec.get('oh_tile_end', oh_full))
+    oh = oh_tile_end - oh_tile_start  # 本 tile 的输出行数
     use_int16: bool = spec.get('int16', False)
     npz = load_layer_npz_checked(meta, net, require_activation=True)
     weights = npz['weight_int8']
     scale = npz['dqa_scale'].astype(np.float32)
     bias = npz['dqa_bias'].astype(np.float32)
+    out_ch_offset = int(spec.get('out_ch_offset', 0))  # cout-tiling: 起始输出通道
     if 'out_ch_limit' in spec:
-        meta.out_ch = min(meta.out_ch, int(spec['out_ch_limit']))
-        weights = weights[:meta.out_ch]
-        scale = scale[:meta.out_ch]
-        bias = bias[:meta.out_ch]
+        meta.out_ch = min(meta.out_ch - out_ch_offset, int(spec['out_ch_limit']))
+    else:
+        meta.out_ch = meta.out_ch - out_ch_offset
+    weights = weights[out_ch_offset: out_ch_offset + meta.out_ch]
+    scale   = scale  [out_ch_offset: out_ch_offset + meta.out_ch]
+    bias    = bias   [out_ch_offset: out_ch_offset + meta.out_ch]
     qscale = np.float32(1.0 / float(npz['act_scale']))
-    feat = random_int8(rng, (h, w, meta.in_ch))
+    if feat is None:
+        feat = random_int8(rng, (h, w, meta.in_ch))
+    else:
+        feat_in = np.asarray(feat, dtype=np.int8)
+        act_ch = feat_in.size // (h * w)
+        feat = feat_in.reshape(h, w, act_ch)
+        if act_ch != meta.in_ch:
+            # cout-tiling / out_ch_limit 截断后的中间激活，in_ch 跟着实际情况走
+            meta.in_ch = act_ch
+
+    # OH-tiling: 裁剪输入 feature 到本 tile 所需的行范围
+    oh_tiling = (oh_tile_start > 0 or oh_tile_end < oh_full)
+    if oh_tiling:
+        ih_start = oh_tile_start * meta.stride_h - meta.pad_h0
+        ih_end   = (oh_tile_end - 1) * meta.stride_h + meta.kh - meta.pad_h0
+        ih_start_clamp = max(0, ih_start)
+        ih_end_clamp   = min(h, ih_end)
+        pad_h0_tile = max(0, -ih_start)
+        pad_h1_tile = max(0, ih_end - h)
+
+        feat_tile_raw = feat[ih_start_clamp:ih_end_clamp]  # (h_tile, w, in_ch)
+        # 手动补 H 方向 padding 行（全零）。
+        # im2col 已修复为分别使用 pad_h0/pad_w0，W 方向 padding 不受影响。
+        zero_h = np.zeros((1, w, meta.in_ch), dtype=np.int8)
+        parts: list = []
+        if pad_h0_tile > 0:
+            parts.append(np.tile(zero_h, (pad_h0_tile, 1, 1)))
+        parts.append(feat_tile_raw)
+        if pad_h1_tile > 0:
+            parts.append(np.tile(zero_h, (pad_h1_tile, 1, 1)))
+        feat_used = np.concatenate(parts, axis=0)  # (h_tile+pad_h0+pad_h1, w, in_ch)
+
+        import copy as _copy_mod
+        meta_used = _copy_mod.copy(meta)
+        meta_used.pad_h0 = 0   # H padding 已手动补好
+        meta_used.pad_h1 = 0
+        # pad_w0/pad_w1 保持原值，im2col 会正确补 W 方向 padding
+        h_used = feat_used.shape[0]
+    else:
+        feat_used = feat
+        meta_used = meta
+        h_used = h
     if use_int16:
         # DCIM INT16 mode: im2col output is INT16 layout
         cols16 = im2col_int16(feat, meta)
@@ -1793,50 +1920,56 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
                 'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
                 'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{num_logical_oc} INT16 acc={acc} tiles={meta.num_tiles}'}
     # INT8 path (original)
-    cols = im2col(feat, meta)
-    wflat = weights.reshape(meta.out_ch, -1).astype(np.int32)
-    if wflat.shape[1] < meta.acc_depth * DCIM_CH_IN:
-        wflat = np.pad(wflat, ((0, 0), (0, meta.acc_depth * DCIM_CH_IN - wflat.shape[1])), constant_values=0)
+    cols = im2col(feat_used, meta_used)
+    wflat = weights.reshape(meta_used.out_ch, -1).astype(np.int32)
+    if wflat.shape[1] < meta_used.acc_depth * DCIM_CH_IN:
+        wflat = np.pad(wflat, ((0, 0), (0, meta_used.acc_depth * DCIM_CH_IN - wflat.shape[1])), constant_values=0)
     accum = cols.astype(np.int32) @ wflat.T
     dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
-    qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta.out_ch)
+    qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta_used.out_ch)
     # Pad to effective DCIM output channels: DCIM tile always writes
     # INT8_OUT_CH_PER_TILE (=32) channels per pixel regardless of meta.out_ch.
     # Extra channels receive zero weight/bias from WB → QA output = 0.
-    eff_ch = dcim_effective_out_ch(meta)
-    if eff_ch > meta.out_ch:
+    eff_ch = dcim_effective_out_ch(meta_used)
+    if eff_ch > meta_used.out_ch:
         qa_padded = np.zeros((oh, ow, eff_ch), dtype=np.int8)
-        qa_padded[:, :, :meta.out_ch] = qa
+        qa_padded[:, :, :meta_used.out_ch] = qa
     else:
         qa_padded = qa
-    src_words = int8_hwc_words(feat)
+    src_words = int8_hwc_words(feat_used)
     exp_words = int8_hwc_words(qa_padded)
     weight_words_per_tile: List[List[str]] = []
-    for t in range(meta.num_tiles):
-        weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile(meta, weights, t)])
+    for t in range(meta_used.num_tiles):
+        weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile(meta_used, weights, t)])
     write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
     # 动态地址：src(INT8) → im2col scratch → dcim_out → qa_out
-    src_bytes    = h * w * meta.in_ch
-    im2col_bytes = oh * ow * meta.acc_depth * DCIM_CH_IN
-    dcim_bytes   = oh * ow * meta.num_tiles * DCIM_INT8_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
+    # im2col_unit 要求 VPU_BUF 中 feature map 按 16B/pixel 对齐存放（in_col_stride=16）；
+    # CDMA 搬运量 src_bytes_aligned 必须与 int8_hwc_words(feat) 生成的对齐大小一致，
+    # 对 in_ch=16 倍数时两者相等，对 in_ch<16（如 in_ch=3）时紧排大小不足会导致数据截断。
+    src_bytes_aligned = h_used * w * (((meta_used.in_ch + 15) // 16) * 16)
+    im2col_bytes = oh * ow * meta_used.acc_depth * DCIM_CH_IN
+    dcim_bytes   = oh * ow * meta_used.num_tiles * DCIM_INT8_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
+    # DQA FP32 scratch 也写到 im2col_off，需保证间距 ≥ oh*ow * eff_ch * 4B
+    dqa_fp32_bytes = oh * ow * eff_ch * 4  # FP32 DQA output size
+    im2col_alloc = max(im2col_bytes, dqa_fp32_bytes)
     src_off, im2col_off, dcim_off, dst_off = alloc_flat(
-        src_bytes, im2col_bytes, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
+        src_bytes_aligned, im2col_alloc, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
     # HBM-staged path: feature map 写到 HBM_OFF_INPUT0，CDMA 搬到 VPU_BUF src_off
     # 完整硬件路径：HBM→CDMA→VPU_BUF→im2col→CDMA→tile_ibuf→DCIM→tile_obuf→CDMA→VPU_BUF→DQA/QA
     hbm_src = HBM_PHY_BASE + HBM_OFF_INPUT0
-    fast_inst = cdma_copy_chunked(hbm_src, OBUF_PHY_BASE + src_off, src_bytes)
-    fast_inst += vpu_exec(UNIT_IM2COL, src_off, 0, meta.in_ch, h, w, 0, 0, im2col_off,
-                          encode_addr_break(meta), oh, ow)
-    fast_inst += dcim_layer_inst(meta, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
+    fast_inst = cdma_copy_chunked(hbm_src, OBUF_PHY_BASE + src_off, src_bytes_aligned)
+    fast_inst += vpu_exec(UNIT_IM2COL, src_off, 0, meta_used.in_ch, h_used, w, 0, 0, im2col_off,
+                          encode_addr_break(meta_used), oh, ow)
+    fast_inst += dcim_layer_inst(meta_used, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
                                  collect_to_vpubuf=True)
     fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
-    fast_inst += tile_seq_dqa_insts(meta, oh * ow, dcim_off, im2col_off,
+    fast_inst += tile_seq_dqa_insts(meta_used, oh * ow, dcim_off, im2col_off,
                                     WB_SCALE, WB_BIAS, oh, ow, flags=0x1)
     fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, eff_ch, oh, ow, 0, WB_QSCALE, dst_off)
     fast_inst += [header(OP_END, 0, 0)]
     weight_loads: List[Tuple[str, int]] = []
-    for t in range(meta.num_tiles):
+    for t in range(meta_used.num_tiles):
         fname = f'weight_tile{t}.hex'
         write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
         weight_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
@@ -1848,9 +1981,11 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict, rng:
     all_weight_words = [w for tw in weight_words_per_tile for w in tw]
     hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
     wb = wb_blob([(WB_SCALE, fp32_blob(scale)), (WB_BIAS, fp32_blob(bias)), (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
-    return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': dst_off, 'words': len(exp_words),
+    oh_tag = f'oh[{oh_tile_start}:{oh_tile_end}]' if oh_tiling else f'{oh}'
+    return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta_used.name, 'dst': dst_off, 'words': len(exp_words),
             'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
-            'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{meta.out_ch}(eff={eff_ch}) acc={meta.acc_depth} tiles={meta.num_tiles}'}
+            'oh_tile_start': oh_tile_start, 'oh_tile_end': oh_tile_end,
+            'shape': f'{h_used}x{w}x{meta_used.in_ch} -> {oh_tag}x{ow}x{meta_used.out_ch}(eff={eff_ch}) acc={meta_used.acc_depth} tiles={meta_used.num_tiles}'}
 
 
 def make_cdma_memtest_case(out_dir: str, spec: dict, rng: np.random.Generator) -> dict:
