@@ -140,11 +140,12 @@ class FPGAOps:
             print(f"  [{layer_name}] {md['shape']}")
 
         if self.runner is None:
-            # dry-run：返回 numpy golden
-            exp_flat = np.frombuffer(
-                b"".join(bytes.fromhex(l.strip())
-                         for l in open(run_dir / "expected.hex")),
-                dtype=np.int8)
+            # dry-run：从 expected.hex 读出 golden 数据
+            # expected.hex 每行是一个 128-bit word，bytes_to_128_words 对每 16B 做了 reversed()
+            # 需要反转回原始字节序才能得到正确的 NHWC 数据
+            raw_words = [bytes.fromhex(l.strip()) for l in open(run_dir / "expected.hex")]
+            raw_bytes = b"".join(bytes(reversed(w)) for w in raw_words)
+            exp_flat = np.frombuffer(raw_bytes, dtype=np.int8)
             try:
                 return exp_flat.reshape(oh, ow, eff_ch)
             except ValueError:
@@ -275,11 +276,10 @@ class FPGAOps:
             eff_ch   = ((eff_cout + 15) // 16) * 16
 
             if self.runner is None:
-                # dry-run
-                exp_flat = np.frombuffer(
-                    b"".join(bytes.fromhex(l.strip())
-                             for l in open(run_dir / "expected.hex")),
-                    dtype=np.int8)
+                # dry-run：反转每 16B word 的字节序
+                raw_words = [bytes.fromhex(l.strip()) for l in open(run_dir / "expected.hex")]
+                raw_bytes = b"".join(bytes(reversed(w)) for w in raw_words)
+                exp_flat = np.frombuffer(raw_bytes, dtype=np.int8)
                 tile_out = exp_flat.reshape(tile_oh_actual, ow, eff_ch)
             else:
                 results = self.runner.run_case(run_dir, staging="hbm")
