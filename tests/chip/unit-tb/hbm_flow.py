@@ -94,6 +94,8 @@ def _hbm_src_offset(fname: str, weight_cursor: list[int]) -> int:
         return HBM_OFF_WEIGHT + weight_cursor[0]
     if fname == "wb_init.hex":
         return HBM_OFF_WB
+    if fname == "aux_zero.hex":
+        return HBM_OFF_WEIGHT + weight_cursor[0]
     raise ValueError(f"no HBM staging rule for preload file {fname}")
 
 
@@ -165,6 +167,8 @@ def staging_writes_for_preload(run_dir: Path) -> list[tuple[int, str, int]]:
         nbytes = len(hex_to_bin(run_dir / fname))
         hbm_off = _hbm_src_offset(fname, weight_cursor)
         if fname.startswith("weight"):
+            weight_cursor[0] += nbytes
+        if fname == "aux_zero.hex":
             weight_cursor[0] += nbytes
         rows.append((hbm_off, fname, nbytes))
     return rows

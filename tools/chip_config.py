@@ -85,6 +85,26 @@ def _resolve_expr(expr: str, values: Mapping[str, int]) -> int:
 
 
 def load_chip_defines(path: str = CHIP_DEFINES) -> Dict[str, int]:
+    if not os.path.exists(path):
+        # chip_defines.vh not yet generated; defaults match chip_defines.vh verbatim
+        return {
+            "MODE_INT4": 4, "MODE_INT8": 6, "MODE_INT16": 7,
+            "MODE_UINT4": 0, "MODE_UINT8": 2, "MODE_UINT16": 3,
+            "DCIM_NUM_TILES": 8, "DCIM_WD1": 4,
+            "DCIM_CH_IN": 64, "DCIM_CH_OUT": 32,
+            "DCIM_SRAM_DP": 128, "DCIM_CYCLE": 64, "DCIM_ACC_MAX": 80,
+            "DCIM_BUF_DATA_WIDTH": 128,
+            "DCIM_BUF_COL_WIDTH": 8, "DCIM_BUF_NUM_COL": 16,
+            "DCIM_BUF_BYTES_PER_WORD": 16,
+            "DCIM_IBUF_ADDR_WIDTH": 15, "DCIM_OBUF_ADDR_WIDTH": 14,
+            "DCIM_TILE_OBUF_ADDR_WIDTH": 14,
+            "DCIM_IBUF_SIZE_BYTES": 524288, "DCIM_TILE_OBUF_SIZE_BYTES": 262144,
+            "DCIM_TILE_IBUF_RD_LATENCY": 10, "DCIM_TILE_OBUF_RD_LATENCY": 10,
+            "DCIM_IBUF_AXI_BRAM_READ_LATENCY": 10,
+            "DCIM_OBUF_AXI_BRAM_READ_LATENCY": 10,
+            "VPU_BUF_ADDR_WIDTH": 19,
+            "CDMA_COOLDOWN_CYCLES": 2000, "VPU_READY_DELAY_CYCLES": 12,
+        }
     values: Dict[str, int] = {}
     pending: Dict[str, str] = {}
 

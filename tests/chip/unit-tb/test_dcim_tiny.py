@@ -16,7 +16,7 @@ run_dir = generate_case("dcim_matmul", "dcim_tiny_1x1", quant="int8")
 
 # Step 2: Execute on FPGA
 runner = ChipRunnerWin(verbose=True)
-results = runner.run_case(run_dir, timeout_s=10.0)
+results = runner.run_case(run_dir, timeout_s=120.0, staging="hbm")
 
 # Step 3: Summary
 print("\n" + "=" * 60)

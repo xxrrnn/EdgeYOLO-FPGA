@@ -32,6 +32,7 @@ from chip_config import (  # noqa: E402
     BYTES_PER_WORD,
     DCIM_CH_IN,
     DCIM_CH_OUT,
+    DCIM_CYCLE,
     DCIM_INT8_OUT_CH_PER_TILE,
     DCIM_NUM_TILES,
     require_consistent,
@@ -207,7 +208,7 @@ def pack_all_layers(
             raise KeyError(f"layer {name}: npz has no {weight_key!r} (keys: {z.files})")
         wi8 = z[weight_key].astype(np.int8)
 
-        expected_acc_depth = rec["per_tile_bytes"] // (CH_OUT_PER_TILE * BYTES_PER_WORD)
+        expected_acc_depth = rec["per_tile_bytes"] // (DCIM_CYCLE * BYTES_PER_WORD)
 
         if mode == "int16":
             blob = pack_layer_weights_int16(
