@@ -217,10 +217,9 @@ def main():
     global WEIGHTS_DIR, INT16_MODE
     if args.int16:
         INT16_MODE = True
-        # Use INT8-widened-to-INT16 params (validated equivalent to INT8)
-        # True INT16 QAT model (parsed_int16/) is under investigation
-        WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16_from_int8" / "weights")
-        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16_from_int8" / "network.json"))
+        # Use true INT16 QAT weights (parsed_int16/) — full 16-bit precision
+        WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "weights")
+        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"))
 
     # Setup FPGA runner
     runner = None

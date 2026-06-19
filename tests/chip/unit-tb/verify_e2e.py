@@ -50,8 +50,8 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
     # 切换精度配置
     if precision == 'int16':
         _e2e.INT16_MODE = True
-        _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16_from_int8" / "weights")
-        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16_from_int8" / "network.json"))
+        _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "weights")
+        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"))
     else:
         _e2e.INT16_MODE = False
         _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
@@ -152,10 +152,10 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── 预检：INT16 参数是否存在 ─────────────────────────────────────────
-    int16_weights = REPO_ROOT / "model" / "yolov5n" / "parsed_int16_from_int8" / "network.json"
+    int16_weights = REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"
     if args.mode in ("both", "int16") and not int16_weights.exists():
         print("[WARN] INT16 参数不存在，请先执行：")
-        print("       python model/yolov5n/create_int16_from_int8.py")
+        print("       python model/yolov5n/parse_onnx_int16.py")
         if args.mode == "int16":
             return
         print("[INFO] 将只运行 INT8 验证")
