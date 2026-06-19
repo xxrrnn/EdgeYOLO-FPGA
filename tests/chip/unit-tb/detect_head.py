@@ -39,34 +39,51 @@ class DetectHead:
 
     def __init__(self, weights_dir: str):
         wdir = Path(weights_dir)
+
+        # Load network config to get the correct act_scale for detect head input
+        import json
+        net_json = wdir.parent / 'network.json'
+        if net_json.exists():
+            net_cfg = json.load(open(str(net_json)))
+            self.det_act_scale = net_cfg['layers'][0]['act_scale']
+        else:
+            self.det_act_scale = 0.07814328372478485
+
         self.convs = []
         for i in range(3):
             npz = np.load(wdir / f'model_24_m_{i}.npz')
-            self.convs.append({
-                'weight': npz['weight_int8'],       # (24, Cin, 1, 1)
-                'dqa_scale': npz['dqa_scale'],      # (24,)
-                'dqa_bias': npz['dqa_bias'],        # (24,)
-            })
+            if 'weight_fp32' in npz:
+                self.convs.append({
+                    'weight_fp32': npz['weight_fp32'],   # (24, Cin, 1, 1)
+                    'bias': npz['bias'],                 # (24,)
+                    'act_scale': self.det_act_scale,
+                })
+            else:
+                self.convs.append({
+                    'weight_fp32': npz['weight_int8'].astype(np.float32),
+                    'bias': npz['dqa_bias'],
+                    'act_scale': self.det_act_scale,
+                })
 
     def _conv1x1_dqa(self, feat_int8: np.ndarray, conv_idx: int) -> np.ndarray:
-        """1×1 Conv + DQA (无 ReLU, 无 QA) → FP32 output.
+        """1×1 Conv (FP32 weights) on INT8 input → FP32 output.
 
         feat_int8: (H, W, Cin) INT8
         Returns: (H, W, 24) FP32
         """
         h, w, cin = feat_int8.shape
         c = self.convs[conv_idx]
-        weight = c['weight']  # (24, Cin, 1, 1)
-        dqa_scale = c['dqa_scale']  # (24,)
-        dqa_bias = c['dqa_bias']    # (24,)
+        weight = c['weight_fp32']  # (24, Cin, 1, 1) FP32
+        bias = c['bias']           # (24,) FP32
+        act_scale = c['act_scale']
 
-        # 1×1 conv = simple matmul
-        feat_flat = feat_int8.reshape(-1, cin).astype(np.int32)  # (H*W, Cin)
-        w_flat = weight.reshape(24, cin).astype(np.int32)        # (24, Cin)
-        accum = feat_flat @ w_flat.T  # (H*W, 24) INT32
+        # Dequantize input: FP32 = INT8 * act_scale
+        # act_scale is the QONNX scale (0.07814), NOT hard_quant_scale (0.007874)
+        feat_fp32 = feat_int8.reshape(-1, cin).astype(np.float32) * act_scale  # (H*W, Cin)
+        w_flat = weight.reshape(24, cin).astype(np.float32)  # (24, Cin)
 
-        # DQA: no ReLU for detection head
-        out_fp32 = accum.astype(np.float32) * dqa_scale[None, :] + dqa_bias[None, :]
+        # FP32 matmul
+        out_fp32 = feat_fp32 @ w_flat.T + bias[None, :]  # (H*W, 24)
         return out_fp32.reshape(h, w, 24)
 
     def forward(self, feat_p3: np.ndarray, feat_p4: np.ndarray, feat_p5: np.ndarray) -> List[np.ndarray]:

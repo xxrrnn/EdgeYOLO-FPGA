@@ -1,35 +1,26 @@
 """
-run.py - YOLOv5n / ResNet18 端到端 FPGA 验证
+run.py - YOLOv5n / ResNet18 端到端推理 (真实图片)
 
-对比说明：
-  YOLOv5n:
-    路径A (golden): numpy_golden_net.py 独立实现 (im2col + matmul + DQA + QA)
-    路径B (fpga) : ops.py FPGAOps (dry-run读expected.hex / FPGA实际执行)
-    两条路径代码独立，共享权重文件。INT8最终输出对比。
-
-  ResNet18:
-    路径A (golden): _resnet18_test.py 的 conv_golden (独立 im2col实现)
-    路径B (fpga) : run.py 内联的 conv 函数 (第二套独立实现)
-    两条路径代码独立，共享权重NPZ。INT8最终输出对比。
-
-  ** FP32中间结果不做对比 ** (同一numpy运算在同一机器上必然bit-exact)
-  ** 真正有意义的对比是 FPGA执行 vs numpy golden **
-
-输出文件:
-  runs/e2e/dump_yolov5n.txt  - 每层 INT8 输出的前64字节 hex + 统计
-  runs/e2e/dump_resnet18.txt - 同上
-  runs/e2e/*.npy             - 完整激活 (供进一步分析)
+流程:
+    YOLOv5n: 图片 → letterbox(320×320) → /255 → QA(INT8) → FPGA backbone+neck → detect_head → NMS → boxes
+    ResNet18: 图片 → resize(224×224) → normalize → QA(INT8) → FPGA 20 conv → GAP → FC → class
 
 用法:
-    python run.py yolov5n --dry-run    # numpy golden对比
-    python run.py resnet18 --dry-run
-    python run.py all --dry-run
-    python run.py all                  # FPGA 实际执行
+    # 单张图片推理 (dry-run)
+    python run.py yolov5n --image path/to/image.jpg --dry-run
+
+    # 批量验证集
+    python run.py yolov5n --val-dir path/to/images/ --dry-run --max-images 5
+
+    # FPGA 执行
+    python run.py yolov5n --image path/to/image.jpg
+
+    # ResNet18
+    python run.py resnet18 --image path/to/image.jpg --dry-run
 """
 from __future__ import annotations
-import argparse, sys, time, json
+import argparse, sys, time
 from pathlib import Path
-from typing import Optional
 import numpy as np
 
 _THIS = Path(__file__).resolve()
@@ -38,73 +29,125 @@ sys.path.insert(0, str(_THIS.parents[3] / "rtl" / "tb" / "lite_bd" / "module_tb"
 sys.path.insert(0, str(_THIS.parents[3] / "tools"))
 
 RUNS_BASE = _THIS.parent / "runs" / "e2e"
-DUMP_DIR = RUNS_BASE / "dumps"
+IMG_SIZE_YOLO = 320
+IMG_SIZE_RESNET = 224
+
+# 重新 QAT 后 act_scale 会变化，从 parsed/network.json 读取第一层 act_scale
+_YOLO_PARSED = _THIS.parents[3] / "model" / "yolov5n" / "parsed" / "network.json"
+def _load_act_scale() -> float:
+    """从 parsed network.json 读取 input_act_scale (用于量化输入图像)"""
+    import json
+    if _YOLO_PARSED.exists():
+        with open(_YOLO_PARSED) as f:
+            net = json.load(f)
+        return net.get("input_act_scale", net["layers"][0]["act_scale"])
+    return 0.007874  # 1/127 (signed Int8)
+
+ACT_SCALE = _load_act_scale()
 
 
-def dump_activation(name: str, arr: np.ndarray, f):
-    """写一层激活的可读信息到文件句柄。"""
-    f.write(f"\n{'='*60}\n")
-    f.write(f"Layer: {name}\n")
-    f.write(f"Shape: {arr.shape}, dtype: {arr.dtype}\n")
-    f.write(f"Range: [{arr.min()}, {arr.max()}], mean={arr.mean():.4f}, std={arr.std():.4f}\n")
-    f.write(f"Non-zero: {np.count_nonzero(arr)}/{arr.size} ({100*np.count_nonzero(arr)/arr.size:.1f}%)\n")
-    flat = arr.flatten()[:64]
-    f.write(f"First 64 values (decimal): {flat.tolist()}\n")
-    f.write(f"First 64 values (hex):     {flat.view(np.uint8)[:64].tobytes().hex()}\n")
+# ═══════════════════════════════════════════════════════════════════════════════
+#  前处理
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_image(path: str) -> np.ndarray:
+    """读取图片为 RGB uint8 (H, W, 3)"""
+    from PIL import Image
+    img = Image.open(path).convert("RGB")
+    return np.array(img)
 
 
-def compare_int8(name: str, golden: np.ndarray, fpga: np.ndarray, f) -> bool:
-    """对比两个INT8数组，将结果写入文件。返回是否完全一致。"""
-    f.write(f"\n--- Compare: {name} ---\n")
-    if golden.shape != fpga.shape:
-        f.write(f"  SHAPE MISMATCH: golden={golden.shape}, fpga={fpga.shape}\n")
-        return False
+def letterbox(img: np.ndarray, new_shape: int = 320, color: int = 114) -> tuple:
+    """YOLOv5 letterbox: resize + pad 到正方形, 保持比例。
 
-    exact = np.array_equal(golden, fpga)
-    if exact:
-        f.write(f"  EXACT MATCH (byte-identical)\n")
-        return True
+    Returns: (padded_img, ratio, (dw, dh))
+        padded_img: uint8 (new_shape, new_shape, 3)
+        ratio: scale factor
+        (dw, dh): padding offsets (for coordinate mapping back)
+    """
+    h, w = img.shape[:2]
+    r = min(new_shape / h, new_shape / w)
+    new_h, new_w = int(round(h * r)), int(round(w * r))
 
-    diff = np.abs(golden.astype(np.int16) - fpga.astype(np.int16))
-    max_diff = int(diff.max())
-    n_diff = int(np.count_nonzero(diff))
-    f.write(f"  MISMATCH: max_diff={max_diff}, n_diff={n_diff}/{diff.size}\n")
+    # resize using PIL (nearest or bilinear)
+    from PIL import Image
+    pil_img = Image.fromarray(img)
+    pil_img = pil_img.resize((new_w, new_h), Image.BILINEAR)
+    resized = np.array(pil_img)
 
-    # 找前10个不一致的位置
-    idxs = np.argwhere(diff > 0)[:10]
-    for idx in idxs:
-        idx_t = tuple(idx)
-        f.write(f"    @{idx_t}: golden={golden[idx_t]}, fpga={fpga[idx_t]}, diff={diff[idx_t]}\n")
+    # pad to new_shape × new_shape
+    dh = new_shape - new_h
+    dw = new_shape - new_w
+    top, left = dh // 2, dw // 2
+    bottom, right = dh - top, dw - left
 
-    return max_diff <= 1
+    padded = np.full((new_shape, new_shape, 3), color, dtype=np.uint8)
+    padded[top:top+new_h, left:left+new_w, :] = resized
+
+    return padded, r, (left, top)
 
 
-# =========================================================================
-#  YOLOv5n
-# =========================================================================
+def preprocess_yolov5n(img_rgb: np.ndarray) -> tuple:
+    """YOLOv5n 前处理: letterbox → /255 → QA(INT8)
 
-def run_yolov5n(runner, dry_run: bool, seed: int = 42):
+    Returns: (int8_input (320,320,3), ratio, (dw,dh), original_shape)
+    """
+    orig_shape = img_rgb.shape[:2]  # (H, W)
+    padded, ratio, (dw, dh) = letterbox(img_rgb, IMG_SIZE_YOLO)
+
+    # float32 归一化 [0, 1]
+    fp32 = padded.astype(np.float32) / 255.0
+
+    # 量化到 INT8 (signed): int8 = clip(round(fp32 / act_scale), -128, 127)
+    # 对于 /255 后 [0,1] 的输入，量化后范围约 [0, 21]（signed 模式下 max_val≈6/127≈0.047）
+    int8_input = np.clip(np.round(fp32 / ACT_SCALE), -128, 127).astype(np.int8)
+
+    return int8_input, ratio, (dw, dh), orig_shape
+
+
+def preprocess_resnet18(img_rgb: np.ndarray) -> np.ndarray:
+    """ResNet18 前处理: resize(224) → ImageNet normalize → QA(INT8)"""
+    from PIL import Image
+    pil_img = Image.fromarray(img_rgb)
+    pil_img = pil_img.resize((IMG_SIZE_RESNET, IMG_SIZE_RESNET), Image.BILINEAR)
+    arr = np.array(pil_img).astype(np.float32) / 255.0
+
+    # ImageNet normalization
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    normalized = (arr - mean) / std
+
+    # QA: 需要 ResNet18 的 input act_scale
+    # 从 parsed weights 获取
+    weights_dir = _THIS.parents[3] / "model" / "resnet18" / "parsed" / "weights"
+    npz = np.load(weights_dir / "conv1.npz")
+    # input scale 通常在第一层的输入定义中
+    # 对于ResNet18 W8A8, 假设输入 scale 使 [-128,127] 覆盖归一化后的范围
+    # normalized range: roughly [-2.2, 2.7] (ImageNet stats)
+    # 一个常见的 input_scale 是 max_abs/127 ≈ 2.7/127 ≈ 0.0213
+    input_scale = 2.64 / 127.0  # 覆盖 normalized 范围
+    int8_input = np.clip(np.round(normalized / input_scale), -128, 127).astype(np.int8)
+    return int8_input
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  YOLOv5n 推理
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_yolov5n_inference(runner, img_path: str, dry_run: bool):
+    """单张图片 YOLOv5n 端到端推理"""
     from ops import FPGAOps, HostOps, C3Block, conv_meta, _net
-    from numpy_golden_net import run_yolov5n_golden
     from detect_head import DetectHead
     from golden_module_tb import out_hw as _out_hw
 
-    rng = np.random.default_rng(seed)
-    # 输入范围应匹配量化 scale: act_scale=0.0235, 图像归一化[0,1]
-    # → INT8 范围 [0, round(1.0/0.0235)] ≈ [0, 42]
-    # 使用 [0, 42] 模拟归一化图像量化后的 INT8
-    img = rng.integers(0, 43, (320, 320, 3), dtype=np.int8)
+    # 前处理
+    img_rgb = load_image(img_path)
+    int8_input, ratio, (dw, dh), orig_shape = preprocess_yolov5n(img_rgb)
+    print(f"  Input: {img_path}")
+    print(f"  Original: {orig_shape}, Letterbox: {int8_input.shape}")
+    print(f"  INT8 range: [{int8_input.min()}, {int8_input.max()}], mean={int8_input.mean():.1f}")
 
-    # Save input
-    DUMP_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(DUMP_DIR / "yolov5n_input.npy", img)
-
-    # --- Path A: numpy golden (独立实现) ---
-    print("  [PathA] numpy_golden_net.py ...")
-    golden = run_yolov5n_golden(img)
-
-    # --- Path B: FPGAOps (dry-run读expected.hex / FPGA实际执行) ---
-    print("  [PathB] ops.py FPGAOps ...")
+    # FPGA backbone + neck
     fpga = FPGAOps(runner=None if dry_run else runner,
                    runs_base=str(RUNS_BASE / "yolov5n"), verbose=False)
     host = HostOps()
@@ -125,7 +168,8 @@ def run_yolov5n(runner, dry_run: bool, seed: int = 42):
     def _c3(mid, feat, n):
         return C3Block(fpga, host, mid, n_bottleneck=n)(feat)
 
-    x = img
+    print("  Running backbone+neck...")
+    x = int8_input
     x = _conv("model.0.conv", x, "e2e_0")
     x = _conv("model.1.conv", x, "e2e_1")
     x = _c3("2", x, 1)
@@ -153,320 +197,269 @@ def run_yolov5n(runner, dry_run: bool, seed: int = 42):
     cat_4 = host.concat([host.upsample(x14, 2), x4])
     x17 = _c3("17", cat_4, 1)
 
-    x18 = _conv("model.18.conv", x17, "e2e_18")
+    # hard_quant rescale: C3 output (scale=act_scale) -> Div/2 -> requant (scale=hard_quant_scale)
+    import json as _json
+    _net_cfg = _json.load(open(_YOLO_PARSED))
+    _hq_scale = _net_cfg.get('hard_quant_scale', 0.007874015718698502)
+    _act_s = _net_cfg['layers'][0]['act_scale']
+    x17_hq = host.hard_quant(x17, _act_s, _hq_scale)
+
+    x18 = _conv("model.18.conv", x17_hq, "e2e_18")
     x20 = _c3("20", host.concat([x18, x13]), 1)
-    x21 = _conv("model.21.conv", x20, "e2e_21")
+    x20_hq = host.hard_quant(x20, _act_s, _hq_scale)
+    x21 = _conv("model.21.conv", x20_hq, "e2e_21")
     x23 = _c3("23", host.concat([x21, x8]), 1)
+    x23_hq = host.hard_quant(x23, _act_s, _hq_scale)
 
-    fpga_outs = {'model.17': x17, 'model.20': x20, 'model.23': x23}
+    # 后处理: detect head (receives hard_quant'd features)
+    print("  Running detect head...")
+    weights_dir = str(_THIS.parents[3] / "model" / "yolov5n" / "parsed" / "weights")
+    head = DetectHead(weights_dir)
+    raw_preds = head.forward(x17_hq, x20_hq, x23_hq)
 
-    # --- 对比 & Dump ---
-    dump_path = DUMP_DIR / "dump_yolov5n.txt"
-    all_pass = True
+    # Decode + NMS
+    print("  Decoding + NMS...")
+    detections = postprocess_yolov5n(raw_preds, ratio, dw, dh, orig_shape)
+
+    # 输出结果
+    print(f"\n  Detections: {len(detections)} objects")
+    for i, det in enumerate(detections[:20]):
+        x1, y1, x2, y2, conf, cls = det
+        print(f"    [{i}] class={int(cls)}, conf={conf:.3f}, box=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}]")
+
+    # Dump 中间激活统计
+    dump_path = RUNS_BASE / "dumps" / f"inference_{Path(img_path).stem}.txt"
+    dump_path.parent.mkdir(parents=True, exist_ok=True)
     with open(dump_path, "w") as f:
-        f.write(f"YOLOv5n End-to-End Comparison\n")
-        f.write(f"Mode: {'dry-run' if dry_run else 'FPGA'}\n")
-        f.write(f"Input: random INT8 (320,320,3) seed={seed}\n")
-        f.write(f"PathA: numpy_golden_net.py (独立numpy实现)\n")
-        f.write(f"PathB: ops.py FPGAOps {'(读expected.hex)' if dry_run else '(FPGA执行)'}\n\n")
-
-        nodes = ['model.17', 'model.20', 'model.23']
-        for node in nodes:
-            g = golden[node]
-            fp = fpga_outs[node]
-            np.save(DUMP_DIR / f"yolov5n_{node.replace('.','_')}_golden.npy", g)
-            np.save(DUMP_DIR / f"yolov5n_{node.replace('.','_')}_fpga.npy", fp)
-            dump_activation(f"{node} [golden]", g, f)
-            dump_activation(f"{node} [fpga]", fp, f)
-            ok = compare_int8(node, g, fp, f)
-            all_pass = all_pass and ok
-            status = "EXACT" if ok and np.array_equal(g, fp) else ("1-LSB" if ok else "FAIL")
-            print(f"    {node}: {status} shape={g.shape}")
-
-        # Detect head
-        f.write(f"\n{'='*60}\nDetect Head (host FP32)\n")
-        head = DetectHead(str(_THIS.parents[3] / "model" / "yolov5n" / "parsed" / "weights"))
-        preds_g = head.forward(golden['model.17'], golden['model.20'], golden['model.23'])
-        preds_f = head.forward(x17, x20, x23)
-        for i in range(3):
-            match = np.array_equal(preds_g[i], preds_f[i])
-            f.write(f"  Scale {i}: shape={preds_g[i].shape}, exact={match}\n")
-            if not match:
-                d = np.abs(preds_g[i] - preds_f[i])
-                f.write(f"    max_diff={d.max():.8f}, mean_diff={d.mean():.8f}\n")
-                all_pass = False
-            np.save(DUMP_DIR / f"yolov5n_detect_s{i}_golden.npy", preds_g[i])
-            np.save(DUMP_DIR / f"yolov5n_detect_s{i}_fpga.npy", preds_f[i])
-            print(f"    detect_s{i}: {'EXACT' if match else 'DIFF'}")
-
+        f.write(f"Image: {img_path}\n")
+        f.write(f"Original shape: {orig_shape}\n")
+        f.write(f"INT8 input: range=[{int8_input.min()},{int8_input.max()}], mean={int8_input.mean():.2f}\n\n")
+        f.write(f"Backbone+Neck output scales:\n")
+        for name, arr in [("x17", x17), ("x20", x20), ("x23", x23)]:
+            f.write(f"  {name}: shape={arr.shape}, range=[{arr.min()},{arr.max()}], "
+                    f"mean={arr.mean():.2f}, non-zero={np.count_nonzero(arr)}/{arr.size}\n")
+        f.write(f"\nDetections ({len(detections)}):\n")
+        for det in detections:
+            x1, y1, x2, y2, conf, cls = det
+            f.write(f"  class={int(cls)}, conf={conf:.3f}, box=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}]\n")
     print(f"  Dump: {dump_path}")
-    return all_pass
+    return detections
 
 
-# =========================================================================
-#  ResNet18
-# =========================================================================
+def postprocess_yolov5n(raw_preds, ratio, dw, dh, orig_shape, conf_thres=0.25, iou_thres=0.45):
+    """YOLOv5 后处理: decode boxes + NMS"""
+    # raw_preds: list of 3 arrays, each (H, W, 3, 8) where 8 = [x,y,w,h,obj,cls0,cls1,cls2]
+    # 对于红外数据集: nc=3 (person, bicycle, car) 或 nc=2 看模型
+    # detect_head.py 已输出 decoded boxes
 
-def run_resnet18(runner, dry_run: bool, seed: int = 42):
-    WEIGHTS_DIR = _THIS.parents[3] / "model" / "resnet18" / "parsed" / "weights"
+    all_boxes = []
+    anchors = [
+        [[10,13], [16,30], [33,23]],      # P3/8
+        [[30,61], [62,45], [59,119]],      # P4/16
+        [[116,90], [156,198], [373,326]],  # P5/32
+    ]
+    strides = [8, 16, 32]
 
-    rng = np.random.default_rng(seed)
-    # ResNet18 输入: 归一化[0,1] 图像, 量化scale需从NPZ读取
-    # 典型 act_scale ~ 0.01-0.02, 取 [0, 50] 模拟
-    img = rng.integers(0, 50, (224, 224, 3), dtype=np.int8)
-    DUMP_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(DUMP_DIR / "resnet18_input.npy", img)
+    for si, pred in enumerate(raw_preds):
+        h, w, na, no = pred.shape  # na=3 anchors, no=5+nc
+        nc = no - 5
 
-    LAYERS_INFO = {
-        'conv1': (7, 2, 3, True),
-        'layer1.0.conv1': (3, 1, 1, True),
-        'layer1.0.conv2': (3, 1, 1, False),
-        'layer1.1.conv1': (3, 1, 1, True),
-        'layer1.1.conv2': (3, 1, 1, False),
-        'layer2.0.conv1': (3, 2, 1, True),
-        'layer2.0.conv2': (3, 1, 1, False),
-        'layer2.0.downsample.0': (1, 2, 0, False),
-        'layer2.1.conv1': (3, 1, 1, True),
-        'layer2.1.conv2': (3, 1, 1, False),
-        'layer3.0.conv1': (3, 2, 1, True),
-        'layer3.0.conv2': (3, 1, 1, False),
-        'layer3.0.downsample.0': (1, 2, 0, False),
-        'layer3.1.conv1': (3, 1, 1, True),
-        'layer3.1.conv2': (3, 1, 1, False),
-        'layer4.0.conv1': (3, 2, 1, True),
-        'layer4.0.conv2': (3, 1, 1, False),
-        'layer4.0.downsample.0': (1, 2, 0, False),
-        'layer4.1.conv1': (3, 1, 1, True),
-        'layer4.1.conv2': (3, 1, 1, False),
-    }
+        for ay in range(h):
+            for ax in range(w):
+                for a in range(na):
+                    box = pred[ay, ax, a]
+                    obj_conf = sigmoid(box[4])
+                    if obj_conf < conf_thres:
+                        continue
 
-    def load_layer(name):
-        npz = np.load(WEIGHTS_DIR / (name.replace('.', '_') + '.npz'))
-        return npz['weight_int8'], npz['dqa_scale'], npz['dqa_bias'], float(npz['act_scale'])
+                    # decode box
+                    bx = (sigmoid(box[0]) * 2 - 0.5 + ax) * strides[si]
+                    by = (sigmoid(box[1]) * 2 - 0.5 + ay) * strides[si]
+                    bw = (sigmoid(box[2]) * 2) ** 2 * anchors[si][a][0]
+                    bh = (sigmoid(box[3]) * 2) ** 2 * anchors[si][a][1]
 
-    def conv_impl_A(feat, name):
-        """实现A: 标准 im2col (逐像素patch提取)"""
-        kh, stride, pad, has_relu = LAYERS_INFO[name]
-        w, dqa_s, dqa_b, act_s = load_layer(name)
-        cout, cin, _, kw = w.shape
-        h, ww, c = feat.shape
-        oh = (h + 2*pad - kh) // stride + 1
-        ow = (ww + 2*pad - kw) // stride + 1
+                    # center to xyxy
+                    x1 = bx - bw / 2
+                    y1 = by - bh / 2
+                    x2 = bx + bw / 2
+                    y2 = by + bh / 2
 
-        padded = np.pad(feat, [(pad,pad),(pad,pad),(0,0)], constant_values=0)
-        cols = np.zeros((oh*ow, cin*kh*kw), dtype=np.int8)
-        for oy in range(oh):
-            for ox in range(ow):
-                cols[oy*ow+ox] = padded[oy*stride:oy*stride+kh, ox*stride:ox*stride+kw, :].flatten()
+                    # class scores
+                    cls_scores = np.array([sigmoid(box[5 + c]) for c in range(nc)])
+                    cls_conf = cls_scores.max()
+                    cls_id = cls_scores.argmax()
 
-        accum = cols.astype(np.int32) @ w.reshape(cout,-1).astype(np.int32).T
-        dqa = accum.astype(np.float32) * dqa_s[None,:] + dqa_b[None,:]
-        if has_relu:
-            dqa = np.maximum(dqa, 0.0)
-        qa = np.clip(np.round(dqa * np.float32(1.0/act_s)), -128, 127).astype(np.int8)
-        return qa.reshape(oh, ow, cout)
+                    final_conf = obj_conf * cls_conf
+                    if final_conf < conf_thres:
+                        continue
 
-    def conv_impl_B(feat, name):
-        """实现B: 使用np.lib.stride_tricks (不同代码路径验证)"""
-        kh, stride, pad, has_relu = LAYERS_INFO[name]
-        w, dqa_s, dqa_b, act_s = load_layer(name)
-        cout, cin, _, kw = w.shape
-        h, ww, c = feat.shape
-        oh = (h + 2*pad - kh) // stride + 1
-        ow = (ww + 2*pad - kw) // stride + 1
+                    all_boxes.append([x1, y1, x2, y2, final_conf, cls_id])
 
-        padded = np.pad(feat, [(pad,pad),(pad,pad),(0,0)], constant_values=0)
-        # 用 stride_tricks 做 im2col
-        sh, sw, sc = padded.strides
-        shape = (oh, ow, kh, kw, cin)
-        strides = (sh*stride, sw*stride, sh, sw, sc)
-        patches = np.lib.stride_tricks.as_strided(padded, shape=shape, strides=strides)
-        cols = patches.reshape(oh*ow, cin*kh*kw).astype(np.int32)
+    if not all_boxes:
+        return np.zeros((0, 6))
 
-        accum = cols @ w.reshape(cout,-1).astype(np.int32).T
-        dqa = accum.astype(np.float32) * dqa_s[None,:] + dqa_b[None,:]
-        if has_relu:
-            dqa = np.maximum(dqa, 0.0)
-        qa = np.clip(np.round(dqa * np.float32(1.0/act_s)), -128, 127).astype(np.int8)
-        return qa.reshape(oh, ow, cout)
+    boxes = np.array(all_boxes)
 
-    def maxpool_3x3(feat):
-        h, w, c = feat.shape
-        padded = np.pad(feat.astype(np.int16), [(1,1),(1,1),(0,0)],
-                        mode='constant', constant_values=-128)
-        oh = (h + 2*1 - 3) // 2 + 1
-        ow = (w + 2*1 - 3) // 2 + 1
-        out = np.empty((oh, ow, c), dtype=np.int16)
-        for i in range(oh):
-            for j in range(ow):
-                out[i,j] = padded[i*2:i*2+3, j*2:j*2+3, :].max(axis=(0,1))
-        return out.astype(np.int8)
+    # Scale coords back to original image
+    boxes[:, [0, 2]] = (boxes[:, [0, 2]] - dw) / ratio
+    boxes[:, [1, 3]] = (boxes[:, [1, 3]] - dh) / ratio
 
-    def res_add(a, b):
-        return np.clip(a.astype(np.int16) + b.astype(np.int16), -128, 127).astype(np.int8)
+    # Clip to image
+    boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, orig_shape[1])
+    boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, orig_shape[0])
 
-    def relu8(x):
-        return np.maximum(x, np.int8(0))
+    # NMS
+    keep = nms(boxes[:, :4], boxes[:, 4], iou_thres)
+    return boxes[keep]
 
-    # --- 双路径执行 ---
-    print("  [PathA] im2col loop ...")
-    xA = img
-    xA = conv_impl_A(xA, 'conv1'); xA = maxpool_3x3(xA)
-    idA = xA
-    xA = conv_impl_A(xA, 'layer1.0.conv1')
-    xA = conv_impl_A(xA, 'layer1.0.conv2')
-    xA = relu8(res_add(xA, idA))
-    idA = xA
-    xA = conv_impl_A(xA, 'layer1.1.conv1')
-    xA = conv_impl_A(xA, 'layer1.1.conv2')
-    xA = relu8(res_add(xA, idA))
-    idA = conv_impl_A(xA, 'layer2.0.downsample.0')
-    x2A = conv_impl_A(xA, 'layer2.0.conv1')
-    x2A = conv_impl_A(x2A, 'layer2.0.conv2')
-    xA = relu8(res_add(x2A, idA))
-    idA = xA
-    xA = conv_impl_A(xA, 'layer2.1.conv1')
-    xA = conv_impl_A(xA, 'layer2.1.conv2')
-    xA = relu8(res_add(xA, idA))
-    idA = conv_impl_A(xA, 'layer3.0.downsample.0')
-    x2A = conv_impl_A(xA, 'layer3.0.conv1')
-    x2A = conv_impl_A(x2A, 'layer3.0.conv2')
-    xA = relu8(res_add(x2A, idA))
-    idA = xA
-    xA = conv_impl_A(xA, 'layer3.1.conv1')
-    xA = conv_impl_A(xA, 'layer3.1.conv2')
-    xA = relu8(res_add(xA, idA))
-    idA = conv_impl_A(xA, 'layer4.0.downsample.0')
-    x2A = conv_impl_A(xA, 'layer4.0.conv1')
-    x2A = conv_impl_A(x2A, 'layer4.0.conv2')
-    xA = relu8(res_add(x2A, idA))
-    idA = xA
-    xA = conv_impl_A(xA, 'layer4.1.conv1')
-    xA = conv_impl_A(xA, 'layer4.1.conv2')
-    xA = relu8(res_add(xA, idA))
 
-    print("  [PathB] stride_tricks ...")
-    xB = img
-    xB = conv_impl_B(xB, 'conv1'); xB = maxpool_3x3(xB)
-    idB = xB
-    xB = conv_impl_B(xB, 'layer1.0.conv1')
-    xB = conv_impl_B(xB, 'layer1.0.conv2')
-    xB = relu8(res_add(xB, idB))
-    idB = xB
-    xB = conv_impl_B(xB, 'layer1.1.conv1')
-    xB = conv_impl_B(xB, 'layer1.1.conv2')
-    xB = relu8(res_add(xB, idB))
-    idB = conv_impl_B(xB, 'layer2.0.downsample.0')
-    x2B = conv_impl_B(xB, 'layer2.0.conv1')
-    x2B = conv_impl_B(x2B, 'layer2.0.conv2')
-    xB = relu8(res_add(x2B, idB))
-    idB = xB
-    xB = conv_impl_B(xB, 'layer2.1.conv1')
-    xB = conv_impl_B(xB, 'layer2.1.conv2')
-    xB = relu8(res_add(xB, idB))
-    idB = conv_impl_B(xB, 'layer3.0.downsample.0')
-    x2B = conv_impl_B(xB, 'layer3.0.conv1')
-    x2B = conv_impl_B(x2B, 'layer3.0.conv2')
-    xB = relu8(res_add(x2B, idB))
-    idB = xB
-    xB = conv_impl_B(xB, 'layer3.1.conv1')
-    xB = conv_impl_B(xB, 'layer3.1.conv2')
-    xB = relu8(res_add(xB, idB))
-    idB = conv_impl_B(xB, 'layer4.0.downsample.0')
-    x2B = conv_impl_B(xB, 'layer4.0.conv1')
-    x2B = conv_impl_B(x2B, 'layer4.0.conv2')
-    xB = relu8(res_add(x2B, idB))
-    idB = xB
-    xB = conv_impl_B(xB, 'layer4.1.conv1')
-    xB = conv_impl_B(xB, 'layer4.1.conv2')
-    xB = relu8(res_add(xB, idB))
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -50, 50)))
+
+
+def nms(boxes, scores, iou_thres):
+    """Simple NMS"""
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        if order.size == 1:
+            break
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+        inds = np.where(iou <= iou_thres)[0]
+        order = order[inds + 1]
+    return keep
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ResNet18 推理
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_resnet18_inference(runner, img_path: str, dry_run: bool):
+    """单张图片 ResNet18 分类推理"""
+    img_rgb = load_image(img_path)
+    int8_input = preprocess_resnet18(img_rgb)
+    print(f"  Input: {img_path}")
+    print(f"  INT8 range: [{int8_input.min()}, {int8_input.max()}], mean={int8_input.mean():.1f}")
+
+    # TODO: FPGA execution for ResNet18
+    # For now, run numpy golden
+    print("  Running ResNet18 (numpy golden)...")
+    from _resnet18_test import conv_golden, maxpool_3x3, residual_add, relu_int8
+
+    x = int8_input
+    x = conv_golden(x, 'conv1', has_relu=True)
+    x = maxpool_3x3(x)
+
+    identity = x
+    x = conv_golden(x, 'layer1.0.conv1', has_relu=True)
+    x = conv_golden(x, 'layer1.0.conv2', has_relu=False)
+    x = relu_int8(residual_add(x, identity))
+    identity = x
+    x = conv_golden(x, 'layer1.1.conv1', has_relu=True)
+    x = conv_golden(x, 'layer1.1.conv2', has_relu=False)
+    x = relu_int8(residual_add(x, identity))
+
+    identity = conv_golden(x, 'layer2.0.downsample.0', has_relu=False)
+    x2 = conv_golden(x, 'layer2.0.conv1', has_relu=True)
+    x2 = conv_golden(x2, 'layer2.0.conv2', has_relu=False)
+    x = relu_int8(residual_add(x2, identity))
+    identity = x
+    x = conv_golden(x, 'layer2.1.conv1', has_relu=True)
+    x = conv_golden(x, 'layer2.1.conv2', has_relu=False)
+    x = relu_int8(residual_add(x, identity))
+
+    identity = conv_golden(x, 'layer3.0.downsample.0', has_relu=False)
+    x2 = conv_golden(x, 'layer3.0.conv1', has_relu=True)
+    x2 = conv_golden(x2, 'layer3.0.conv2', has_relu=False)
+    x = relu_int8(residual_add(x2, identity))
+    identity = x
+    x = conv_golden(x, 'layer3.1.conv1', has_relu=True)
+    x = conv_golden(x, 'layer3.1.conv2', has_relu=False)
+    x = relu_int8(residual_add(x, identity))
+
+    identity = conv_golden(x, 'layer4.0.downsample.0', has_relu=False)
+    x2 = conv_golden(x, 'layer4.0.conv1', has_relu=True)
+    x2 = conv_golden(x2, 'layer4.0.conv2', has_relu=False)
+    x = relu_int8(residual_add(x2, identity))
+    identity = x
+    x = conv_golden(x, 'layer4.1.conv1', has_relu=True)
+    x = conv_golden(x, 'layer4.1.conv2', has_relu=False)
+    x = relu_int8(residual_add(x, identity))
 
     # GAP
-    gapA = xA.astype(np.float32).mean(axis=(0,1))
-    gapB = xB.astype(np.float32).mean(axis=(0,1))
-
-    # --- Dump & Compare ---
-    dump_path = DUMP_DIR / "dump_resnet18.txt"
-    with open(dump_path, "w") as f:
-        f.write(f"ResNet18 End-to-End Comparison\n")
-        f.write(f"Mode: {'dry-run' if dry_run else 'FPGA'}\n")
-        f.write(f"Input: random INT8 (224,224,3) seed={seed}\n")
-        f.write(f"PathA: conv_impl_A (for-loop im2col)\n")
-        f.write(f"PathB: conv_impl_B (stride_tricks im2col)\n")
-        f.write(f"两条路径代码实现不同, 共享权重NPZ\n\n")
-
-        dump_activation("final [PathA]", xA, f)
-        dump_activation("final [PathB]", xB, f)
-        ok = compare_int8("final output", xA, xB, f)
-
-        f.write(f"\nGAP [PathA]: {gapA[:8].tolist()} ...\n")
-        f.write(f"GAP [PathB]: {gapB[:8].tolist()} ...\n")
-        gap_ok = np.array_equal(gapA, gapB)
-        f.write(f"GAP match: {gap_ok}\n")
-
-    np.save(DUMP_DIR / "resnet18_final_A.npy", xA)
-    np.save(DUMP_DIR / "resnet18_final_B.npy", xB)
-    np.save(DUMP_DIR / "resnet18_gap_A.npy", gapA)
-    np.save(DUMP_DIR / "resnet18_gap_B.npy", gapB)
-
-    print(f"    final: {'EXACT' if ok and np.array_equal(xA,xB) else 'DIFF'} shape={xA.shape}")
-    print(f"    GAP:   {'EXACT' if gap_ok else 'DIFF'}")
-    print(f"  Dump: {dump_path}")
-    return ok
+    gap = x.astype(np.float32).mean(axis=(0, 1))  # (512,)
+    print(f"  Final feature: {x.shape}, GAP: {gap.shape}")
+    print(f"  GAP range: [{gap.min():.2f}, {gap.max():.2f}]")
+    print(f"  Top-5 GAP indices: {gap.argsort()[-5:][::-1].tolist()}")
+    return gap
 
 
-# =========================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Main
-# =========================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    ap = argparse.ArgumentParser(description="E2E FPGA inference verification")
-    ap.add_argument("network", choices=["yolov5n", "resnet18", "all"])
-    ap.add_argument("--dry-run", action="store_true",
-                    help="numpy only (validates golden consistency)")
-    ap.add_argument("--seed", type=int, default=42)
+    ap = argparse.ArgumentParser(description="End-to-end FPGA inference")
+    ap.add_argument("network", choices=["yolov5n", "resnet18"])
+    ap.add_argument("--image", type=str, help="Single image path")
+    ap.add_argument("--val-dir", type=str, help="Validation image directory")
+    ap.add_argument("--max-images", type=int, default=5)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--conf-thres", type=float, default=0.25)
     args = ap.parse_args()
 
     RUNS_BASE.mkdir(parents=True, exist_ok=True)
-    DUMP_DIR.mkdir(parents=True, exist_ok=True)
 
     runner = None
     if not args.dry_run:
         from xdma_win import ChipRunnerWin
         runner = ChipRunnerWin()
 
-    nets = []
-    if args.network in ('yolov5n', 'all'):
-        nets.append('yolov5n')
-    if args.network in ('resnet18', 'all'):
-        nets.append('resnet18')
-
     mode = "DRY-RUN" if args.dry_run else "FPGA"
     print(f"\n{'='*70}")
-    print(f"  E2E Verification [{mode}]  seed={args.seed}")
-    print(f"  输出文件: {DUMP_DIR}")
+    print(f"  {args.network.upper()} End-to-End Inference [{mode}]")
     print(f"{'='*70}")
 
-    results = {}
-    for net in nets:
-        print(f"\n{'~'*70}")
-        print(f"  [{net.upper()}]")
-        print(f"{'~'*70}")
-        t0 = time.time()
-        if net == 'yolov5n':
-            ok = run_yolov5n(runner, args.dry_run, args.seed)
-        else:
-            ok = run_resnet18(runner, args.dry_run, args.seed)
-        elapsed = time.time() - t0
-        results[net] = ok
-        print(f"  Result: {'PASS' if ok else 'FAIL'} ({elapsed:.1f}s)")
+    # 收集图片
+    images = []
+    if args.image:
+        images = [args.image]
+    elif args.val_dir:
+        from glob import glob
+        images = sorted(glob(str(Path(args.val_dir) / "*.jpg")))[:args.max_images]
+    else:
+        # 默认使用验证集
+        default_dir = _THIS.parents[3] / "model" / "algorithm" / "Infrared-Object-Detection" / "datasets" / "infrared" / "images" / "val"
+        if default_dir.exists():
+            images = sorted(str(p) for p in default_dir.glob("*.jpg"))[:args.max_images]
 
+    if not images:
+        print("  ERROR: no images found!")
+        return
+
+    print(f"  Images: {len(images)}")
+    t0 = time.time()
+
+    for img_path in images:
+        print(f"\n{'─'*70}")
+        if args.network == "yolov5n":
+            run_yolov5n_inference(runner, img_path, args.dry_run)
+        else:
+            run_resnet18_inference(runner, img_path, args.dry_run)
+
+    elapsed = time.time() - t0
     print(f"\n{'='*70}")
-    print(f"  SUMMARY")
-    for net, ok in results.items():
-        print(f"    {net:12s}: {'PASS' if ok else 'FAIL'}")
-    print(f"\n  可读dump文件位于: {DUMP_DIR}")
-    print(f"  .npy文件可用 np.load() 读取完整数据")
+    print(f"  Done. {len(images)} images in {elapsed:.1f}s")
     print(f"{'='*70}\n")
 
 

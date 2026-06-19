@@ -41,6 +41,7 @@ ops.py  ——  YOLOv5n FPGA 算子库（可拼接）
 from __future__ import annotations
 
 import sys
+import os
 import numpy as np
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,14 @@ _NETWORK_JSON = str(_REPO / "model" / "yolov5n" / "parsed" / "network.json")
 _TILE_SIZE    = 128   # 硬件单 pass 最大输出通道数（8 tiles × 16 ch）
 
 _net_cache: Optional[dict] = None
+
+def set_network_json(path: str):
+    """Switch to a different network.json (e.g. parsed_int16)."""
+    global _NETWORK_JSON, _net_cache
+    _NETWORK_JSON = path
+    _net_cache = None
+    import golden_module_tb
+    golden_module_tb.WEIGHT_DIR = str(Path(path).parent / "weights")
 
 def _net():
     global _net_cache
@@ -134,18 +143,24 @@ class FPGAOps:
         oh      = (h + 2 * meta.pad_h0 - meta.kh) // meta.stride_h + 1
         ow      = (w + 2 * meta.pad_w0 - meta.kw) // meta.stride_w + 1
         eff_cout = meta.out_ch if out_ch_limit <= 0 else min(meta.out_ch - out_ch_offset, out_ch_limit)
-        eff_ch   = ((eff_cout + 15) // 16) * 16  # DCIM 16-ch 对齐
+        # 对齐粒度：INT16 对齐到 8，INT8 对齐到 16
+        import golden_module_tb as _gmt_ec
+        _npz_ec = np.load(os.path.join(_gmt_ec.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz'))
+        _align_ec = 8 if _npz_ec['weight_int8'].dtype == np.int16 else 16
+        eff_ch   = ((eff_cout + _align_ec - 1) // _align_ec) * _align_ec  # DCIM 通道对齐
 
         if self.verbose:
             print(f"  [{layer_name}] {md['shape']}")
 
         if self.runner is None:
             # dry-run：从 expected.hex 读出 golden 数据
-            # expected.hex 每行是一个 128-bit word，bytes_to_128_words 对每 16B 做了 reversed()
-            # 需要反转回原始字节序才能得到正确的 NHWC 数据
+            import golden_module_tb
             raw_words = [bytes.fromhex(l.strip()) for l in open(run_dir / "expected.hex")]
             raw_bytes = b"".join(bytes(reversed(w)) for w in raw_words)
-            exp_flat = np.frombuffer(raw_bytes, dtype=np.int8)
+            # Detect INT16 from weight dtype in NPZ
+            npz_path = os.path.join(golden_module_tb.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz')
+            read_dtype = np.int16 if np.load(npz_path)['weight_int8'].dtype == np.int16 else np.int8
+            exp_flat = np.frombuffer(raw_bytes, dtype=read_dtype)
             try:
                 return exp_flat.reshape(oh, ow, eff_ch)
             except ValueError:
@@ -161,11 +176,13 @@ class FPGAOps:
         elif self.verbose:
             print(f"  [PASS] {layer_name} {total}/{total} words")
 
-        # 从 VPU_BUF 读原始字节（传递给下一层；注意与 expected.hex 的 word 字节序不同，
-        # 但这里我们只是传递原始 INT8 数据给下游算子，双方保持一致）
+        # 从 VPU_BUF 读原始字节，根据 weight dtype 判断 INT8/INT16
+        import golden_module_tb
+        npz_path = os.path.join(golden_module_tb.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz')
+        read_dtype = np.int16 if np.load(npz_path)['weight_int8'].dtype == np.int16 else np.int8
         from xdma_win import VPU_BUF_BASE
         raw = self.runner.x.read(VPU_BUF_BASE + md["dst"], md["words"] * 16)
-        got = np.frombuffer(raw, dtype=np.int8)
+        got = np.frombuffer(raw, dtype=read_dtype)
         try:
             return got.reshape(oh, ow, eff_ch)
         except ValueError:
@@ -180,21 +197,43 @@ class FPGAOps:
     ) -> np.ndarray:
         """自动 cout-tiling：out_ch > tile_size 时分多 pass 执行，结果 concat。
 
-        适用于 model.7/8/9/23 等 256-ch 输出层。
+        适用于 model.7/8/9/23 等 256-ch 输出层，以及 INT16 模式 128ch 层。
+        每个 cout-tile 内部还会自动检查是否需要 oh-tiling。
         """
         meta    = conv_meta(_net(), layer_name)
         total_ch = meta.out_ch
         n_tiles  = (total_ch + tile_size - 1) // tile_size
+        h, w, _ = feat_in.shape
+        from golden_module_tb import out_hw as _out_hw_ct
+        oh, ow = _out_hw_ct(h, w, meta)
+        ibuf_act = 4 * 512 * 16
+        max_pix = max(1, ibuf_act // (meta.acc_depth * 16))
+        # INT16 acc_depth 可能不同——检查权重 dtype
+        import golden_module_tb as _gmt_ct
+        import os as _os_ct
+        _npz_ct = np.load(_os_ct.path.join(_gmt_ct.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz'))
+        if _npz_ct['weight_int8'].dtype == np.int16:
+            max_pix = max(1, ibuf_act // (meta.acc_depth_int16 * 16))
+        need_oh_tile = (oh * ow > max_pix)
+        # INT16 eff_ch 对齐到 8，INT8 对齐到 16
+        align = 8 if _npz_ct['weight_int8'].dtype == np.int16 else 16
         outputs  = []
         for i in range(n_tiles):
             offset = i * tile_size
             limit  = min(tile_size, total_ch - offset)
             if self.verbose:
                 print(f"  [{layer_name}] cout-tile {i}/{n_tiles} ch[{offset}:{offset+limit}]")
-            out_i = self.conv(feat_in, layer_name,
-                              case_name=f"{case_name}_ctile{i}",
-                              out_ch_limit=limit, out_ch_offset=offset)
-            valid = ((limit + 15) // 16) * 16
+            if need_oh_tile:
+                out_i = self.conv_oh_tiled(feat_in, layer_name,
+                                           case_name=f"{case_name}_ctile{i}",
+                                           max_pixels=max_pix,
+                                           out_ch_limit=limit,
+                                           out_ch_offset=offset)
+            else:
+                out_i = self.conv(feat_in, layer_name,
+                                  case_name=f"{case_name}_ctile{i}",
+                                  out_ch_limit=limit, out_ch_offset=offset)
+            valid = ((limit + align - 1) // align) * align
             outputs.append(out_i[:, :, :valid])
         full = np.concatenate(outputs, axis=-1)
         return full[:, :, :total_ch]
@@ -273,13 +312,20 @@ class FPGAOps:
 
             tile_oh_actual = oh_end - oh_start
             eff_cout = meta.out_ch if out_ch_limit <= 0 else min(meta.out_ch - out_ch_offset, out_ch_limit)
-            eff_ch   = ((eff_cout + 15) // 16) * 16
+            # 对齐粒度：INT16 对齐到 8，INT8 对齐到 16
+            import golden_module_tb as _gmt_eff
+            _npz_eff = np.load(os.path.join(_gmt_eff.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz'))
+            _align_eff = 8 if _npz_eff['weight_int8'].dtype == np.int16 else 16
+            eff_ch   = ((eff_cout + _align_eff - 1) // _align_eff) * _align_eff
 
             if self.runner is None:
                 # dry-run：反转每 16B word 的字节序
+                import golden_module_tb
                 raw_words = [bytes.fromhex(l.strip()) for l in open(run_dir / "expected.hex")]
                 raw_bytes = b"".join(bytes(reversed(w)) for w in raw_words)
-                exp_flat = np.frombuffer(raw_bytes, dtype=np.int8)
+                npz_path = os.path.join(golden_module_tb.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz')
+                read_dtype = np.int16 if np.load(npz_path)['weight_int8'].dtype == np.int16 else np.int8
+                exp_flat = np.frombuffer(raw_bytes, dtype=read_dtype)
                 tile_out = exp_flat.reshape(tile_oh_actual, ow, eff_ch)
             else:
                 results = self.runner.run_case(run_dir, staging="hbm")
@@ -291,9 +337,12 @@ class FPGAOps:
                 elif self.verbose:
                     print(f"  [PASS] {layer_name} oh[{oh_start}:{oh_end}] {total}/{total} words")
 
+                import golden_module_tb as _gmt
+                _npz_path = os.path.join(_gmt.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz')
+                _rdtype = np.int16 if np.load(_npz_path)['weight_int8'].dtype == np.int16 else np.int8
                 from xdma_win import VPU_BUF_BASE
                 raw = self.runner.x.read(VPU_BUF_BASE + md["dst"], tile_words * 16)
-                tile_out = np.frombuffer(raw, dtype=np.int8).reshape(tile_oh_actual, ow, eff_ch)
+                tile_out = np.frombuffer(raw, dtype=_rdtype).reshape(tile_oh_actual, ow, eff_ch)
 
             tiles_out.append(tile_out)
             oh_start = oh_end
@@ -312,10 +361,13 @@ class HostOps:
 
     @staticmethod
     def add(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """INT8 逐元素加（饱和截断），对应 YOLOv5 Bottleneck shortcut。"""
+        """逐元素加（饱和截断），对应 YOLOv5 Bottleneck shortcut。"""
+        is_int16 = a.dtype == np.int16
+        clip_lo, clip_hi = (-32768, 32767) if is_int16 else (-128, 127)
+        out_dtype = np.int16 if is_int16 else np.int8
         return np.clip(
-            a.astype(np.int16) + b.astype(np.int16), -128, 127
-        ).astype(np.int8)
+            a.astype(np.int32) + b.astype(np.int32), clip_lo, clip_hi
+        ).astype(out_dtype)
 
     @staticmethod
     def concat(feats: list[np.ndarray], axis: int = -1) -> np.ndarray:
@@ -332,21 +384,34 @@ class HostOps:
         """MaxPool（same padding），对应 SPPF 中的 MaxPool。"""
         pad = k // 2
         h, w, c = feat.shape
-        padded = np.pad(feat.astype(np.int16),
-                        [(pad, pad), (pad, pad), (0, 0)],
-                        mode="constant", constant_values=-128)
-        out = np.empty((h, w, c), dtype=np.int16)
+        is_int16 = feat.dtype == np.int16
+        pad_val = -32768 if is_int16 else -128
+        padded = np.pad(feat, [(pad, pad), (pad, pad), (0, 0)],
+                        mode="constant", constant_values=pad_val)
+        out = np.empty((h, w, c), dtype=feat.dtype)
         for i in range(h):
             for j in range(w):
                 out[i, j] = padded[i:i+k, j:j+k, :].max(axis=(0, 1))
-        return out.astype(np.int8)
+        return out
 
     @staticmethod
-    def qa(feat_fp: np.ndarray, act_scale: float) -> np.ndarray:
-        """FP32 → INT8 量化（网络输入 QA）。"""
+    def qa(feat_fp: np.ndarray, act_scale: float, int16: bool = False) -> np.ndarray:
+        """FP32 → INT8/INT16 量化（网络输入 QA）。"""
+        clip_lo, clip_hi = (-32768, 32767) if int16 else (-128, 127)
+        out_dtype = np.int16 if int16 else np.int8
         return np.clip(
-            np.round(feat_fp / act_scale), -128, 127
-        ).astype(np.int8)
+            np.round(feat_fp / act_scale), clip_lo, clip_hi
+        ).astype(out_dtype)
+
+    @staticmethod
+    def hard_quant(feat_int8: np.ndarray, src_scale: float, dst_scale: float) -> np.ndarray:
+        """INT8 rescale: dequant with src_scale, div by 2, requant with dst_scale.
+
+        Implements the YOLOv5 QAT 'hard_quant(out/2)' for C3 output layers
+        (model.17/20/23) that feed into neck downsamples and detect head.
+        """
+        rescale = src_scale / 2.0 / dst_scale
+        return np.clip(np.round(feat_int8.astype(np.float32) * rescale), -128, 127).astype(np.int8)
 
     @staticmethod
     def dqa(feat_int32: np.ndarray, scale: np.ndarray,
@@ -390,8 +455,13 @@ class C3Block:
             # 计算 IBUF 安全容量（acc_depth 决定每像素占 IBUF 行数）
             ibuf_act = 4 * 512 * 16  # 32KB
             max_pix = max(1, ibuf_act // (m.acc_depth * 16))
-            if m.out_ch > _TILE_SIZE:
-                return o.conv_tiled(feat, f"{p}.{name}", case_name=cname)
+            # INT16 每 pass 最多 64 ch（8 tiles × 8 ch）
+            import golden_module_tb as _gmt_c3
+            import os as _os_c3
+            _npz_c3 = np.load(os.path.join(_gmt_c3.WEIGHT_DIR, f"{p}.{name}".replace('.', '_') + '.npz'))
+            _tile_sz = 64 if _npz_c3['weight_int8'].dtype == np.int16 else _TILE_SIZE
+            if m.out_ch > _tile_sz:
+                return o.conv_tiled(feat, f"{p}.{name}", case_name=cname, tile_size=_tile_sz)
             elif oh * ow > max_pix:
                 return o.conv_oh_tiled(feat, f"{p}.{name}", case_name=cname, max_pixels=max_pix)
             return o.conv(feat, f"{p}.{name}", case_name=cname, **kw)
@@ -400,11 +470,8 @@ class C3Block:
         cv2 = _conv("cv2.conv", feat_in)
         x   = cv1
         for i in range(self.n):
-            shortcut = x
             x = _conv(f"m.{i}.cv1.conv", x)
             x = _conv(f"m.{i}.cv2.conv", x)
-            if shortcut.shape == x.shape:
-                x = self.host.add(shortcut, x)
         cat = self.host.concat([x, cv2], axis=-1)
         return _conv("cv3.conv", cat)
 

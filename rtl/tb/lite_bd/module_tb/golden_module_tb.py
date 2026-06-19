@@ -479,19 +479,25 @@ def golden_conv_forward(
     im2col_in_ch: Optional[int] = None,
     acc_eff: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """INT8 im2col → matmul → DQA(ReLU) → QA；返回 (qa_int8_hwc, dqa_fp32_hwc)。"""
+    """INT8/INT16 im2col → matmul → DQA(ReLU) → QA；返回 (qa_int_hwc, dqa_fp32_hwc)。"""
     h, w = feat_hwc.shape[0], feat_hwc.shape[1]
     ic = im2col_in_ch if im2col_in_ch is not None else feat_hwc.shape[2]
-    feat_i8 = feat_hwc.reshape(h, w, ic).astype(np.int8)
+    is_int16 = npz['weight_int8'].dtype == np.int16
+    quant_dtype = np.int16 if is_int16 else np.int8
+    clip_lo, clip_hi = (-32768, 32767) if is_int16 else (-128, 127)
+    feat_i8 = feat_hwc.reshape(h, w, ic).astype(quant_dtype)
     if acc_eff is None:
         acc_eff = (meta.kh * meta.kw * ic + DCIM_CH_IN - 1) // DCIM_CH_IN
 
-    cols = im2col(feat_i8, meta)
-    wflat = npz['weight_int8'].reshape(meta.out_ch, -1).astype(np.int32)
+    cols = im2col_int16(feat_i8, meta) if is_int16 else im2col(feat_i8, meta)
+    # For INT16, use float32 matmul to avoid int32 accumulator overflow
+    # (32767^2 * kernel_size can exceed int32 max; FPGA uses wider accumulators)
+    matmul_dtype = np.float32 if is_int16 else np.int32
+    wflat = npz['weight_int8'].reshape(meta.out_ch, -1).astype(matmul_dtype)
     k_size = acc_eff * DCIM_CH_IN
     if wflat.shape[1] < k_size:
         wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
-    accum = cols.astype(np.int32) @ wflat.T
+    accum = cols.astype(matmul_dtype) @ wflat.T
 
     eff_ch = dcim_effective_out_ch(meta, False)
     scale = np.resize(npz['dqa_scale'].astype(np.float32), eff_ch)
@@ -503,9 +509,9 @@ def golden_conv_forward(
         accum.astype(np.float32) * scale[None, :eff_ch] + bias[None, :eff_ch], 0.0)
     dqa_hwc = dqa_flat.reshape(oh, ow, eff_ch)
 
-    qa = np.clip(np.round(dqa_flat * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta.out_ch)
+    qa = np.clip(np.round(dqa_flat * qscale), clip_lo, clip_hi).astype(quant_dtype).reshape(oh, ow, meta.out_ch)
     if eff_ch > meta.out_ch:
-        qa_pad = np.zeros((oh, ow, eff_ch), dtype=np.int8)
+        qa_pad = np.zeros((oh, ow, eff_ch), dtype=quant_dtype)
         qa_pad[:, :, :meta.out_ch] = qa
         qa = qa_pad
     return qa, dqa_hwc
@@ -864,6 +870,11 @@ class ConvMeta:
     def num_tiles(self) -> int:
         return min(NUM_TILES, (self.out_ch + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE)
 
+    @property
+    def num_tiles_int16(self) -> int:
+        """INT16 模式所需 tile 数 = ceil(out_ch / INT16_OUT_CH_PER_TILE)。"""
+        return min(NUM_TILES, (self.out_ch + DCIM_INT16_OUT_CH_PER_TILE - 1) // DCIM_INT16_OUT_CH_PER_TILE)
+
 
 @dataclass
 class ConvIm2colShape:
@@ -1040,10 +1051,12 @@ def load_layer_npz_checked(meta: ConvMeta, net: Dict[str, dict], require_activat
     expected_weight_shape = tuple(ly['weight_shape'])
     if tuple(d['weight_int8'].shape) != expected_weight_shape:
         raise AssertionError(f'{meta.name}: weight_int8 shape {d["weight_int8"].shape} != network {expected_weight_shape}')
-    if expected_weight_shape != (ly['out_channels'], ly['in_channels'], ly['kernel_h'], ly['kernel_w']):
+    oihw = (ly['out_channels'], ly['in_channels'], ly['kernel_h'], ly['kernel_w'])
+    ohwi = (ly['out_channels'], ly['kernel_h'], ly['kernel_w'], ly['in_channels'])
+    if expected_weight_shape != oihw and expected_weight_shape != ohwi:
         raise AssertionError(f'{meta.name}: inconsistent network weight_shape {expected_weight_shape}')
-    if d['weight_int8'].dtype != np.int8:
-        raise AssertionError(f'{meta.name}: weight_int8 dtype {d["weight_int8"].dtype} != int8')
+    if d['weight_int8'].dtype not in (np.int8, np.int16):
+        raise AssertionError(f'{meta.name}: weight_int8 dtype {d["weight_int8"].dtype} not in (int8, int16)')
     if d['dqa_scale'].shape[0] != ly['out_channels'] or d['dqa_bias'].shape[0] != ly['out_channels']:
         raise AssertionError(f'{meta.name}: dqa scale/bias length must equal out_channels={ly["out_channels"]}')
     if 'act_zero_point' in d.files and float(d['act_zero_point']) != float(ly.get('act_zero_point', 0.0)):
@@ -1816,14 +1829,19 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
     scale   = scale  [out_ch_offset: out_ch_offset + meta.out_ch]
     bias    = bias   [out_ch_offset: out_ch_offset + meta.out_ch]
     qscale = np.float32(1.0 / float(npz['act_scale']))
+    quant_dtype = np.int16 if use_int16 else np.int8
     if feat is None:
-        feat = random_int8(rng, (h, w, meta.in_ch))
+        if use_int16:
+            feat = rng.integers(-32768, 32768, (h, w, meta.in_ch), dtype=np.int16)
+        else:
+            feat = random_int8(rng, (h, w, meta.in_ch))
     else:
-        feat_in = np.asarray(feat, dtype=np.int8)
+        # 如果权重是 INT16，feat 也应保持 INT16（不能强制 astype int8）
+        is_int16_feat = (weights.dtype == np.int16)
+        feat_in = np.asarray(feat, dtype=np.int16 if is_int16_feat else quant_dtype)
         act_ch = feat_in.size // (h * w)
         feat = feat_in.reshape(h, w, act_ch)
         if act_ch != meta.in_ch:
-            # cout-tiling / out_ch_limit 截断后的中间激活，in_ch 跟着实际情况走
             meta.in_ch = act_ch
 
     # OH-tiling: 裁剪输入 feature 到本 tile 所需的行范围
@@ -1839,7 +1857,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         feat_tile_raw = feat[ih_start_clamp:ih_end_clamp]  # (h_tile, w, in_ch)
         # 手动补 H 方向 padding 行（全零）。
         # im2col 已修复为分别使用 pad_h0/pad_w0，W 方向 padding 不受影响。
-        zero_h = np.zeros((1, w, meta.in_ch), dtype=np.int8)
+        tile_dtype = feat_tile_raw.dtype  # 保持和 feat 相同的 dtype（INT8 或 INT16）
+        zero_h = np.zeros((1, w, meta.in_ch), dtype=tile_dtype)
         parts: list = []
         if pad_h0_tile > 0:
             parts.append(np.tile(zero_h, (pad_h0_tile, 1, 1)))
@@ -1874,7 +1893,11 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         for t in range(meta.num_tiles):
             tile_w16 = w16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE]
             weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)])
-        src_words = bytes_to_128_words(feat.astype(np.int16).tobytes())
+        # INT16 im2col in_col_stride = ceil(in_ch/8)*8 个 INT16 槽（16 字节），需 pad
+        _slots16 = ((meta.in_ch + 7) // 8) * 8
+        _feat_pad = np.zeros((h * w, _slots16), dtype=np.int16)
+        _feat_pad[:, :meta.in_ch] = feat.reshape(h * w, meta.in_ch)
+        src_words = bytes_to_128_words(_feat_pad.tobytes())
         # INT16 im2col 需要 2× INT8 的 OBUF_AUX 空间；在 suite 中前 case 可能只写了一半，
         # 须用全零清空整个 AUX 区，避免残留数据影响后半段激活搬运结果
         im2col_aux_bytes = oh * ow * acc * DCIM_CH_IN * 2
@@ -1888,7 +1911,9 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
             write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
             weight_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
         # 动态地址：src(INT16 feat) → im2col_aux → dcim_out → qa_out
-        src16_bytes  = h * w * meta.in_ch * 2
+        # INT16 im2col in_col_stride = ceil(in_ch/8)*8 个 INT16 = ceil(in_ch/8)*16 字节/像素
+        _slots16_addr = ((meta.in_ch + 7) // 8) * 8
+        src16_bytes  = h * w * _slots16_addr * 2
         im2col_bytes = im2col_aux_bytes
         dcim_bytes   = oh * ow * meta.num_tiles * DCIM_INT16_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
         qa_bytes     = oh * ow * num_logical_oc * 2  # INT16 out
@@ -1919,17 +1944,111 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta.name, 'dst': qa_off, 'words': len(exp_words),
                 'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
                 'shape': f'{h}x{w}x{meta.in_ch} -> {oh}x{ow}x{num_logical_oc} INT16 acc={acc} tiles={meta.num_tiles}'}
-    # INT8 path (original)
+    # Detect INT16 weight dtype → use INT16 FPGA hardware path
+    is_weight_int16 = weights.dtype == np.int16
+
+    if is_weight_int16:
+        # ── INT16 硬件路径 ──────────────────────────────────────────────────
+        # 使用 INT16 im2col / DCIM / QA 指令，权重打包为 nibble 格式
+        acc = meta_used.acc_depth_int16
+        K = acc * DCIM_CH_IN
+        n_tiles_i16 = meta_used.num_tiles_int16  # INT16 每 tile 8 ch
+        num_logical_oc = n_tiles_i16 * DCIM_LOGICAL_OUT_PER_TILE
+
+        # Golden: INT16 act × INT16 weight → int32 → DQA → QA(int16)
+        cols16 = im2col_int16(feat_used, meta_used)  # (M, K)
+        wflat16 = weights.reshape(meta_used.out_ch, -1).astype(np.int64)
+        if wflat16.shape[1] < K:
+            wflat16 = np.pad(wflat16, ((0, 0), (0, K - wflat16.shape[1])), constant_values=0)
+        # Pad output channels to num_logical_oc
+        if wflat16.shape[0] < num_logical_oc:
+            wflat16 = np.pad(wflat16, ((0, num_logical_oc - wflat16.shape[0]), (0, 0)), constant_values=0)
+        accum = (cols16.astype(np.int64) @ wflat16.T).astype(np.int32)  # (M, num_logical_oc)
+        scale_ext = np.zeros(num_logical_oc, dtype=np.float32)
+        bias_ext  = np.zeros(num_logical_oc, dtype=np.float32)
+        scale_ext[:len(scale)] = scale
+        bias_ext [:len(bias)]  = bias
+        dqa = np.maximum(accum.astype(np.float32) * scale_ext[None, :] + bias_ext[None, :], 0.0)
+        qa = np.clip(np.round(dqa * qscale), -32768, 32767).astype(np.int16).reshape(oh, ow, num_logical_oc)
+        exp_words = int16_hwc_words(qa.reshape(1, 1, oh * ow * num_logical_oc))
+        # src: INT16 feature map，每像素 pad 到 ceil(in_ch/8)*8 个槽（INT16 每槽 2B，共 ceil(in_ch/8)*16 字节）
+        # INT16 im2col 硬件 in_col_stride = ceil(in_ch/8)*8 INT16 = ceil(in_ch/8)*16 字节
+        slots_per_pixel = ((meta_used.in_ch + 7) // 8) * 8  # 8-INT16-slot 对齐
+        feat_padded = np.zeros((h_used * w, slots_per_pixel), dtype=np.int16)
+        feat_flat = feat_used.reshape(h_used * w, meta_used.in_ch)
+        feat_padded[:, :meta_used.in_ch] = feat_flat
+        src16_bytes = h_used * w * slots_per_pixel * 2
+        src_words = bytes_to_128_words(feat_padded.tobytes())
+
+        # 权重打包：INT16 nibble 格式（每 tile DCIM_LOGICAL_OUT_PER_TILE 个逻辑通道）
+        wflat16_int16 = weights.reshape(meta_used.out_ch, -1).astype(np.int16)
+        if wflat16_int16.shape[1] < K:
+            wflat16_int16 = np.pad(wflat16_int16, ((0, 0), (0, K - wflat16_int16.shape[1])), constant_values=0)
+        if wflat16_int16.shape[0] < num_logical_oc:
+            wflat16_int16 = np.pad(wflat16_int16, ((0, num_logical_oc - wflat16_int16.shape[0]), (0, 0)), constant_values=0)
+        weight_words_per_tile: List[List[str]] = []
+        for t in range(n_tiles_i16):
+            tile_w16 = wflat16_int16[t * DCIM_LOGICAL_OUT_PER_TILE:(t + 1) * DCIM_LOGICAL_OUT_PER_TILE]
+            weight_words_per_tile.append([f'{e:032x}' for e in pack_weight_tile_int16(tile_w16, t, acc)])
+
+        write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
+        write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
+
+        # 地址分配：src(INT16) → im2col_aux(INT16) → dcim_out(INT32) → qa_out(INT16)
+        # src16_bytes 已在上方 src_words 生成处计算
+        im2col_bytes = oh * ow * acc * DCIM_CH_IN * 2  # INT16 im2col 每元素 2B
+        dcim_bytes   = oh * ow * n_tiles_i16 * DCIM_INT16_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
+        dqa_fp32_bytes = oh * ow * num_logical_oc * 4
+        im2col_alloc = max(im2col_bytes, dqa_fp32_bytes)
+        src_off, im2col_off, dcim_off, dst_off = alloc_flat(
+            src16_bytes, im2col_alloc, dcim_bytes, len(exp_words) * OBUF_WORD_ALIGN)
+
+        hbm_src = HBM_PHY_BASE + HBM_OFF_INPUT0
+        fast_inst = cdma_copy_chunked(hbm_src, OBUF_PHY_BASE + src_off, src16_bytes)
+        fast_inst += vpu_exec(UNIT_IM2COL, src_off, 0, meta_used.in_ch, h_used, w, 0, 0, im2col_off,
+                              encode_addr_break(meta_used), oh, ow, flags=0x2)
+        # dcim_layer_inst / tile_seq_dqa_insts 读 meta.num_tiles；
+        # INT16 时需要 num_tiles=n_tiles_i16，令 meta_i16.out_ch = n_tiles_i16 * INT8_OUT_CH_PER_TILE
+        # 使 num_tiles 属性返回正确值（num_tiles = ceil(out_ch/16)）。
+        import copy as _cm16
+        meta_i16 = _cm16.copy(meta_used)
+        meta_i16.out_ch = n_tiles_i16 * DCIM_INT8_OUT_CH_PER_TILE
+        fast_inst += dcim_layer_inst(meta_i16, oh * ow, im2col_off, dcim_off, IBUF_ACT, IBUF_WEI,
+                                     int16=True, collect_to_vpubuf=True)
+        fast_inst += vpu_pipe_nop()
+        fast_inst += tile_seq_dqa_insts(meta_i16, oh * ow, dcim_off, im2col_off,
+                                        WB_SCALE, WB_BIAS, oh, ow, flags=0x1, dcim_int16=True)
+        fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, dst_off,
+                              flags=0x2)
+        fast_inst += [header(OP_END, 0, 0)]
+
+        weight_loads: List[Tuple[str, int]] = []
+        for t in range(n_tiles_i16):
+            fname = f'weight_tile{t}.hex'
+            write_hex(os.path.join(out_dir, fname), weight_words_per_tile[t])
+            weight_loads.append((fname, TILE_IBUF_PHY_BASES[t] + IBUF_WEI))
+        fast_loads = [('src0.hex', HBM_PHY_BASE + HBM_OFF_INPUT0)] + weight_loads
+        make_fast_svh(fast_loads, out_dir)
+        all_weight_words = [w for tw in weight_words_per_tile for w in tw]
+        hbm = hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words)), (HBM_OFF_WEIGHT, words_to_blob(all_weight_words))])
+        wb  = wb_blob([(WB_SCALE, fp32_blob(scale_ext)), (WB_BIAS, fp32_blob(bias_ext)),
+                       (WB_QSCALE, fp32_blob(np.array([qscale], dtype=np.float32)))])
+        oh_tag = f'oh[{oh_tile_start}:{oh_tile_end}]' if oh_tiling else f'{oh}'
+        return {'module': 'conv_pipeline', 'name': spec['name'], 'layer': meta_used.name, 'dst': dst_off, 'words': len(exp_words),
+                'fast_inst': fast_inst, 'hbm': hbm, 'wb': wb,
+                'oh_tile_start': oh_tile_start, 'oh_tile_end': oh_tile_end,
+                'shape': f'{h_used}x{w}x{meta_used.in_ch} -> {oh_tag}x{ow}x{meta_used.out_ch}(logical={num_logical_oc}) INT16 acc={acc} tiles={n_tiles_i16}'}
+
+    # ── INT8 硬件路径 ────────────────────────────────────────────────────────
     cols = im2col(feat_used, meta_used)
     wflat = weights.reshape(meta_used.out_ch, -1).astype(np.int32)
-    if wflat.shape[1] < meta_used.acc_depth * DCIM_CH_IN:
-        wflat = np.pad(wflat, ((0, 0), (0, meta_used.acc_depth * DCIM_CH_IN - wflat.shape[1])), constant_values=0)
+    k_size = meta_used.acc_depth * DCIM_CH_IN
+    if wflat.shape[1] < k_size:
+        wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
     accum = cols.astype(np.int32) @ wflat.T
     dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
     qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta_used.out_ch)
-    # Pad to effective DCIM output channels: DCIM tile always writes
-    # INT8_OUT_CH_PER_TILE (=32) channels per pixel regardless of meta.out_ch.
-    # Extra channels receive zero weight/bias from WB → QA output = 0.
+    # Pad to effective DCIM output channels
     eff_ch = dcim_effective_out_ch(meta_used)
     if eff_ch > meta_used.out_ch:
         qa_padded = np.zeros((oh, ow, eff_ch), dtype=np.int8)
@@ -1945,8 +2064,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
     # 动态地址：src(INT8) → im2col scratch → dcim_out → qa_out
     # im2col_unit 要求 VPU_BUF 中 feature map 按 16B/pixel 对齐存放（in_col_stride=16）；
-    # CDMA 搬运量 src_bytes_aligned 必须与 int8_hwc_words(feat) 生成的对齐大小一致，
-    # 对 in_ch=16 倍数时两者相等，对 in_ch<16（如 in_ch=3）时紧排大小不足会导致数据截断。
+    # CDMA 搬运量 src_bytes_aligned 必须与 int8_hwc_words(feat) 生成的对齐大小一致。
     src_bytes_aligned = h_used * w * (((meta_used.in_ch + 15) // 16) * 16)
     im2col_bytes = oh * ow * meta_used.acc_depth * DCIM_CH_IN
     dcim_bytes   = oh * ow * meta_used.num_tiles * DCIM_INT8_OUT_WORDS_PER_TILE * OBUF_WORD_ALIGN
