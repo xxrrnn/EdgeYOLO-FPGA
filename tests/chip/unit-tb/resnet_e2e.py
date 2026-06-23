@@ -180,6 +180,7 @@ def _infer_input_scale(parsed_dir: Path) -> float:
 
 
 def _conv_auto(fpga: FPGAOps, layer_name: str, feat: np.ndarray, case_name: str) -> np.ndarray:
+    from ops import _safe_int8_tile_size
     meta = conv_meta(_net(), layer_name)
     h, w, _ = feat.shape
     oh, ow = _out_hw(h, w, meta)
@@ -188,7 +189,11 @@ def _conv_auto(fpga: FPGAOps, layer_name: str, feat: np.ndarray, case_name: str)
     weight_path = Path(golden_module_tb.WEIGHT_DIR) / f"{_safe_name(layer_name)}.npz"
     is_int16 = np.load(weight_path)["weight_int8"].dtype == np.int16
     max_pix = max(1, ibuf_act // ((meta.acc_depth_int16 if is_int16 else meta.acc_depth) * 16))
-    tile_limit = 64 if is_int16 else 128
+    # INT16: 64ch max per tile (8 tiles × 8ch); INT8: respect hardware SRAM depth constraint
+    if is_int16:
+        tile_limit = 64
+    else:
+        tile_limit = _safe_int8_tile_size(meta.acc_depth)
 
     if meta.out_ch > tile_limit:
         out = fpga.conv_tiled(feat, layer_name, case_name=case_name, tile_size=tile_limit)

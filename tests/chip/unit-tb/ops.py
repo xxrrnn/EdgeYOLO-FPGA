@@ -63,6 +63,25 @@ _TILE_SIZE    = 128   # 硬件单 pass 最大输出通道数（8 tiles × 16 ch�
 
 _net_cache: Optional[dict] = None
 
+# DCIM hardware bug: when n_tiles * acc_depth >= 2 * DCIM_SRAM_DP (= 256),
+# some output tiles produce wrong accumulation results.
+# This constrains the maximum safe tile_size (output channels per ctile pass).
+#   safe_tile_size = floor(255 / acc_depth) * 16  (rounded down to 16-ch boundary)
+# For acc_depth=36: floor(255/36)*16 = 7*16 = 112
+# For acc_depth=72: floor(255/72)*16 = 3*16 = 48
+# For acc_depth=18: floor(255/18)*16 = 14*16 = 224 → hardware max 128 (8 tiles)
+_DCIM_SRAM_DP = 128  # = DCIM_SRAM_DP from chip_config
+
+
+def _safe_int8_tile_size(acc_depth: int) -> int:
+    """Return the largest safe output-channel block size (multiple of 16) for INT8 mode.
+
+    Hardware constraint: n_tiles * acc_depth must be < 2 * DCIM_SRAM_DP (256).
+    """
+    max_tiles = max(1, (2 * _DCIM_SRAM_DP - 1) // acc_depth)
+    return min(max_tiles, 8) * 16  # 8 tiles * 16 ch = 128 is the hardware maximum
+
+
 def set_network_json(path: str):
     """Switch to a different network.json (e.g. parsed_int16)."""
     global _NETWORK_JSON, _net_cache
@@ -116,6 +135,7 @@ class FPGAOps:
 
         h, w, _ = feat_in.shape
         spec: dict = {"name": case_name, "layer": layer_name, "in_hw": (h, w)}
+        spec["relu_en"] = bool(_net()[layer_name].get("has_activation", True))
         if out_ch_limit > 0:
             spec["out_ch_limit"] = out_ch_limit
         if out_ch_offset > 0:
@@ -199,24 +219,35 @@ class FPGAOps:
 
         适用于 model.7/8/9/23 等 256-ch 输出层，以及 INT16 模式 128ch 层。
         每个 cout-tile 内部还会自动检查是否需要 oh-tiling。
+
+        DCIM 硬件限制：n_tiles * acc_depth >= 2*DCIM_SRAM_DP (256) 时会产生错误结果。
+        INT8 模式下自动将 tile_size 限制为 _safe_int8_tile_size(acc_depth) 以绕过此 bug。
         """
         meta    = conv_meta(_net(), layer_name)
         total_ch = meta.out_ch
+        # Check for DCIM hardware bug workaround (INT8 only)
+        import golden_module_tb as _gmt_ct
+        import os as _os_ct
+        _npz_ct = np.load(_os_ct.path.join(_gmt_ct.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz'))
+        _is_int16 = _npz_ct['weight_int8'].dtype == np.int16
+        if not _is_int16 and tile_size == _TILE_SIZE:
+            safe = _safe_int8_tile_size(meta.acc_depth)
+            if safe < tile_size:
+                tile_size = safe
+                if self.verbose:
+                    print(f"  [{layer_name}] DCIM tile WA: tile_size→{tile_size} "
+                          f"(acc_depth={meta.acc_depth}, constraint n_tiles*acc<256)")
         n_tiles  = (total_ch + tile_size - 1) // tile_size
         h, w, _ = feat_in.shape
         from golden_module_tb import out_hw as _out_hw_ct
         oh, ow = _out_hw_ct(h, w, meta)
         ibuf_act = 4 * 512 * 16
         max_pix = max(1, ibuf_act // (meta.acc_depth * 16))
-        # INT16 acc_depth 可能不同——检查权重 dtype
-        import golden_module_tb as _gmt_ct
-        import os as _os_ct
-        _npz_ct = np.load(_os_ct.path.join(_gmt_ct.WEIGHT_DIR, layer_name.replace('.', '_') + '.npz'))
-        if _npz_ct['weight_int8'].dtype == np.int16:
+        if _is_int16:
             max_pix = max(1, ibuf_act // (meta.acc_depth_int16 * 16))
         need_oh_tile = (oh * ow > max_pix)
         # INT16 eff_ch 对齐到 8，INT8 对齐到 16
-        align = 8 if _npz_ct['weight_int8'].dtype == np.int16 else 16
+        align = 8 if _is_int16 else 16
         outputs  = []
         for i in range(n_tiles):
             offset = i * tile_size
@@ -287,6 +318,7 @@ class FPGAOps:
                 "in_hw": (h, w),
                 "oh_tile_start": oh_start,
                 "oh_tile_end":   oh_end,
+                "relu_en": bool(_net()[layer_name].get("has_activation", True)),
             }
             if out_ch_limit > 0:
                 spec["out_ch_limit"] = out_ch_limit
