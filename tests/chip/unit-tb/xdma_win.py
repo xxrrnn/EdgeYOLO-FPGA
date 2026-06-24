@@ -64,6 +64,8 @@ HBM_OFF_OUTPUT = 0x100000
 # Pool starts at 2 MB from base, giving 4GB-2MB of space (>>enough for any network).
 HBM_OFF_WEIGHT_POOL = 0x200000   # 2 MB offset: safe above all scratch regions
 
+INST_BASE = 0x1_0400_0000
+
 TILE_IBUF_BASE = 0x1_0000_0000
 TILE_OBUF_BASE = 0x1_0100_0000
 VPU_BUF_BASE = 0x1_0200_0000
