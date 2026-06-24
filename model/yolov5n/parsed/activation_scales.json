@@ -1,287 +1,287 @@
 {
   "model.0.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
-  },
-  "model.10.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.13.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.13.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.13.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.13.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.13.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.14.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.17.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.17.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.17.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.17.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.17.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.18.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.2.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
-  },
-  "model.2.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.2.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.2.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.2.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
-  "model.20.cv1.act": {
-    "scale": 0.023545317351818085,
+  "model.2.cv2.act": {
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
-  "model.20.cv2.act": {
-    "scale": 0.023545317351818085,
+  "model.2.cv3.act": {
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
-  },
-  "model.20.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.20.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.20.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.21.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.23.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.23.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.23.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.23.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.23.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.3.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.4.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
-  },
-  "model.4.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.4.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.4.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.4.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.4.m.1.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.4.m.1.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
+  },
+  "model.4.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.4.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
   },
   "model.5.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
-  },
-  "model.6.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.6.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.m.1.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.m.1.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.m.2.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.6.m.2.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
+  },
+  "model.6.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.6.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
   },
   "model.7.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.8.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
-  },
-  "model.8.cv2.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
-  },
-  "model.8.cv3.act": {
-    "scale": 0.023545317351818085,
-    "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.8.m.0.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.8.m.0.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
+  },
+  "model.8.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.8.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
   },
   "model.9.cv1.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
   },
   "model.9.cv2.act": {
-    "scale": 0.023545317351818085,
+    "scale": 0.07814328372478485,
     "zero_point": 0.0,
-    "signed": false
+    "signed": true
+  },
+  "model.10.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.13.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.13.m.0.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.13.m.0.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.13.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.13.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.14.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.17.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.17.m.0.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.17.m.0.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.17.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.17.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.18.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.20.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.20.m.0.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.20.m.0.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.20.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.20.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.21.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.23.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.23.m.0.cv1.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.23.m.0.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.23.cv2.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
+  },
+  "model.23.cv3.act": {
+    "scale": 0.07814328372478485,
+    "zero_point": 0.0,
+    "signed": true
   }
 }

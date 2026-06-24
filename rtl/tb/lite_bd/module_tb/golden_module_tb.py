@@ -1816,7 +1816,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
     oh_tile_end: int   = int(spec.get('oh_tile_end', oh_full))
     oh = oh_tile_end - oh_tile_start  # 本 tile 的输出行数
     use_int16: bool = spec.get('int16', False)
-    npz = load_layer_npz_checked(meta, net, require_activation=True)
+    relu_en: bool = bool(spec.get('relu_en', net.get(meta.name, {}).get('has_activation', True)))
+    npz = load_layer_npz_checked(meta, net, require_activation=False)
     weights = npz['weight_int8']
     scale = npz['dqa_scale'].astype(np.float32)
     bias = npz['dqa_bias'].astype(np.float32)
@@ -1886,7 +1887,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         w16 = rng.integers(-2048, 2048, size=(num_logical_oc, K), dtype=np.int32).astype(np.int16)
         # Golden: int16 act × int16 weight → int32 → DQA(fp32) → QA(int16)
         accum16 = (cols16.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
-        dqa = np.maximum(accum16.astype(np.float32) * scale[:num_logical_oc][None, :] + bias[:num_logical_oc][None, :], 0.0)
+        dqa_raw = accum16.astype(np.float32) * scale[:num_logical_oc][None, :] + bias[:num_logical_oc][None, :]
+        dqa = np.maximum(dqa_raw, 0.0) if relu_en else dqa_raw
         qa = np.clip(np.round(dqa * qscale), -32768, 32767).astype(np.int16).reshape(oh, ow, num_logical_oc)
         exp_words = int16_hwc_words(qa.reshape(1, 1, oh * ow * num_logical_oc))
         weight_words_per_tile: List[List[str]] = []
@@ -1928,7 +1930,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
                                      int16=True, collect_to_vpubuf=True)
         fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
         fast_inst += tile_seq_dqa_insts(meta, oh * ow, dcim_off, im2col_off,
-                                        WB_SCALE, WB_BIAS, oh, ow, flags=0x1, dcim_int16=True)
+                                        WB_SCALE, WB_BIAS, oh, ow,
+                                        flags=(0x1 if relu_en else 0x0), dcim_int16=True)
         fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, qa_off, flags=0x2)
         fast_inst += [header(OP_END, 0, 0)]
         # aux_zero：清空 im2col_off 区域（INT16 残留保护）
@@ -1968,7 +1971,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         bias_ext  = np.zeros(num_logical_oc, dtype=np.float32)
         scale_ext[:len(scale)] = scale
         bias_ext [:len(bias)]  = bias
-        dqa = np.maximum(accum.astype(np.float32) * scale_ext[None, :] + bias_ext[None, :], 0.0)
+        dqa_raw = accum.astype(np.float32) * scale_ext[None, :] + bias_ext[None, :]
+        dqa = np.maximum(dqa_raw, 0.0) if relu_en else dqa_raw
         qa = np.clip(np.round(dqa * qscale), -32768, 32767).astype(np.int16).reshape(oh, ow, num_logical_oc)
         exp_words = int16_hwc_words(qa.reshape(1, 1, oh * ow * num_logical_oc))
         # src: INT16 feature map，每像素 pad 到 ceil(in_ch/8)*8 个槽（INT16 每槽 2B，共 ceil(in_ch/8)*16 字节）
@@ -2017,7 +2021,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
                                      int16=True, collect_to_vpubuf=True)
         fast_inst += vpu_pipe_nop()
         fast_inst += tile_seq_dqa_insts(meta_i16, oh * ow, dcim_off, im2col_off,
-                                        WB_SCALE, WB_BIAS, oh, ow, flags=0x1, dcim_int16=True)
+                                        WB_SCALE, WB_BIAS, oh, ow,
+                                        flags=(0x1 if relu_en else 0x0), dcim_int16=True)
         fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, num_logical_oc, oh, ow, 0, WB_QSCALE, dst_off,
                               flags=0x2)
         fast_inst += [header(OP_END, 0, 0)]
@@ -2046,7 +2051,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
     if wflat.shape[1] < k_size:
         wflat = np.pad(wflat, ((0, 0), (0, k_size - wflat.shape[1])), constant_values=0)
     accum = cols.astype(np.int32) @ wflat.T
-    dqa = np.maximum(accum.astype(np.float32) * scale[None, :] + bias[None, :], 0.0)
+    dqa_raw = accum.astype(np.float32) * scale[None, :] + bias[None, :]
+    dqa = np.maximum(dqa_raw, 0.0) if relu_en else dqa_raw
     qa = np.clip(np.round(dqa * qscale), -128, 127).astype(np.int8).reshape(oh, ow, meta_used.out_ch)
     # Pad to effective DCIM output channels
     eff_ch = dcim_effective_out_ch(meta_used)
@@ -2083,7 +2089,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
                                  collect_to_vpubuf=True)
     fast_inst += vpu_pipe_nop()  # 排空 im2col/DCIM 残留
     fast_inst += tile_seq_dqa_insts(meta_used, oh * ow, dcim_off, im2col_off,
-                                    WB_SCALE, WB_BIAS, oh, ow, flags=0x1)
+                                    WB_SCALE, WB_BIAS, oh, ow, flags=(0x1 if relu_en else 0x0))
     fast_inst += vpu_exec(UNIT_QA, im2col_off, 0, eff_ch, oh, ow, 0, WB_QSCALE, dst_off)
     fast_inst += [header(OP_END, 0, 0)]
     weight_loads: List[Tuple[str, int]] = []

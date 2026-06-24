@@ -4,6 +4,74 @@ DCIM + im2col 裁剪验证项目。详见 `.cursor/rules/project-context.mdc`。
 
 ---
 
+## 一键 E2E 执行入口（YOLOv5n / ResNet18）
+
+根目录 `run.py` 是当前推荐入口：负责调度 YOLOv5n 和 ResNet18 的 INT8 / INT16 E2E 推理，并打印每张输入图片与输出图片位置。复杂网络逻辑不放在根目录脚本中，而是复用 `tests/chip/unit-tb/` 下的 runner。
+
+### 快速命令
+
+```powershell
+# 在仓库根目录执行
+cd E:\work2026\runnan_xu\FPGA\EdgeYOLO-FPGA
+
+# dry-run：不使用 FPGA，快速检查流程和输出图片
+python run.py --network all --precision both --images "<image_or_dir>" --max 3 --dry-run
+
+# FPGA：真实上板执行 YOLO + ResNet，INT8 + INT16
+python run.py --network all --precision both --images "<image_or_dir>" --max 3
+
+# 只跑 YOLO INT16
+python run.py --network yolo --precision int16 --images "<image_or_dir>" --conf 0.15
+
+# 只跑 ResNet INT16（由 INT8 权重补位到 int16，验证 INT16 datapath）
+python run.py --network resnet --precision int16 --images "<image_or_dir>"
+```
+
+`<image_or_dir>` 可以是单张图片，也可以是图片目录。脚本会输出：
+
+```text
+Input      : <输入图片或目录>
+Output     : <repo>\runs\e2e\<fpga|dry_run>
+
+[1/3] input: <具体输入图片>
+      output: <具体输出图片>
+```
+
+输出图片默认保存到：
+
+```text
+runs/e2e/fpga/       # FPGA 真实执行输出
+runs/e2e/dry_run/    # numpy golden dry-run 输出
+```
+
+### 支持矩阵
+
+| 网络 | INT8 | INT16 | 说明 |
+|------|------|-------|------|
+| YOLOv5n | `model/yolov5n/parsed/` | `model/yolov5n/parsed_int16/` | INT16 使用真实 QAT 权重 |
+| ResNet18 | `model/resnet18/parsed_qdq/` | `model/resnet18/parsed_qdq_int16_from_int8/` | INT16 由 INT8 权重补位到 int16，数值等价但走 INT16 硬件路径 |
+
+如果 ResNet18 权重目录不存在，先生成：
+
+```powershell
+python tests/chip/compiler/frontend/parse_resnet18_qdq.py `
+  --onnx model/resnet18/resnet18_w8a8.onnx `
+  --output model/resnet18/parsed_qdq
+```
+
+### 关键代码位置
+
+| 文件 | 作用 |
+|------|------|
+| `run.py` | 根目录入口，只做 CLI、调度、保存图片 |
+| `tests/chip/unit-tb/e2e_detect.py` | YOLOv5n E2E 主体逻辑 |
+| `tests/chip/unit-tb/verify_e2e.py` | YOLO INT8/INT16 对比执行 |
+| `tests/chip/unit-tb/resnet_e2e.py` | ResNet18 E2E 主体逻辑 |
+| `tests/chip/unit-tb/ops.py` | FPGA Conv / tiling / Host ops 封装 |
+| `rtl/tb/lite_bd/module_tb/golden_module_tb.py` | FPGA 指令生成与 golden 参考 |
+
+---
+
 ## VPU_BUF 容量分析与算子 Tiling 约束（2026-06-12）
 
 ### 背景：VPU_BUF 与 DCIM buf 完全分离
@@ -704,3 +772,11 @@ always @(posedge clk)
 - 不改接口，不改 `RD_LATENCY`，不影响 testbench/仿真
 
 改动后需重新跑 `8tile_v4` 实现（预期 WNS ≥ 0，与 v3 基本一致）。
+
+重训练代码
+cd model/algorithm/quantized-yolov5
+python train.py --data data/infrared.yaml \
+    --cfg models/yolov5n-quant-infrared.yaml \
+    --weights runs/train/ir_yolov5n_fp328/weights/best.pt \
+    --batch-size 800 --imgsz 320 --epochs 30 \
+    --hyp data/hyps/hyp.widerface.yaml --noautoanchor --cache ram

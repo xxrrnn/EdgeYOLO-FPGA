@@ -113,6 +113,33 @@ def _consumers(model, name):
     return [n for n in model.graph.node if name in n.input]
 
 
+def _find_output_quant(model, tensor_name, depth=0, saw_relu=False):
+    """Find the first output QuantizeLinear after a Conv output.
+
+    Torchvision QDQ export commonly emits:
+      Conv -> Relu -> QuantizeLinear -> Cast -> DequantizeLinear -> ...
+    Residual branch convs may emit Conv -> QuantizeLinear -> ... -> Add.
+    """
+    if depth > 8:
+        return 1.0, saw_relu
+    for node in _consumers(model, tensor_name):
+        if node.op_type == "QuantizeLinear":
+            sc = _const_value(model, node.input[1])
+            if sc is not None:
+                return float(np.array(sc).flatten()[0]), saw_relu
+            return 1.0, saw_relu
+        if node.op_type in {"Relu", "Cast", "DequantizeLinear", "Identity"}:
+            scale, relu = _find_output_quant(
+                model,
+                node.output[0],
+                depth + 1,
+                saw_relu or node.op_type == "Relu",
+            )
+            if scale != 1.0 or relu:
+                return scale, relu
+    return 1.0, saw_relu
+
+
 def _back_to_dq_inputs(model, dq_node):
     """For a DequantizeLinear node, recover (int_tensor, scale, zero_point)."""
     assert dq_node.op_type == "DequantizeLinear"
@@ -192,23 +219,7 @@ def parse_resnet18_qdq(onnx_path):
                 continue
 
             # ----- Find the output QuantizeLinear (next QDQ) to get y_scale -----
-            # Output of Conv → DequantizeLinear (FP32) → Relu? → QuantizeLinear → ...
-            y_scale = 1.0
-            for c in _consumers(model, node.output[0]):
-                if c.op_type == "DequantizeLinear":
-                    # Move forward to find the next QuantizeLinear.
-                    fp_consumers = _consumers(model, c.output[0])
-                    for cc in fp_consumers:
-                        target = cc
-                        if target.op_type == "Relu":
-                            r_consumers = _consumers(model, target.output[0])
-                            target = next((x for x in r_consumers if x.op_type == "QuantizeLinear"), None)
-                        if target is not None and target.op_type == "QuantizeLinear":
-                            sc = _const_value(model, target.input[1])
-                            if sc is not None:
-                                y_scale = float(np.array(sc).flatten()[0])
-                                break
-                    break
+            y_scale, has_activation = _find_output_quant(model, node.output[0])
 
             # Per-channel scale handling.
             w_scale_arr = np.array(w_scale).reshape(-1)
@@ -245,7 +256,7 @@ def parse_resnet18_qdq(onnx_path):
                 "padding": pads,
                 "group": int(group),
                 "has_bn": False,             # already folded in by torchvision PTQ
-                "has_activation": True,
+                "has_activation": bool(has_activation),
                 "weight_shape": list(w_int.shape),
                 "act_scale": float(y_scale),
                 "act_zero_point": 0.0,

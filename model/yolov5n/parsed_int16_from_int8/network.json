@@ -1,12 +1,12 @@
 {
-  "model": "yolov5n-int8-signed",
+  "model": "yolov5n-int16-from-int8",
   "input_shape": [
     1,
     3,
     320,
     320
   ],
-  "input_act_scale": 0.007874015718698502,
+  "input_act_scale": 0.007874015748031496,
   "hard_quant_scale": 0.007874015718698502,
   "num_layers": 57,
   "layers": [
@@ -2233,5 +2233,6 @@
       "activation": "relu",
       "needs_rescale_input": false
     }
-  ]
+  ],
+  "bit_width": 16
 }

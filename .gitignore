@@ -205,3 +205,16 @@ rtl/vpu/tb/standalone/generated/
 synopsys_sim.setup
 rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
 rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
+
+# model/algorithm 下有嵌套 git 仓库，不作为 submodule 跟踪
+model/algorithm/Infrared-Object-Detection/
+model/algorithm/Resnet18-quantization/
+model/algorithm/quantized-yolov5/
+model/algorithm/quantized-yolov5_arcive/
+
+# Large binary model files - track only JSON metadata
+model/**/*.onnx
+model/**/*.npz
+model/**/*.pt
+model/**/*.pth
+model/**/*.pkl
