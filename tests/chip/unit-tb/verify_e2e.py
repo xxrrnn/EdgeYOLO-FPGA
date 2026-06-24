@@ -51,12 +51,11 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
     # 切换精度配置
     if precision == 'int16':
         _e2e.INT16_MODE = True
-        _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "weights")
-        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"))
-        # INT16 模型 logit 幅度比 INT8 大（widened 激活值范围更宽），
-        # 需要更高的置信度阈值才能对齐检测数量。
-        # 经实测，conf_thres=0.40 可使 INT16 检测数与 INT8 对齐。
-        conf = max(conf, 0.40)
+        # INT16 = INT8 widened for FPGA INT16 datapath verification.
+        # Uses same INT8 weights/scales with uint8→int16 input cast.
+        # Results are numerically bit-exact with INT8.
+        _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
+        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "network.json"))
     else:
         _e2e.INT16_MODE = False
         _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
@@ -157,16 +156,6 @@ def main():
             mode_str = "DRY-RUN"
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # ── 预检：INT16 参数是否存在 ─────────────────────────────────────────
-    int16_weights = REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"
-    if args.mode in ("both", "int16") and not int16_weights.exists():
-        print("[WARN] INT16 参数不存在，请先执行：")
-        print("       python model/yolov5n/parse_onnx_int16.py")
-        if args.mode == "int16":
-            return
-        print("[INFO] 将只运行 INT8 验证")
-        args.mode = "int8"
 
     # ── 逐图验证 ─────────────────────────────────────────────────────────
     run_int8  = args.mode in ("both", "int8")

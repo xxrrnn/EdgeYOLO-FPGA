@@ -53,8 +53,8 @@
   --yolo-precision {int8,int16,both}
       YOLOv5n 量化精度，默认 both（同时运行 int8 + int16）：
         int8  : INT8 量化（速度最快，推荐日常使用）
-        int16 : INT16 量化（精度略高，FPGA 通路宽度翻倍）
-        both  : 同时运行 int8 + int16，输出两份结果
+        int16 : INT8 升位 INT16（数值等价于 int8，用于验证 FPGA INT16 数据通路）
+        both  : 同时运行 int8 + int16，输出两份结果（两者结果应 bit-exact 一致）
 
   --resnet-precision {vai,int8,int16,both}
       ResNet18 量化精度，默认 vai（推荐）：
@@ -253,13 +253,9 @@ def run_yolo(img_path: Path, precision: str, runner, mode: str,
     verify_e2e = importlib.import_module("verify_e2e")
     dry_run = mode in ("dry-run", "onnx")
 
-    # INT16 模型 logit 幅度偏大（widened 激活值范围更宽），
-    # 需要更高置信度阈值才能对齐 INT8 检测数量。
-    eff_conf = max(conf, 0.40) if precision == "int16" else conf
-
     img_out, dets = verify_e2e.run_image(
         str(img_path), runner, dry_run, precision=precision,
-        conf=eff_conf, iou=iou, verify=verify, preload_weights=preload_weights,
+        conf=conf, iou=iou, verify=verify, preload_weights=preload_weights,
     )
 
     stem = img_path.stem
@@ -281,8 +277,7 @@ def run_yolo(img_path: Path, precision: str, runner, mode: str,
 
     n = len(dets)
     confs = ", ".join(f"{d['confidence']:.2f}" for d in det_list[:5]) or "none"
-    thres_note = f"(conf>{eff_conf:.2f})" if precision == "int16" else ""
-    print(f"  [{mode:7s}] YOLO {precision.upper():5s}: {n} det [{confs}] {thres_note}")
+    print(f"  [{mode:7s}] YOLO {precision.upper():5s}: {n} det [{confs}]")
     print(f"            -> {out_img.relative_to(REPO_ROOT)}")
     return out_img
 

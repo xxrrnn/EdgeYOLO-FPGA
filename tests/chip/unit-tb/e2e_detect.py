@@ -188,14 +188,11 @@ def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0
     img_rgb = load_image(img_path)
 
     if INT16_MODE:
-        orig_shape = img_rgb.shape[:2]
-        padded, ratio, (dw, dh) = letterbox(img_rgb, IMG_SIZE_YOLO)
-        fp32 = padded.astype(np.float32) / 255.0
-        net_json = json.load(open(str(Path(WEIGHTS_DIR).parent / "network.json")))
-        input_scale = net_json.get('input_act_scale', net_json['layers'][0]['act_scale'])
-        bit_width = net_json.get('bit_width', 16)
-        clip_hi = (1 << (bit_width - 1)) - 1
-        quant_input = np.clip(np.round(fp32 / input_scale), -clip_hi - 1, clip_hi).astype(np.int16)
+        # INT16 = INT8 widened for FPGA INT16 datapath verification.
+        # Numerically equivalent to INT8: same uint8 pixel input, just cast to int16.
+        # This allows bit-exact comparison with INT8 while exercising the wider ALU path.
+        uint8_q, ratio, (dw, dh), orig_shape = preprocess_yolov5n(img_rgb)
+        quant_input = uint8_q.astype(np.int16)
     else:
         quant_input, ratio, (dw, dh), orig_shape = preprocess_yolov5n(img_rgb)
 
@@ -275,9 +272,10 @@ def main():
     global WEIGHTS_DIR, INT16_MODE
     if args.int16:
         INT16_MODE = True
-        # Use true INT16 QAT weights (parsed_int16/) — full 16-bit precision
-        WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "weights")
-        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"))
+        # INT16 = INT8 widened: same INT8 weights/scales, just wider (int16) datapath.
+        # Numerically bit-exact with INT8, used for FPGA INT16 datapath verification.
+        WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
+        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "network.json"))
 
     # Setup FPGA runner
     runner = None
