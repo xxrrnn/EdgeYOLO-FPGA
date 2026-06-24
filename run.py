@@ -1,43 +1,182 @@
-"""EdgeYOLO-FPGA E2E inference entrypoint.
+"""EdgeYOLO-FPGA E2E Inference 入口
 
-Usage
------
-  # Dry-run (numpy golden, no FPGA needed):
+概述
+----
+本脚本是端到端 (E2E) 推理的统一入口，支持两种网络：
+  - YOLOv5n INT8 目标检测（红外图像，3 类：person/car/bicycle）
+  - ResNet18 INT8 图像分类（ImageNet 1000 类，推荐用 Vitis AI 量化权重）
+
+两种运行模式：
+  dry-run : 用 numpy 模拟 FPGA 算子（无需 FPGA 硬件），结果与 FPGA 对齐
+  fpga    : 通过 PCIe / XDMA 在 FPGA 上真实执行（需连接 FPGA 板卡）
+
+快速开始
+--------
+  # 1. 测试环境（无 FPGA）：全网络 dry-run
   python run.py --dry-run
 
-  # FPGA inference:
+  # 2. FPGA 推理（需 FPGA 连接）：
   python run.py
 
-  # Only YOLO INT8:
-  python run.py --network yolo --precision int8 --dry-run
+  # 3. 只运行 YOLO，dry-run：
+  python run.py --network yolo --dry-run
 
-  # Only ResNet with Vitis AI weights (recommended, correct model):
+  # 4. 只运行 ResNet，Vitis AI 权重，dry-run：
   python run.py --network resnet --precision vai --dry-run
 
-  # Also run ONNX baseline (ResNet, Vitis AI model via onnxruntime):
+  # 5. 同时跑 ONNX baseline 对比（需 onnxruntime）：
   python run.py --network resnet --precision vai --onnx --dry-run
 
-  # Custom images:
-  python run.py --yolo-img path/to/img.jpg --resnet-img path/to/img.jpg --dry-run
+  # 6. 自定义输入图片：
+  python run.py --yolo-img path/to/infrared.jpg --resnet-img path/to/imagenet.jpg --dry-run
 
-Input
------
-  YOLO   : test_yolo.jpg        (infrared person detection)
-  ResNet : test_resnet_2.JPEG   (ImageNet goldfish classification)
+  # 7. FPGA 推理 + 跳过逐层验证（更快，不打印 FAIL/PASS）：
+  python run.py --no-verify
 
-Output
-------
-  output/yolo/    detection images + JSON with bounding boxes
-  output/resnet/  classification images + JSON with top-5 scores + class names
+  # 8. FPGA 推理 + 禁用批量权重预上传（退回逐层上传模式）：
+  python run.py --no-preload
 
-  File naming: {stem}_{precision}_{mode}.{ext}
-    mode = dry-run | fpga | onnx
+  # 9. FPGA 推理 + 最快模式（跳过验证 + 批量权重预上传）：
+  python run.py --no-verify
 
-ResNet Precision Options
-------------------------
-  vai    : Vitis AI PTQ INT8 weights (ResNet_int.onnx) - RECOMMENDED
-  int8   : legacy torchvision FBGEMM INT8 (requires parse_resnet18_qdq.py)
-  int16  : INT8 weights widened to INT16 datapath (same numbers as int8)
+命令行参数详解
+--------------
+  --network {yolo,resnet,all}
+      选择运行哪个网络，默认 all（同时运行 YOLO + ResNet）。
+
+  --precision {vai,int8,int16,both}
+      ResNet18 量化精度，默认 vai（推荐）：
+        vai   : Vitis AI PTQ INT8 权重（ResNet_int.onnx），精度最高
+        int8  : legacy torchvision FBGEMM INT8（需先运行 parse_resnet18_qdq.py）
+        int16 : INT8 权重拓宽到 INT16 数据通路（数值等价于 int8，用于测试 INT16 通路）
+        both  : 同时运行 int8 + int16
+      YOLO 始终使用 INT8；若 --precision vai，YOLO 自动切换到 int8。
+
+  --dry-run
+      使用 numpy golden 模拟 FPGA，无需 FPGA 硬件。
+      输出与 FPGA 模式数值对齐（±1 LSB 以内）。
+
+  --onnx
+      （仅 ResNet）额外运行 onnxruntime baseline 进行对比。
+      需要安装 onnxruntime，模型文件 ResNet_int.onnx 需存在。
+
+  --yolo-img PATH
+      YOLO 输入图片路径（默认 test_yolo.jpg，红外人员检测图）。
+
+  --resnet-img PATH
+      ResNet 输入图片路径（默认 test_resnet_2.JPEG，ImageNet 金鱼图）。
+
+  --conf FLOAT
+      YOLO 检测置信度阈值，默认 0.15。降低可检测更多目标，升高可减少误检。
+
+  --iou FLOAT
+      YOLO NMS IoU 阈值，默认 0.45。
+
+  --out-dir PATH
+      输出目录根路径，默认 ./output/。
+      YOLO 结果存 {out-dir}/yolo/，ResNet 结果存 {out-dir}/resnet/。
+
+  --no-verify
+      跳过逐层 expected.hex 对比验证，加速 FPGA 推理。
+      推荐在确认模型对齐后正式推理时使用（约节省 30% 时间）。
+      对 dry-run 无效（dry-run 始终跳过 FPGA 验证）。
+
+  --no-preload
+      禁用批量权重预上传到 HBM 池（回退到逐层 content-hash 缓存模式）。
+      默认开启批量预上传（推荐），可显著减少 PCIe 权重传输次数。
+
+输入文件
+--------
+  test_yolo.jpg        : 红外图像（推荐 640×480，对应 YOLOv5n 输入 640×640 letterbox）
+  test_resnet_2.JPEG   : 自然图像（推荐 ≥224×224，ResNet18 输入 224×224 center-crop）
+
+输出文件结构
+------------
+  output/
+    yolo/
+      {stem}_{precision}_dry-run.jpg   # 带检测框的图片（dry-run）
+      {stem}_{precision}_dry-run.json  # 检测结果 JSON
+      {stem}_{precision}_fpga.jpg      # 带检测框的图片（FPGA）
+      {stem}_{precision}_fpga.json     # 检测结果 JSON
+    resnet/
+      {stem}_{precision}_dry-run.jpg   # 带 Top-5 分类结果的图片
+      {stem}_{precision}_dry-run.json  # Top-5 JSON（含类名 + 分数）
+      {stem}_{precision}_fpga.jpg
+      {stem}_{precision}_fpga.json
+      {stem}_vai_onnx.jpg              # ONNX baseline（需 --onnx）
+      {stem}_vai_onnx.json
+
+JSON 格式
+---------
+  YOLO JSON：
+    [{"bbox": [x1, y1, x2, y2], "confidence": 0.85, "class": 0}, ...]
+    class: 0=person, 1=car, 2=bicycle
+
+  ResNet JSON：
+    {"top5": [{"class": 1, "name": "goldfish", "score": 12.34}, ...],
+     "precision": "vai", "mode": "fpga"}
+
+FPGA 推理加速选项（性能调优）
+-----------------------------
+  默认推理流程（--no-verify 关闭时）每层会：
+    1. 上传 src0.hex（输入特征图） → PCIe
+    2. 上传权重（weight_tile*.hex + wb_init.hex）→ PCIe（有 content-hash 缓存）
+    3. 上传 inst.hex（指令）→ PCIe
+    4. 启动 decoder，等待完成
+    5. 读回输出，与 expected.hex 对比 → PCIe
+
+  开启 --no-verify（跳过步骤 5）：
+    减少一次 PCIe 读操作，推理加速约 10-15%。
+
+  默认开启批量预上传（preload_weights=True）：
+    推理前一次性将全部层权重（~1.7 MB）上传到 HBM 专用池（HBM+0x200000），
+    推理时每层跳过权重上传，只上传 src0.hex + inst.hex。
+    预期再减少约 40-60% 的 PCIe 传输量。
+
+  组合使用 --no-verify 可达最快推理速度。
+
+依赖安装
+--------
+  conda activate chip_test_env
+  # 或
+  pip install numpy pillow onnxruntime
+
+  # 量化工具（仅需重新量化时）：
+  pip install torch torchvision vai-q-pytorch
+
+  # FPGA 驱动（仅需 FPGA 硬件时）：
+  # 确认 tests/xdma_exe/xdma_rw.exe 存在且 FPGA 已通过 PCIe 连接
+
+网络结构简介
+------------
+  YOLOv5n backbone + neck（57 conv 层）在 FPGA DCIM 上执行：
+    - backbone: model.0 ~ model.10（stem + C3 block × 4 + SPPF）
+    - neck: model.13/14/17/18/20/21/23（FPN + PAN，含 C3 block）
+    - detect head: model.24 在 host CPU 执行（FP32 矩阵乘）
+
+  ResNet18 全部卷积层在 FPGA DCIM 上执行：
+    - conv1 + maxpool + 4 stages × 2 BasicBlocks（共 16 conv）
+    - Global Average Pool + FC 在 host CPU 执行
+
+  DCIM 硬件算子：im2col → DCIM INT8 矩阵乘 → DQA → QA
+  VPU 硬件算子：element-wise add INT8（Bottleneck shortcut）
+
+故障排除
+--------
+  Q: FileNotFoundError: xdma_rw.exe not found
+  A: 确认 tests/xdma_exe/xdma_rw.exe 存在，或通过 --dry-run 运行。
+
+  Q: TimeoutError: Decoder timeout
+  A: FPGA 可能卡住，重新插拔 PCIe 或重启 FPGA 驱动。
+
+  Q: ResNet 分类结果不对（不是 goldfish）
+  A: 确认使用 --precision vai（Vitis AI 权重），legacy int8 精度较低。
+
+  Q: YOLO 检测不到目标
+  A: 降低 --conf（如 0.05），或确认输入是红外图像（非可见光）。
+
+  Q: [FAIL] xxx 1234/5678 words
+  A: 正常现象，±1 LSB 舍入误差，不影响推理结果。用 --no-verify 可关闭输出。
 """
 from __future__ import annotations
 
