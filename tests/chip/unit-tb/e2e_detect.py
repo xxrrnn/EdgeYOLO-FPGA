@@ -45,17 +45,19 @@ INT16_MODE = False
 
 
 def run_fpga_backbone_neck(int8_input: np.ndarray, runner, dry_run: bool,
-                           runs_base: str = None):
+                           runs_base: str = None, verify: bool = True):
     """执行 backbone + neck 在 FPGA 上
 
     runs_base: 可选，指定 case 文件存放目录（默认 RUNS_BASE/yolov5n）。
                验证脚本中用来区分 INT8 / INT16 的 case 文件目录。
+    verify   : 若 False，跳过逐层 expected.hex 对比验证（加速推理）。
     """
     _runs_base = runs_base if runs_base is not None else str(RUNS_BASE / "yolov5n")
     fpga = FPGAOps(
         runner=None if dry_run else runner,
         runs_base=_runs_base,
         verbose=False,
+        verify=verify,
     )
     host = HostOps()
 
@@ -146,7 +148,7 @@ def draw_boxes(img: np.ndarray, detections: np.ndarray, class_names=CLASS_NAMES)
 
 def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0.15,
                      iou_thres: float = 0.45, save_npz: str = None,
-                     runs_base: str = None):
+                     runs_base: str = None, verify: bool = True):
     """单张图片 FPGA E2E 检测"""
     from run import IMG_SIZE_YOLO  # ensure always available
     import json
@@ -165,7 +167,8 @@ def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0
         quant_input, ratio, (dw, dh), orig_shape = preprocess_yolov5n(img_rgb)
 
     # FPGA backbone + neck
-    x17, x20, x23 = run_fpga_backbone_neck(quant_input, runner, dry_run, runs_base=runs_base)
+    x17, x20, x23 = run_fpga_backbone_neck(quant_input, runner, dry_run,
+                                            runs_base=runs_base, verify=verify)
 
     # Host detect head
     head = DetectHead(WEIGHTS_DIR)

@@ -102,15 +102,23 @@ def _net():
 class FPGAOps:
     """FPGA 硬件算子封装。所有 conv 类操作均在 FPGA 上执行。"""
 
-    def __init__(self, runner, runs_base: str = "./runs/ops", verbose: bool = False):
+    def __init__(self, runner, runs_base: str = "./runs/ops", verbose: bool = False,
+                 verify: bool = True):
         """
         runner   : ChipRunnerWin 实例（None = dry-run 模式，返回 numpy golden）
         runs_base: 测试 case 文件存放根目录
         verbose  : 是否打印详细信息
+        verify   : 若 False，跳过逐层 expected.hex 对比验证（加速推理）
         """
         self.runner   = runner
         self.runs_base = Path(runs_base)
         self.verbose  = verbose
+        self.verify   = verify
+        # Clear the runner weight cache at the start of each FPGAOps session so that
+        # stale cache entries from a previous inference run do not cause HBM mismatches.
+        # (All layers share HBM_OFF_WEIGHT, so weights from a prior run are gone.)
+        if runner is not None and hasattr(runner, 'clear_weight_cache'):
+            runner.clear_weight_cache()
 
     def conv(
         self,
@@ -187,11 +195,11 @@ class FPGAOps:
                 return exp_flat.reshape(oh, ow, exp_flat.size // (oh * ow))
 
         # FPGA 执行
-        results = self.runner.run_case(run_dir, staging="hbm")
+        results = self.runner.run_case(run_dir, staging="hbm", verify=self.verify)
         ok = all(r.get("pass", False) for r in results)
         passed = sum(r.get("passed", 0) for r in results)
         total  = sum(r.get("total_words", 0) for r in results)
-        if not ok:
+        if self.verify and not ok:
             print(f"  [FAIL] {layer_name} {passed}/{total} words")
         elif self.verbose:
             print(f"  [PASS] {layer_name} {total}/{total} words")
@@ -360,11 +368,11 @@ class FPGAOps:
                 exp_flat = np.frombuffer(raw_bytes, dtype=read_dtype)
                 tile_out = exp_flat.reshape(tile_oh_actual, ow, eff_ch)
             else:
-                results = self.runner.run_case(run_dir, staging="hbm")
+                results = self.runner.run_case(run_dir, staging="hbm", verify=self.verify)
                 ok = all(r.get("pass", False) for r in results)
                 passed = sum(r.get("passed", 0) for r in results)
                 total  = sum(r.get("total_words", 0) for r in results)
-                if not ok:
+                if self.verify and not ok:
                     print(f"  [FAIL] {layer_name} oh[{oh_start}:{oh_end}] {passed}/{total} words")
                 elif self.verbose:
                     print(f"  [PASS] {layer_name} oh[{oh_start}:{oh_end}] {total}/{total} words")

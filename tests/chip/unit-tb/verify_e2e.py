@@ -41,7 +41,8 @@ OUTPUT_DIR = _THIS / "runs" / "e2e" / "verify"
 # ─── 运行单张图（指定 precision='int8' 或 'int16'）─────────────────────────
 
 def run_image(img_path: str, runner, dry_run: bool, precision: str,
-              conf: float = 0.2, iou: float = 0.45) -> Tuple[np.ndarray, np.ndarray]:
+              conf: float = 0.2, iou: float = 0.45,
+              verify: bool = True) -> Tuple[np.ndarray, np.ndarray]:
     """返回 (带框图片 RGB, detections (N,6) [x1,y1,x2,y2,conf,cls])"""
     import e2e_detect as _e2e
     from ops import set_network_json
@@ -64,6 +65,7 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
         img_path, runner, dry_run,
         conf_thres=conf, iou_thres=iou,
         runs_base=runs_base,
+        verify=verify,
     )
     return img_out, dets
 

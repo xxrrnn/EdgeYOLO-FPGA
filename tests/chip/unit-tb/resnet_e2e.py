@@ -352,8 +352,9 @@ def _block(fpga: FPGAOps, parsed_dir: Path, x: np.ndarray, x_scale: float,
 
 
 def run_backbone(parsed_dir: Path, img_tensor: np.ndarray, runner, dry_run: bool,
-                 runs_base: Path) -> np.ndarray:
-    fpga = FPGAOps(runner=None if dry_run else runner, runs_base=str(runs_base), verbose=False)
+                 runs_base: Path, verify: bool = True) -> np.ndarray:
+    fpga = FPGAOps(runner=None if dry_run else runner, runs_base=str(runs_base),
+                   verbose=False, verify=verify)
 
     x = _conv_auto(fpga, "conv1.Conv", img_tensor, "resnet_conv1")
     x_scale = _layer_scale(parsed_dir, "conv1.Conv")
@@ -490,12 +491,12 @@ def draw_classification(img_rgb: np.ndarray, top5: Iterable[tuple[int, float]], 
 
 
 def run_single_image(img_path: str, runner, dry_run: bool, precision: str = "int8",
-                     runs_base: str | Path | None = None):
+                     runs_base: str | Path | None = None, verify: bool = True):
     parsed = configure_resnet_precision(precision)
     img_rgb = load_image(img_path)
     q_input = preprocess_resnet18(img_rgb, parsed)
     rb = Path(runs_base) if runs_base is not None else _THIS / "runs" / "e2e" / f"resnet18_{precision}"
-    feature = run_backbone(parsed, q_input, runner, dry_run, rb)
+    feature = run_backbone(parsed, q_input, runner, dry_run, rb, verify=verify)
     logits = classify(feature, parsed)
     order = np.argsort(logits)[-5:][::-1]
     top5 = [(int(i), float(logits[i])) for i in order]

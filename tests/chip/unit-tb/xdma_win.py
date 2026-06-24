@@ -41,6 +41,14 @@ except ImportError:
     DCIM_NUM_TILES = 8
     DCIM_INT8_OUT_WORDS_PER_TILE = 4
 
+import hashlib as _hashlib
+
+
+def _fast_hash(data: bytes) -> bytes:
+    """Fast content hash for HBM weight-cache deduplication."""
+    return _hashlib.md5(data, usedforsecurity=False).digest()
+
+
 TILE_OBUF_CHK_SENTINEL = 0x800000
 
 HBM_BASE = 0x0
@@ -185,6 +193,25 @@ class ChipRunnerWin:
     def __init__(self, xdma: Optional[XDMAWin] = None, verbose: bool = True):
         self.x = xdma or XDMAWin(verbose=verbose)
         self.verbose = verbose
+        # Weight/WB cache per (layer_key, hbm_off, nbytes) — only skip if same layer AND same
+        # content.  Different layers share the same HBM weight region so we must not reuse
+        # another layer's weights even if nbytes happens to match.
+        self._hbm_weight_cache: dict[tuple[str, int, int], bytes] = {}
+        self._last_weight_key: str = ""   # tracks the current layer being cached
+
+    def _weight_cache_hit(self, layer_key: str, hbm_off: int, data: bytes) -> bool:
+        """Return True (and skip upload) if HBM already holds this exact data for this layer."""
+        key = (layer_key, hbm_off, len(data))
+        h = _fast_hash(data)
+        if self._hbm_weight_cache.get(key) == h:
+            return True
+        self._hbm_weight_cache[key] = h
+        return False
+
+    def clear_weight_cache(self) -> None:
+        """Invalidate the weight/WB HBM cache (call after FPGA reset or new session)."""
+        self._hbm_weight_cache.clear()
+        self._last_weight_key = ""
 
     def _log(self, msg: str):
         if self.verbose:
@@ -193,19 +220,43 @@ class ChipRunnerWin:
             except UnicodeEncodeError:
                 print(msg.encode("ascii", errors="replace").decode())
 
-    def upload_hbm(self, run_dir: Path) -> None:
+    def upload_hbm(self, run_dir: Path, skip_weights: bool = False) -> None:
+        """Upload HBM staging data for *run_dir*.
+
+        skip_weights=True: skip weight_tile*.hex and wb_init.hex uploads.
+        Use after preloading all weights via preload_hbm_weights().
+        The default (False) uses a content-hash cache per case: files whose content
+        has not changed since the last upload FOR THE SAME LAYER are silently skipped.
+        Different layers always re-upload even if sizes happen to match, because all
+        layers share the same HBM weight region (HBM_OFF_WEIGHT).
+        """
         from hbm_flow import staging_writes_for_preload
 
         preload_file = run_dir / "preload.txt"
         if not preload_file.exists():
             raise FileNotFoundError(f"preload.txt not found in {run_dir}")
 
+        # Layer key: use the run_dir name stripped of ohtile suffix so all OH-tiles of
+        # the same layer/ctile share the same cache entry.
+        #   e.g. "resnet_l10_conv2_ohtile3" -> "resnet_l10_conv2"
+        #        "resnet_l30_conv2_ctile0_ohtile2" -> "resnet_l30_conv2_ctile0"
+        dir_name = run_dir.name
+        import re as _re
+        layer_key = _re.sub(r'_ohtile\d+$', '', dir_name)
+
         last_hbm_off = 0
         last_nbytes = 0
         for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir):
+            is_weight_or_wb = fname.startswith("weight") or fname == "wb_init.hex"
+            if skip_weights and is_weight_or_wb:
+                continue
             data = hex_to_bin(run_dir / fname)
             if len(data) != nbytes:
                 raise ValueError(f"{fname}: size mismatch {len(data)} != {nbytes}")
+            # Content-hash cache: skip re-upload if same layer already has this data in HBM
+            if is_weight_or_wb and self._weight_cache_hit(layer_key, hbm_off, data):
+                self._log(f"[hbm] {fname} ({nbytes} bytes) -> HBM+0x{hbm_off:x} [CACHED, skip]")
+                continue
             self._log(
                 f"[hbm] {fname} ({nbytes} bytes) -> HBM+0x{hbm_off:x}"
             )
@@ -403,16 +454,22 @@ class ChipRunnerWin:
         run_dir: Path,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         staging: str = "hbm",
+        verify: bool = True,
     ) -> list[dict]:
-        """Run one case. staging='hbm' (default, host HBM+inst only) or 'preload' (lab)."""
+        """Run one case.
+
+        staging : 'hbm' (default) or 'preload' (lab/sim path).
+        verify  : if False, skip read_check and return empty pass result.
+                  Speeds up E2E inference when verification is not needed.
+        """
         run_dir = Path(run_dir)
         self._log(f"\n{'='*60}")
-        self._log(f"Running case: {run_dir.name} (staging={staging})")
+        self._log(f"Running case: {run_dir.name} (staging={staging}, verify={verify})")
         self._log(f"{'='*60}")
 
         if staging == "hbm":
             self.upload_hbm(run_dir)
-            n_words = self.upload_inst(run_dir, drain_output=True)
+            n_words = self.upload_inst(run_dir, drain_output=verify)
         else:
             self.upload_preload(run_dir)
             n_words = self.upload_inst_raw(run_dir)
@@ -433,6 +490,12 @@ class ChipRunnerWin:
 
         self.start_decoder(n_words)
         self.poll_done(timeout_s)
+
+        if not verify:
+            self._log(f"[result] {run_dir.name}: SKIP verify")
+            return [{"name": run_dir.name, "pass": True, "total_words": 0,
+                     "passed": 0, "failed": 0, "first_mismatch": None, "mismatches": []}]
+
         results = self.read_check(run_dir, from_hbm=(staging == "hbm"))
 
         status = "PASS" if all(r["pass"] for r in results) else "FAIL"
