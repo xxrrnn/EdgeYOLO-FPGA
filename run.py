@@ -12,31 +12,37 @@
 
 快速开始
 --------
-  # 1. 测试环境（无 FPGA）：全网络 dry-run
+  # 1. 测试环境（无 FPGA）：全网络 dry-run（YOLO int8+int16，ResNet vai）
   python run.py --dry-run
 
   # 2. FPGA 推理（需 FPGA 连接）：
   python run.py
 
-  # 3. 只运行 YOLO，dry-run：
-  python run.py --network yolo --dry-run
+  # 3. 只运行 YOLO INT8，dry-run：
+  python run.py --network yolo --yolo-precision int8 --dry-run
 
-  # 4. 只运行 ResNet，Vitis AI 权重，dry-run：
-  python run.py --network resnet --precision vai --dry-run
+  # 4. 只运行 YOLO INT8 + INT16，dry-run：
+  python run.py --network yolo --yolo-precision both --dry-run
 
-  # 5. 同时跑 ONNX baseline 对比（需 onnxruntime）：
-  python run.py --network resnet --precision vai --onnx --dry-run
+  # 5. 只运行 ResNet，Vitis AI 权重，dry-run：
+  python run.py --network resnet --resnet-precision vai --dry-run
 
-  # 6. 自定义输入图片：
+  # 6. ResNet int8 + int16 都跑，dry-run：
+  python run.py --network resnet --resnet-precision both --dry-run
+
+  # 7. 同时跑 ONNX baseline 对比（需 onnxruntime）：
+  python run.py --network resnet --resnet-precision vai --onnx --dry-run
+
+  # 8. 自定义输入图片：
   python run.py --yolo-img path/to/infrared.jpg --resnet-img path/to/imagenet.jpg --dry-run
 
-  # 7. FPGA 推理 + 跳过逐层验证（更快，不打印 FAIL/PASS）：
+  # 9. FPGA 推理 + 跳过逐层验证（更快，不打印 FAIL/PASS）：
   python run.py --no-verify
 
-  # 8. FPGA 推理 + 禁用批量权重预上传（退回逐层上传模式）：
+  # 10. FPGA 推理 + 禁用批量权重预上传（退回逐层上传模式）：
   python run.py --no-preload
 
-  # 9. FPGA 推理 + 最快模式（跳过验证 + 批量权重预上传）：
+  # 11. FPGA 推理 + 最快模式（跳过验证 + 批量权重预上传）：
   python run.py --no-verify
 
 命令行参数详解
@@ -44,13 +50,23 @@
   --network {yolo,resnet,all}
       选择运行哪个网络，默认 all（同时运行 YOLO + ResNet）。
 
-  --precision {vai,int8,int16,both}
+  --yolo-precision {int8,int16,both}
+      YOLOv5n 量化精度，默认 both（同时运行 int8 + int16）：
+        int8  : INT8 量化（速度最快，推荐日常使用）
+        int16 : INT16 量化（精度略高，FPGA 通路宽度翻倍）
+        both  : 同时运行 int8 + int16，输出两份结果
+
+  --resnet-precision {vai,int8,int16,both}
       ResNet18 量化精度，默认 vai（推荐）：
         vai   : Vitis AI PTQ INT8 权重（ResNet_int.onnx），精度最高
         int8  : legacy torchvision FBGEMM INT8（需先运行 parse_resnet18_qdq.py）
         int16 : INT8 权重拓宽到 INT16 数据通路（数值等价于 int8，用于测试 INT16 通路）
         both  : 同时运行 int8 + int16
-      YOLO 始终使用 INT8；若 --precision vai，YOLO 自动切换到 int8。
+
+  --precision {vai,int8,int16,both}
+      （兼容旧版）同时设置 YOLO 和 ResNet 的精度；
+      建议改用 --yolo-precision / --resnet-precision 分别控制。
+      vai → YOLO 使用 int8，ResNet 使用 vai。
 
   --dry-run
       使用 numpy golden 模拟 FPGA，无需 FPGA 硬件。
@@ -363,8 +379,13 @@ def parse_args() -> argparse.Namespace:
         epilog=__doc__.split("Usage\n-----\n")[1] if "Usage" in __doc__ else "",
     )
     ap.add_argument("--network", choices=["yolo", "resnet", "all"], default="all")
-    ap.add_argument("--precision", choices=["vai", "int8", "int16", "both"], default="vai",
-                    help="ResNet precision: vai=Vitis AI (recommended), int8=legacy FBGEMM, int16=int8 widened")
+    ap.add_argument("--yolo-precision", choices=["int8", "int16", "both"], default="both",
+                    help="YOLOv5n precision: int8 / int16 / both (default: both)")
+    ap.add_argument("--resnet-precision", choices=["vai", "int8", "int16", "both"], default="vai",
+                    help="ResNet18 precision: vai=Vitis AI INT8 (推荐) / int8 / int16 / both (default: vai)")
+    # Legacy alias kept for compatibility
+    ap.add_argument("--precision", choices=["vai", "int8", "int16", "both"], default=None,
+                    help="(deprecated) 同时设置 YOLO 和 ResNet 精度；建议用 --yolo-precision / --resnet-precision")
     ap.add_argument("--dry-run", action="store_true", help="numpy golden (no FPGA)")
     ap.add_argument("--onnx", action="store_true", help="also run ONNX baseline (ResNet)")
     ap.add_argument("--yolo-img", default=str(DEFAULT_YOLO_IMG))
@@ -384,9 +405,25 @@ def main() -> int:
     _setup_imports()
 
     networks = ["yolo", "resnet"] if args.network == "all" else [args.network]
-    precisions = ["int8", "int16"] if args.precision == "both" else [args.precision]
-    # YOLO only supports int8/int16; for 'vai', use int8 for YOLO
-    yolo_precisions = [p if p in ("int8", "int16") else "int8" for p in precisions]
+
+    # Resolve precision lists for each network.
+    # --precision (legacy) overrides both --yolo-precision and --resnet-precision.
+    if args.precision is not None:
+        legacy = args.precision
+        yolo_raw = "int8" if legacy == "vai" else legacy   # vai -> int8 for YOLO
+        resnet_raw = legacy
+    else:
+        yolo_raw = args.yolo_precision
+        resnet_raw = args.resnet_precision
+
+    def _expand(raw: str, valid: list[str]) -> list[str]:
+        if raw == "both":
+            return [p for p in valid if p != "both"]
+        return [raw]
+
+    yolo_precisions = _expand(yolo_raw, ["int8", "int16"])
+    resnet_precisions = _expand(resnet_raw, ["vai", "int8", "int16"])
+
     mode = "dry-run" if args.dry_run else "fpga"
     verify = not args.no_verify
     preload_weights = not getattr(args, 'no_preload', False)
@@ -399,16 +436,19 @@ def main() -> int:
 
     print("=" * 60)
     print("EdgeYOLO-FPGA E2E Inference")
-    print(f"  Mode       : {mode.upper()}")
-    print(f"  Networks   : {', '.join(networks)}")
-    print(f"  Precisions : {', '.join(precisions)}")
-    print(f"  Verify     : {'YES' if verify else 'NO (--no-verify)'}")
-    print(f"  Preload    : {'YES' if preload_weights else 'NO (--no-preload)'}")
+    print(f"  Mode          : {mode.upper()}")
+    print(f"  Networks      : {', '.join(networks)}")
     if "yolo" in networks:
-        print(f"  YOLO input : {yolo_img}")
+        print(f"  YOLO prec     : {', '.join(yolo_precisions)}")
     if "resnet" in networks:
-        print(f"  ResNet input: {resnet_img}")
-    print(f"  Output     : {Path(args.out_dir).resolve()}")
+        print(f"  ResNet prec   : {', '.join(resnet_precisions)}")
+    print(f"  Verify        : {'YES' if verify else 'NO (--no-verify)'}")
+    print(f"  Preload       : {'YES' if preload_weights else 'NO (--no-preload)'}")
+    if "yolo" in networks:
+        print(f"  YOLO input    : {yolo_img}")
+    if "resnet" in networks:
+        print(f"  ResNet input  : {resnet_img}")
+    print(f"  Output        : {Path(args.out_dir).resolve()}")
     print("=" * 60)
 
     t0 = time.time()
@@ -427,7 +467,7 @@ def main() -> int:
         if not resnet_img.exists():
             print(f"  [ERROR] image not found: {resnet_img}")
             return 1
-        for prec in precisions:
+        for prec in resnet_precisions:
             run_resnet(resnet_img, prec, runner, mode, resnet_out,
                        verify=verify, preload_weights=preload_weights)
         if args.onnx:
