@@ -44,12 +44,40 @@ runs/e2e/fpga/       # FPGA 真实执行输出
 runs/e2e/dry_run/    # numpy golden dry-run 输出
 ```
 
-### 支持矩阵
+### 支持矩阵与 INT16 设计说明
 
-| 网络 | INT8 | INT16 | 说明 |
-|------|------|-------|------|
-| YOLOv5n | `model/yolov5n/parsed/` | `model/yolov5n/parsed_int16/` | INT16 使用真实 QAT 权重 |
-| ResNet18 | `model/resnet18/parsed_qdq/` | `model/resnet18/parsed_qdq_int16_from_int8/` | INT16 由 INT8 权重补位到 int16，数值等价但走 INT16 硬件路径 |
+| 网络 | INT8 | INT16 | INT16 来源 | 期望结果 |
+|------|------|-------|-----------|---------|
+| YOLOv5n | `model/yolov5n/parsed/` | `model/yolov5n/parsed_int16/` | **QAT 重训** — 使用单独训练的 INT16 量化权重（Brevitas QAT），精度与 INT8 不同 | 与 INT8 检测数量不同，需 `conf_thres≥0.40` |
+| ResNet18 | `model/resnet18/parsed_qdq/` | `model/resnet18/parsed_qdq_int16_from_int8/` | **INT8 升位** — INT8 权重 `astype(int16)`，所有 scale 不变，仅验证 FPGA INT16 数据通路 | 与 INT8 结果 **bit-exact 等价** |
+
+#### YOLOv5n INT16：QAT 重训模型
+
+```
+权重目录：model/yolov5n/parsed_int16/
+来源脚本：model/yolov5n/parse_onnx_int16.py
+训练来源：model/algorithm/quantized-yolov5/runs/train/infrared_qat_int16/
+act_scale：0.000305（独立校准，约为 INT8 scale 的 1/256）
+```
+
+- **用途**：评估 INT16 QAT 训练后精度是否优于 INT8
+- **注意**：由于 INT16 激活值量化粒度更细（步长为 INT8 的 1/256），小信号更多保留，
+  导致 logit 幅度偏大，同 conf_thres 下误检率偏高
+- **推理时** `run.py` / `verify_e2e.py` 自动将 `conf_thres` 提升至 `max(conf, 0.40)`
+
+#### ResNet18 INT16：INT8 升位验证通路
+
+```
+权重目录：model/resnet18/parsed_qdq_int16_from_int8/（运行时自动生成）
+生成逻辑：resnet_e2e.prepare_int16_from_int8()
+act_scale：与 INT8 完全相同（0.07874 等）
+clip 范围：[-128, 127]（值域与 INT8 一致，dtype=int16）
+```
+
+- **用途**：验证 FPGA DCIM 的 INT16 数据通路正确性，结果应与 INT8 **完全一致**
+- **原理**：INT8 权重直接 `astype(int16)`，所有量化 scale 不变，中间激活值
+  clamp 到 `[-128, 127]` 后存为 int16，与 INT8 数值 bit-exact 等价
+- **若结果不一致**：说明 FPGA INT16 数据通路存在硬件 bug
 
 如果 ResNet18 权重目录不存在，先生成：
 

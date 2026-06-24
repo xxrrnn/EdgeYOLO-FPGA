@@ -158,9 +158,19 @@ def preprocess_resnet18(img_rgb: np.ndarray, parsed_dir: Path) -> np.ndarray:
     normalized = (arr - mean) / std
 
     input_scale = _infer_input_scale(parsed_dir)
-    is_int16 = "int16" in parsed_dir.name
-    clip_lo, clip_hi = (-32768, 32767) if is_int16 else (-128, 127)
-    dtype = np.int16 if is_int16 else np.int8
+    # INT16-from-INT8: input is quantized with INT8 range [-128, 127] and cast to int16.
+    # Clip range stays INT8 to keep numerical equivalence with INT8 mode.
+    is_int16_from_int8 = "int16_from_int8" in parsed_dir.name
+    is_int16 = "int16" in parsed_dir.name and not is_int16_from_int8
+    if is_int16_from_int8:
+        clip_lo, clip_hi = -128, 127
+        dtype = np.int16
+    elif is_int16:
+        clip_lo, clip_hi = -32768, 32767
+        dtype = np.int16
+    else:
+        clip_lo, clip_hi = -128, 127
+        dtype = np.int8
     return np.clip(np.round(normalized / input_scale), clip_lo, clip_hi).astype(dtype)
 
 
