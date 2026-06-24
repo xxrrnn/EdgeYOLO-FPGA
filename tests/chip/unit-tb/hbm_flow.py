@@ -81,20 +81,29 @@ def _tile_ibuf_index(phy_addr: int) -> int | None:
     return t if 0 <= t < DCIM_NUM_TILES else None
 
 
-def _hbm_src_offset(fname: str, weight_cursor: list[int]) -> int:
+def _hbm_src_offset(
+    fname: str,
+    weight_cursor: list[int],
+    weight_hbm_map: "dict[str, int] | None" = None,
+) -> int:
     if fname == "act.hex" or fname == "src0.hex" or (fname.startswith("src") and fname[3:4] == "0"):
         return HBM_OFF_INPUT0
     if fname == "src1.hex" or (fname.startswith("src") and fname[3:4] == "1"):
         return HBM_OFF_INPUT1
     if fname.startswith("src"):
-        # src2, src3, ... map sequentially after INPUT1
         idx = int(fname[3:fname.index(".")])
         return HBM_OFF_INPUT1 + (idx - 1) * 0x40000
     if fname.startswith("weight"):
+        if weight_hbm_map and fname in weight_hbm_map:
+            return weight_hbm_map[fname]
         return HBM_OFF_WEIGHT + weight_cursor[0]
     if fname == "wb_init.hex":
+        if weight_hbm_map and fname in weight_hbm_map:
+            return weight_hbm_map[fname]
         return HBM_OFF_WB
     if fname == "aux_zero.hex":
+        if weight_hbm_map and fname in weight_hbm_map:
+            return weight_hbm_map[fname]
         return HBM_OFF_WEIGHT + weight_cursor[0]
     raise ValueError(f"no HBM staging rule for preload file {fname}")
 
@@ -115,8 +124,15 @@ _WB_SETTLE_NOPS = 512
 _VPU_SETTLE_NOPS = 256
 
 
-def build_hbm_input_cdma(run_dir: Path) -> list[int]:
+def build_hbm_input_cdma(
+    run_dir: Path,
+    weight_hbm_map: "dict[str, int] | None" = None,
+) -> list[int]:
     """CDMA insts: HBM staging -> on-chip targets listed in preload.txt.
+
+    weight_hbm_map: optional pre-allocated weight address map returned by
+    ChipRunnerWin.preload_all_weights().  When provided, weight/wb CDMA src
+    addresses are taken from the map instead of the default HBM_OFF_WEIGHT region.
 
     Entries whose preload target address is in HBM space (< TILE_IBUF_BASE)
     are skipped: those files are already written to HBM by upload_hbm(), and
@@ -124,7 +140,7 @@ def build_hbm_input_cdma(run_dir: Path) -> list[int]:
     (e.g. conv_pipeline / mini_network input feature maps).
     """
     insts: list[int] = []
-    for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir):
+    for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir, weight_hbm_map):
         dst = _preload_dst(run_dir, fname)
         # If the preload target is HBM-space, the file is stored in HBM and the
         # inst.hex already handles moving it on-chip.  Nothing to inject here.
@@ -151,8 +167,15 @@ def build_hbm_input_cdma(run_dir: Path) -> list[int]:
     return insts
 
 
-def staging_writes_for_preload(run_dir: Path) -> list[tuple[int, str, int]]:
-    """(hbm_offset, filename, nbytes) triples for host HBM staging."""
+def staging_writes_for_preload(
+    run_dir: Path,
+    weight_hbm_map: "dict[str, int] | None" = None,
+) -> list[tuple[int, str, int]]:
+    """(hbm_offset, filename, nbytes) triples for host HBM staging.
+
+    weight_hbm_map: when supplied, weight/wb file HBM offsets come from the map
+    (pre-allocated pool), allowing the caller to skip re-uploading them.
+    """
     preload = run_dir / "preload.txt"
     if not preload.exists():
         return []
@@ -165,10 +188,10 @@ def staging_writes_for_preload(run_dir: Path) -> list[tuple[int, str, int]]:
             continue
         fname, _addr_str = line.split()
         nbytes = len(hex_to_bin(run_dir / fname))
-        hbm_off = _hbm_src_offset(fname, weight_cursor)
-        if fname.startswith("weight"):
+        hbm_off = _hbm_src_offset(fname, weight_cursor, weight_hbm_map)
+        if fname.startswith("weight") and not (weight_hbm_map and fname in weight_hbm_map):
             weight_cursor[0] += nbytes
-        if fname == "aux_zero.hex":
+        if fname == "aux_zero.hex" and not (weight_hbm_map and fname in weight_hbm_map):
             weight_cursor[0] += nbytes
         rows.append((hbm_off, fname, nbytes))
     return rows
@@ -309,8 +332,15 @@ def hbm_drain_remap(run_dir: Path, flat_bytes: bytes) -> bytes:
     return bytes(out)
 
 
-def patch_inst_for_hbm(run_dir: Path, drain_output: bool = True) -> bytes:
+def patch_inst_for_hbm(
+    run_dir: Path,
+    drain_output: bool = True,
+    weight_hbm_map: "dict[str, int] | None" = None,
+) -> bytes:
     """Prepend HBM->on-chip CDMA; append on-chip->HBM drain (default on).
+
+    weight_hbm_map: when supplied, weight/wb CDMA src addresses use the
+    pre-allocated pool addresses from ChipRunnerWin.preload_all_weights().
 
     VPU_BUF path (dst_off < TILE_OBUF_CHK_SENTINEL):
       No drain CDMA is appended. The host reads VPU_BUF directly after
@@ -344,5 +374,9 @@ def patch_inst_for_hbm(run_dir: Path, drain_output: bool = True) -> bytes:
             barrier = [_header(OP_WAIT_DCIM, 0, 0)]
     # VPU_BUF path: no drain needed; host reads VPU_BUF directly after done
 
-    patched = build_hbm_input_cdma(run_dir) + core + barrier + tail + [_header(OP_END, 0, 0)]
+    patched = (
+        build_hbm_input_cdma(run_dir, weight_hbm_map)
+        + core + barrier + tail
+        + [_header(OP_END, 0, 0)]
+    )
     return inst_words_to_bin(patched)

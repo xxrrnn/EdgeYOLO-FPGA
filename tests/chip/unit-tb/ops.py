@@ -103,21 +103,25 @@ class FPGAOps:
     """FPGA 硬件算子封装。所有 conv 类操作均在 FPGA 上执行。"""
 
     def __init__(self, runner, runs_base: str = "./runs/ops", verbose: bool = False,
-                 verify: bool = True):
+                 verify: bool = True, weight_hbm_map: "dict | None" = None):
         """
-        runner   : ChipRunnerWin 实例（None = dry-run 模式，返回 numpy golden）
-        runs_base: 测试 case 文件存放根目录
-        verbose  : 是否打印详细信息
-        verify   : 若 False，跳过逐层 expected.hex 对比验证（加速推理）
+        runner          : ChipRunnerWin 实例（None = dry-run 模式，返回 numpy golden）
+        runs_base       : 测试 case 文件存放根目录
+        verbose         : 是否打印详细信息
+        verify          : 若 False，跳过逐层 expected.hex 对比验证（加速推理）
+        weight_hbm_map  : 由 runner.preload_all_weights() 返回的预上传权重地址映射
+                          {case_name -> {filename -> hbm_abs_offset}}
+                          若提供，每次 run_case 跳过权重 PCIe 上传（权重已在 HBM 池中）
         """
         self.runner   = runner
         self.runs_base = Path(runs_base)
         self.verbose  = verbose
         self.verify   = verify
+        self._weight_hbm_map = weight_hbm_map or {}
         # Clear the runner weight cache at the start of each FPGAOps session so that
         # stale cache entries from a previous inference run do not cause HBM mismatches.
         # (All layers share HBM_OFF_WEIGHT, so weights from a prior run are gone.)
-        if runner is not None and hasattr(runner, 'clear_weight_cache'):
+        if runner is not None and hasattr(runner, 'clear_weight_cache') and not weight_hbm_map:
             runner.clear_weight_cache()
 
     def conv(
@@ -195,7 +199,9 @@ class FPGAOps:
                 return exp_flat.reshape(oh, ow, exp_flat.size // (oh * ow))
 
         # FPGA 执行
-        results = self.runner.run_case(run_dir, staging="hbm", verify=self.verify)
+        w_map = self._weight_hbm_map.get(case_name) if self._weight_hbm_map else None
+        results = self.runner.run_case(run_dir, staging="hbm", verify=self.verify,
+                                        weight_hbm_map=w_map)
         ok = all(r.get("pass", False) for r in results)
         passed = sum(r.get("passed", 0) for r in results)
         total  = sum(r.get("total_words", 0) for r in results)
@@ -368,7 +374,8 @@ class FPGAOps:
                 exp_flat = np.frombuffer(raw_bytes, dtype=read_dtype)
                 tile_out = exp_flat.reshape(tile_oh_actual, ow, eff_ch)
             else:
-                results = self.runner.run_case(run_dir, staging="hbm", verify=self.verify)
+                results = self.runner.run_case(run_dir, staging="hbm", verify=self.verify,
+                                               weight_hbm_map=self._weight_hbm_map.get(tile_cname))
                 ok = all(r.get("pass", False) for r in results)
                 passed = sum(r.get("passed", 0) for r in results)
                 total  = sum(r.get("total_words", 0) for r in results)

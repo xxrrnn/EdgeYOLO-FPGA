@@ -352,9 +352,10 @@ def _block(fpga: FPGAOps, parsed_dir: Path, x: np.ndarray, x_scale: float,
 
 
 def run_backbone(parsed_dir: Path, img_tensor: np.ndarray, runner, dry_run: bool,
-                 runs_base: Path, verify: bool = True) -> np.ndarray:
+                 runs_base: Path, verify: bool = True,
+                 weight_hbm_map: "dict | None" = None) -> np.ndarray:
     fpga = FPGAOps(runner=None if dry_run else runner, runs_base=str(runs_base),
-                   verbose=False, verify=verify)
+                   verbose=False, verify=verify, weight_hbm_map=weight_hbm_map)
 
     x = _conv_auto(fpga, "conv1.Conv", img_tensor, "resnet_conv1")
     x_scale = _layer_scale(parsed_dir, "conv1.Conv")
@@ -491,12 +492,40 @@ def draw_classification(img_rgb: np.ndarray, top5: Iterable[tuple[int, float]], 
 
 
 def run_single_image(img_path: str, runner, dry_run: bool, precision: str = "int8",
-                     runs_base: str | Path | None = None, verify: bool = True):
+                     runs_base: str | Path | None = None, verify: bool = True,
+                     preload_weights: bool = True):
+    """Run ResNet18 E2E on a single image.
+
+    preload_weights: if True (default), dry-run once to generate case files then
+                     batch-upload all weights to HBM pool before inference.
+    """
+    import time as _time
     parsed = configure_resnet_precision(precision)
     img_rgb = load_image(img_path)
     q_input = preprocess_resnet18(img_rgb, parsed)
     rb = Path(runs_base) if runs_base is not None else _THIS / "runs" / "e2e" / f"resnet18_{precision}"
-    feature = run_backbone(parsed, q_input, runner, dry_run, rb, verify=verify)
+
+    # Phase 1+2: generate case files then batch-upload weights
+    weight_hbm_map = None
+    if preload_weights and not dry_run and runner is not None:
+        needs_generate = not rb.exists() or not any(
+            (d / "preload.txt").exists() for d in rb.iterdir() if d.is_dir()
+        ) if rb.exists() else True
+        if needs_generate:
+            print("[preload] Generating case files (dry-run)...", flush=True)
+            run_backbone(parsed, q_input, runner=None, dry_run=True, runs_base=rb,
+                         verify=False)
+        if rb.exists():
+            run_dirs = [d for d in sorted(rb.iterdir())
+                        if d.is_dir() and (d / "preload.txt").exists()]
+            if run_dirs and hasattr(runner, 'preload_all_weights'):
+                print("[preload] Uploading all weights to HBM pool...", flush=True)
+                t_pre = _time.time()
+                weight_hbm_map = runner.preload_all_weights(run_dirs)
+                print(f"[preload] Done in {_time.time()-t_pre:.1f}s", flush=True)
+
+    feature = run_backbone(parsed, q_input, runner, dry_run, rb, verify=verify,
+                           weight_hbm_map=weight_hbm_map)
     logits = classify(feature, parsed)
     order = np.argsort(logits)[-5:][::-1]
     top5 = [(int(i), float(logits[i])) for i in order]

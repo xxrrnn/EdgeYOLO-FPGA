@@ -42,7 +42,7 @@ OUTPUT_DIR = _THIS / "runs" / "e2e" / "verify"
 
 def run_image(img_path: str, runner, dry_run: bool, precision: str,
               conf: float = 0.2, iou: float = 0.45,
-              verify: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+              verify: bool = True, preload_weights: bool = True) -> Tuple[np.ndarray, np.ndarray]:
     """返回 (带框图片 RGB, detections (N,6) [x1,y1,x2,y2,conf,cls])"""
     import e2e_detect as _e2e
     from ops import set_network_json
@@ -66,6 +66,7 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
         conf_thres=conf, iou_thres=iou,
         runs_base=runs_base,
         verify=verify,
+        preload_weights=preload_weights,
     )
     return img_out, dets
 

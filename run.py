@@ -93,13 +93,14 @@ def save_image(img: np.ndarray, path: Path) -> None:
 # ─── YOLO ────────────────────────────────────────────────────────────────────
 
 def run_yolo(img_path: Path, precision: str, runner, mode: str,
-             out_dir: Path, conf: float, iou: float, verify: bool = True) -> Path:
+             out_dir: Path, conf: float, iou: float,
+             verify: bool = True, preload_weights: bool = True) -> Path:
     verify_e2e = importlib.import_module("verify_e2e")
     dry_run = mode in ("dry-run", "onnx")
 
     img_out, dets = verify_e2e.run_image(
         str(img_path), runner, dry_run, precision=precision,
-        conf=conf, iou=iou, verify=verify,
+        conf=conf, iou=iou, verify=verify, preload_weights=preload_weights,
     )
 
     stem = img_path.stem
@@ -129,14 +130,14 @@ def run_yolo(img_path: Path, precision: str, runner, mode: str,
 # ─── ResNet ──────────────────────────────────────────────────────────────────
 
 def run_resnet(img_path: Path, precision: str, runner, mode: str,
-               out_dir: Path, verify: bool = True) -> Path:
+               out_dir: Path, verify: bool = True, preload_weights: bool = True) -> Path:
     resnet_e2e = importlib.import_module("resnet_e2e")
     dry_run = mode in ("dry-run", "onnx")
 
     runs_base = UNIT_TB / "runs" / "e2e" / f"resnet18_{precision}"
     img_out, top5, logits = resnet_e2e.run_single_image(
         str(img_path), runner, dry_run, precision=precision,
-        runs_base=runs_base, verify=verify,
+        runs_base=runs_base, verify=verify, preload_weights=preload_weights,
     )
 
     class_names = resnet_e2e.CLASS_NAMES
@@ -234,6 +235,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--out-dir", default=str(OUT_DIR))
     ap.add_argument("--no-verify", action="store_true",
                     help="skip per-layer expected.hex comparison (faster inference, no FAIL reports)")
+    ap.add_argument("--no-preload", action="store_true",
+                    help="disable batch weight preload to HBM (use per-layer upload with content-hash cache)")
     return ap.parse_args()
 
 
@@ -247,6 +250,7 @@ def main() -> int:
     yolo_precisions = [p if p in ("int8", "int16") else "int8" for p in precisions]
     mode = "dry-run" if args.dry_run else "fpga"
     verify = not args.no_verify
+    preload_weights = not getattr(args, 'no_preload', False)
     runner = make_runner(args.dry_run)
 
     yolo_img = Path(args.yolo_img)
@@ -260,6 +264,7 @@ def main() -> int:
     print(f"  Networks   : {', '.join(networks)}")
     print(f"  Precisions : {', '.join(precisions)}")
     print(f"  Verify     : {'YES' if verify else 'NO (--no-verify)'}")
+    print(f"  Preload    : {'YES' if preload_weights else 'NO (--no-preload)'}")
     if "yolo" in networks:
         print(f"  YOLO input : {yolo_img}")
     if "resnet" in networks:
@@ -275,7 +280,8 @@ def main() -> int:
             print(f"  [ERROR] image not found: {yolo_img}")
             return 1
         for prec in yolo_precisions:
-            run_yolo(yolo_img, prec, runner, mode, yolo_out, args.conf, args.iou, verify=verify)
+            run_yolo(yolo_img, prec, runner, mode, yolo_out, args.conf, args.iou,
+                     verify=verify, preload_weights=preload_weights)
 
     if "resnet" in networks:
         print(f"\n--- ResNet Classification [{resnet_img.name}] ---")
@@ -283,7 +289,8 @@ def main() -> int:
             print(f"  [ERROR] image not found: {resnet_img}")
             return 1
         for prec in precisions:
-            run_resnet(resnet_img, prec, runner, mode, resnet_out, verify=verify)
+            run_resnet(resnet_img, prec, runner, mode, resnet_out,
+                       verify=verify, preload_weights=preload_weights)
         if args.onnx:
             run_resnet_onnx(resnet_img, resnet_out)
 

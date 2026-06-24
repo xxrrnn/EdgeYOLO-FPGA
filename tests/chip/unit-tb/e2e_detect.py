@@ -44,13 +44,39 @@ COLORS = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]
 INT16_MODE = False
 
 
+def _build_weight_hbm_map(runner, runs_base: str, dry_run: bool) -> "dict | None":
+    """Pre-upload all weights to HBM pool before inference.
+
+    Scans runs_base for case dirs containing preload.txt and uploads weight files
+    to a dedicated non-overlapping pool in HBM.  Returns the map passed to FPGAOps
+    so each run_case call can skip weight PCIe transfers.
+
+    Returns None if dry_run or runner is None (no FPGA, nothing to preload).
+    """
+    if dry_run or runner is None:
+        return None
+    if not hasattr(runner, 'preload_all_weights'):
+        return None
+    from pathlib import Path as _Path
+    rb = _Path(runs_base)
+    if not rb.exists():
+        return None
+    run_dirs = [d for d in sorted(rb.iterdir()) if d.is_dir() and (d / "preload.txt").exists()]
+    if not run_dirs:
+        return None
+    return runner.preload_all_weights(run_dirs)
+
+
 def run_fpga_backbone_neck(int8_input: np.ndarray, runner, dry_run: bool,
-                           runs_base: str = None, verify: bool = True):
+                           runs_base: str = None, verify: bool = True,
+                           weight_hbm_map: "dict | None" = None):
     """执行 backbone + neck 在 FPGA 上
 
-    runs_base: 可选，指定 case 文件存放目录（默认 RUNS_BASE/yolov5n）。
-               验证脚本中用来区分 INT8 / INT16 的 case 文件目录。
-    verify   : 若 False，跳过逐层 expected.hex 对比验证（加速推理）。
+    runs_base      : 可选，指定 case 文件存放目录（默认 RUNS_BASE/yolov5n）。
+                     验证脚本中用来区分 INT8 / INT16 的 case 文件目录。
+    verify         : 若 False，跳过逐层 expected.hex 对比验证（加速推理）。
+    weight_hbm_map : 由 runner.preload_all_weights() 返回的预上传权重地址映射。
+                     若提供，每层跳过权重 PCIe 上传（权重已在 HBM 池中）。
     """
     _runs_base = runs_base if runs_base is not None else str(RUNS_BASE / "yolov5n")
     fpga = FPGAOps(
@@ -58,6 +84,7 @@ def run_fpga_backbone_neck(int8_input: np.ndarray, runner, dry_run: bool,
         runs_base=_runs_base,
         verbose=False,
         verify=verify,
+        weight_hbm_map=weight_hbm_map,
     )
     host = HostOps()
 
@@ -148,8 +175,14 @@ def draw_boxes(img: np.ndarray, detections: np.ndarray, class_names=CLASS_NAMES)
 
 def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0.15,
                      iou_thres: float = 0.45, save_npz: str = None,
-                     runs_base: str = None, verify: bool = True):
-    """单张图片 FPGA E2E 检测"""
+                     runs_base: str = None, verify: bool = True,
+                     preload_weights: bool = True):
+    """单张图片 FPGA E2E 检测
+
+    preload_weights: 若 True（默认），在正式推理前先 dry-run 生成 case 文件，
+                     然后批量上传全部权重到 HBM 池，推理时跳过逐层权重 PCIe 传输。
+                     若 False，退回到逐层权重上传（带 content-hash 缓存）。
+    """
     from run import IMG_SIZE_YOLO  # ensure always available
     import json
     img_rgb = load_image(img_path)
@@ -161,14 +194,36 @@ def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0
         net_json = json.load(open(str(Path(WEIGHTS_DIR).parent / "network.json")))
         input_scale = net_json.get('input_act_scale', net_json['layers'][0]['act_scale'])
         bit_width = net_json.get('bit_width', 16)
-        clip_hi = (1 << (bit_width - 1)) - 1   # 127 for int8-widened, 32767 for true int16
+        clip_hi = (1 << (bit_width - 1)) - 1
         quant_input = np.clip(np.round(fp32 / input_scale), -clip_hi - 1, clip_hi).astype(np.int16)
     else:
         quant_input, ratio, (dw, dh), orig_shape = preprocess_yolov5n(img_rgb)
 
-    # FPGA backbone + neck
+    _runs_base = runs_base or str(RUNS_BASE / "yolov5n")
+
+    # Phase 1: dry-run to generate all case files (weight hex, preload.txt, inst.hex)
+    # This is fast (~1-2s) and only needed once per image layout.
+    weight_hbm_map = None
+    if preload_weights and not dry_run and runner is not None:
+        from pathlib import Path as _Path
+        rb = _Path(_runs_base)
+        needs_generate = not rb.exists() or not any(
+            (d / "preload.txt").exists() for d in rb.iterdir() if d.is_dir()
+        ) if rb.exists() else True
+        if needs_generate:
+            print("[preload] Generating case files (dry-run)...", flush=True)
+            run_fpga_backbone_neck(quant_input, runner=None, dry_run=True,
+                                   runs_base=_runs_base, verify=False)
+        # Phase 2: upload all weights to HBM pool
+        print("[preload] Uploading all weights to HBM pool...", flush=True)
+        t_pre = time.time()
+        weight_hbm_map = _build_weight_hbm_map(runner, _runs_base, dry_run=False)
+        print(f"[preload] Done in {time.time()-t_pre:.1f}s", flush=True)
+
+    # Phase 3: FPGA backbone + neck (weight PCIe uploads skipped if map available)
     x17, x20, x23 = run_fpga_backbone_neck(quant_input, runner, dry_run,
-                                            runs_base=runs_base, verify=verify)
+                                            runs_base=_runs_base, verify=verify,
+                                            weight_hbm_map=weight_hbm_map)
 
     # Host detect head
     head = DetectHead(WEIGHTS_DIR)

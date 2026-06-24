@@ -58,7 +58,11 @@ HBM_OFF_WEIGHT = 0x80000
 HBM_OFF_WB = 0xC0000
 HBM_OFF_OUTPUT = 0x100000
 
-INST_BASE = 0x1_0400_0000
+# HBM weight pool: pre-allocated region for batched weight upload.
+# Weights are placed starting after the normal staging region, leaving room for
+# inputs (0x00000), weights scratch (0x80000), wb (0xC0000), output (0x100000).
+# Pool starts at 2 MB from base, giving 4GB-2MB of space (>>enough for any network).
+HBM_OFF_WEIGHT_POOL = 0x200000   # 2 MB offset: safe above all scratch regions
 
 TILE_IBUF_BASE = 0x1_0000_0000
 TILE_OBUF_BASE = 0x1_0100_0000
@@ -213,6 +217,86 @@ class ChipRunnerWin:
         self._hbm_weight_cache.clear()
         self._last_weight_key = ""
 
+    def preload_all_weights(
+        self,
+        run_dirs: "list[Path]",
+        pool_base: int = None,
+    ) -> "dict[str, dict[str, int]]":
+        """Upload all weights for a list of case dirs to a dedicated HBM pool.
+
+        Each case dir gets its own sub-map: {filename -> hbm_absolute_offset}.
+        Weight files (weight_tile*.hex, wb_init.hex, aux_zero.hex) are uploaded
+        once to non-overlapping HBM addresses.  During inference, pass the
+        per-case sub-map to upload_hbm() and upload_inst() so those calls skip
+        weight re-uploading.
+
+        Returns a dict keyed by run_dir.name -> {fname: hbm_abs_offset}.
+
+        pool_base: HBM byte offset for the start of the pool (default HBM_OFF_WEIGHT_POOL).
+        """
+        from hbm_flow import staging_writes_for_preload
+
+        if pool_base is None:
+            pool_base = HBM_OFF_WEIGHT_POOL
+
+        cursor = pool_base
+        result: dict[str, dict[str, int]] = {}
+        total_uploaded = 0
+        skipped = 0
+
+        self._log(f"\n[preload_all] Scanning {len(run_dirs)} case dirs for weights...")
+
+        for run_dir in run_dirs:
+            run_dir = Path(run_dir)
+            preload_file = run_dir / "preload.txt"
+            if not preload_file.exists():
+                continue
+
+            case_map: dict[str, int] = {}
+            for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir):
+                is_weight_or_wb = (
+                    fname.startswith("weight") or fname == "wb_init.hex"
+                    or fname == "aux_zero.hex"
+                )
+                if not is_weight_or_wb:
+                    continue
+                if fname in case_map:
+                    # Same file already allocated for this case (e.g. via ohtile sharing)
+                    continue
+
+                # Align to 256 bytes (16-byte word × 16 = DCIM tile alignment)
+                cursor = (cursor + 255) & ~255
+
+                # Check content hash against pool cache
+                data = hex_to_bin(run_dir / fname)
+                pool_key = (run_dir.name, fname)
+                h = _fast_hash(data)
+                cached = self._hbm_weight_cache.get(pool_key)
+                if cached and cached[0] == h:
+                    # Already in HBM at the same address from a previous preload
+                    case_map[fname] = cached[1]
+                    skipped += nbytes
+                    self._log(f"  [pool] {run_dir.name}/{fname} -> 0x{cached[1]:x} [CACHED]")
+                else:
+                    self._log(
+                        f"  [pool] {run_dir.name}/{fname} ({nbytes} B) -> HBM+0x{cursor:x}"
+                    )
+                    self.x.write(HBM_BASE + cursor, data)
+                    case_map[fname] = cursor
+                    self._hbm_weight_cache[pool_key] = (h, cursor)
+                    total_uploaded += nbytes
+                cursor += nbytes
+
+            if case_map:
+                result[run_dir.name] = case_map
+
+        self._log(
+            f"[preload_all] Done. Uploaded {total_uploaded/1024:.1f} KB, "
+            f"skipped {skipped/1024:.1f} KB (cached). "
+            f"Pool end=0x{cursor:x}"
+        )
+        return result
+
     def _log(self, msg: str):
         if self.verbose:
             try:
@@ -220,15 +304,21 @@ class ChipRunnerWin:
             except UnicodeEncodeError:
                 print(msg.encode("ascii", errors="replace").decode())
 
-    def upload_hbm(self, run_dir: Path, skip_weights: bool = False) -> None:
+    def upload_hbm(
+        self,
+        run_dir: Path,
+        skip_weights: bool = False,
+        weight_hbm_map: "dict[str, int] | None" = None,
+    ) -> None:
         """Upload HBM staging data for *run_dir*.
 
-        skip_weights=True: skip weight_tile*.hex and wb_init.hex uploads.
-        Use after preloading all weights via preload_hbm_weights().
-        The default (False) uses a content-hash cache per case: files whose content
-        has not changed since the last upload FOR THE SAME LAYER are silently skipped.
-        Different layers always re-upload even if sizes happen to match, because all
-        layers share the same HBM weight region (HBM_OFF_WEIGHT).
+        skip_weights=True: skip weight_tile*.hex and wb_init.hex uploads entirely.
+        weight_hbm_map: pre-allocated weight addresses from preload_all_weights().
+            When provided, weight files that are already in the pool are skipped
+            (they live at fixed addresses and do not need re-uploading).
+        The default (False, None) uses a content-hash cache per case: files whose
+        content has not changed since the last upload FOR THE SAME LAYER are
+        silently skipped.
         """
         from hbm_flow import staging_writes_for_preload
 
@@ -246,9 +336,14 @@ class ChipRunnerWin:
 
         last_hbm_off = 0
         last_nbytes = 0
-        for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir):
+        for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir, weight_hbm_map):
             is_weight_or_wb = fname.startswith("weight") or fname == "wb_init.hex"
             if skip_weights and is_weight_or_wb:
+                continue
+            # If this file is in the preloaded pool, its address is already fixed in HBM —
+            # skip uploading it (the pool address is already in weight_hbm_map).
+            if weight_hbm_map and is_weight_or_wb and fname in weight_hbm_map:
+                self._log(f"[hbm] {fname} ({nbytes} bytes) -> HBM+0x{hbm_off:x} [POOL, skip]")
                 continue
             data = hex_to_bin(run_dir / fname)
             if len(data) != nbytes:
@@ -355,10 +450,16 @@ class ChipRunnerWin:
         self.x.write(INST_BASE, data)
         return n_words
 
-    def upload_inst(self, run_dir: Path, drain_output: bool = True) -> int:
+    def upload_inst(
+        self,
+        run_dir: Path,
+        drain_output: bool = True,
+        weight_hbm_map: "dict[str, int] | None" = None,
+    ) -> int:
         from hbm_flow import patch_inst_for_hbm
 
-        data = patch_inst_for_hbm(run_dir, drain_output=drain_output)
+        data = patch_inst_for_hbm(run_dir, drain_output=drain_output,
+                                   weight_hbm_map=weight_hbm_map)
         n_words = len(data) // 4
         self._log(f"[inst] {n_words} words ({len(data)} bytes) -> INST_BRAM 0x{INST_BASE:010x}")
         self.x.write(INST_BASE, data)
@@ -455,12 +556,16 @@ class ChipRunnerWin:
         timeout_s: float = DEFAULT_TIMEOUT_S,
         staging: str = "hbm",
         verify: bool = True,
+        weight_hbm_map: "dict[str, int] | None" = None,
     ) -> list[dict]:
         """Run one case.
 
-        staging : 'hbm' (default) or 'preload' (lab/sim path).
-        verify  : if False, skip read_check and return empty pass result.
-                  Speeds up E2E inference when verification is not needed.
+        staging        : 'hbm' (default) or 'preload' (lab/sim path).
+        verify         : if False, skip read_check and return empty pass result.
+                         Speeds up E2E inference when verification is not needed.
+        weight_hbm_map : per-file HBM address map from preload_all_weights().
+                         When supplied, weight uploads are skipped (pool already in HBM)
+                         and inst patching uses pool addresses for CDMA src.
         """
         run_dir = Path(run_dir)
         self._log(f"\n{'='*60}")
@@ -468,8 +573,9 @@ class ChipRunnerWin:
         self._log(f"{'='*60}")
 
         if staging == "hbm":
-            self.upload_hbm(run_dir)
-            n_words = self.upload_inst(run_dir, drain_output=verify)
+            self.upload_hbm(run_dir, weight_hbm_map=weight_hbm_map)
+            n_words = self.upload_inst(run_dir, drain_output=verify,
+                                        weight_hbm_map=weight_hbm_map)
         else:
             self.upload_preload(run_dir)
             n_words = self.upload_inst_raw(run_dir)
