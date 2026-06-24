@@ -40,30 +40,44 @@ class DetectHead:
     def __init__(self, weights_dir: str):
         wdir = Path(weights_dir)
 
-        # Load network config to get the correct act_scale for detect head input
+        # Load network config to get the detect head input act_scale.
+        # The correct act_scale is the output activation scale of model.17/20/23
+        # cv3.conv (the layers feeding into detect head), stored in network.json.
+        # NOTE: the 'act_scale' field inside model_24_m_*.npz is the DCIM hard-quant
+        # scale (1/127 ≈ 0.007874), NOT the backbone activation scale — do NOT use it.
         import json
         net_json = wdir.parent / 'network.json'
         if net_json.exists():
             net_cfg = json.load(open(str(net_json)))
-            self.det_act_scale = net_cfg['layers'][0]['act_scale']
+            layers_dict = {l["name"]: l for l in net_cfg.get("layers", [])}
+            feed_layers = ["model.17.cv3.conv", "model.20.cv3.conv", "model.23.cv3.conv"]
+            # Each scale corresponds to P3, P4, P5 respectively
+            det_scales = [layers_dict[l]["act_scale"] for l in feed_layers if l in layers_dict]
         else:
-            self.det_act_scale = 0.07814328372478485
+            det_scales = []
+
+        # Fallback default (INT8 QONNX scale for yolov5n)
+        default_scale = 0.07814328372478485
 
         self.convs = []
         for i in range(3):
             npz = np.load(wdir / f'model_24_m_{i}.npz')
+            # Use the network.json-derived per-scale (accurate backbone output scale).
+            # Do NOT use npz['act_scale']: it stores the DCIM hard-quant scale (≈1/127).
+            act_scale = det_scales[i] if i < len(det_scales) else default_scale
             if 'weight_fp32' in npz:
                 self.convs.append({
                     'weight_fp32': npz['weight_fp32'],   # (24, Cin, 1, 1)
                     'bias': npz['bias'],                 # (24,)
-                    'act_scale': self.det_act_scale,
+                    'act_scale': act_scale,
                 })
             else:
                 self.convs.append({
                     'weight_fp32': npz['weight_int8'].astype(np.float32),
                     'bias': npz['dqa_bias'],
-                    'act_scale': self.det_act_scale,
+                    'act_scale': act_scale,
                 })
+        self.det_act_scale = self.convs[0]['act_scale']  # for backwards compatibility
 
     def _conv1x1_dqa(self, feat_int8: np.ndarray, conv_idx: int) -> np.ndarray:
         """1×1 Conv (FP32 weights) on INT8 input → FP32 output.

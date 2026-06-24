@@ -53,6 +53,10 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
         _e2e.INT16_MODE = True
         _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "weights")
         set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16" / "network.json"))
+        # INT16 模型 logit 幅度比 INT8 大（widened 激活值范围更宽），
+        # 需要更高的置信度阈值才能对齐检测数量。
+        # 经实测，conf_thres=0.40 可使 INT16 检测数与 INT8 对齐。
+        conf = max(conf, 0.40)
     else:
         _e2e.INT16_MODE = False
         _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")

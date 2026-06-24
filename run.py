@@ -253,9 +253,13 @@ def run_yolo(img_path: Path, precision: str, runner, mode: str,
     verify_e2e = importlib.import_module("verify_e2e")
     dry_run = mode in ("dry-run", "onnx")
 
+    # INT16 模型 logit 幅度偏大（widened 激活值范围更宽），
+    # 需要更高置信度阈值才能对齐 INT8 检测数量。
+    eff_conf = max(conf, 0.40) if precision == "int16" else conf
+
     img_out, dets = verify_e2e.run_image(
         str(img_path), runner, dry_run, precision=precision,
-        conf=conf, iou=iou, verify=verify, preload_weights=preload_weights,
+        conf=eff_conf, iou=iou, verify=verify, preload_weights=preload_weights,
     )
 
     stem = img_path.stem
@@ -277,7 +281,8 @@ def run_yolo(img_path: Path, precision: str, runner, mode: str,
 
     n = len(dets)
     confs = ", ".join(f"{d['confidence']:.2f}" for d in det_list[:5]) or "none"
-    print(f"  [{mode:7s}] YOLO {precision.upper():5s}: {n} det [{confs}]")
+    thres_note = f"(conf>{eff_conf:.2f})" if precision == "int16" else ""
+    print(f"  [{mode:7s}] YOLO {precision.upper():5s}: {n} det [{confs}] {thres_note}")
     print(f"            -> {out_img.relative_to(REPO_ROOT)}")
     return out_img
 
