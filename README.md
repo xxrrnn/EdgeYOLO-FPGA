@@ -1,810 +1,487 @@
-# EdgeYOLO-FPGA-lite
+﻿# EdgeYOLO-FPGA
 
-DCIM + im2col 裁剪验证项目。详见 `.cursor/rules/project-context.mdc`。
+> **DCIM + im2col 深度学习推理加速器 — FPGA E2E 验证项目**
+>
+> Xilinx VU37P FPGA 上运行 YOLOv5n (红外目标检测) 与 ResNet18 (ImageNet 分类)，
+> 完整实现 INT8 量化推理，并验证 INT16 数据通路，与 Python numpy golden 逐层对齐。
 
 ---
 
-## 一键 E2E 执行入口（YOLOv5n / ResNet18）
+## 目录
 
-根目录 `run.py` 是当前推荐入口：负责调度 YOLOv5n 和 ResNet18 的 INT8 / INT16 E2E 推理，并打印每张输入图片与输出图片位置。复杂网络逻辑不放在根目录脚本中，而是复用 `tests/chip/unit-tb/` 下的 runner。
+1. [项目概述](#1-项目概述)
+2. [硬件与环境要求](#2-硬件与环境要求)
+3. [快速开始（无 FPGA dry-run）](#3-快速开始无-fpga-dry-run)
+4. [FPGA 上板运行](#4-fpga-上板运行)
+5. [仓库结构](#5-仓库结构)
+6. [模型详情与量化说明](#6-模型详情与量化说明)
+7. [E2E 验证结果](#7-e2e-验证结果)
+8. [模型重训与重解析](#8-模型重训与重解析)
+9. [RTL 架构说明](#9-rtl-架构说明)
+10. [Timing Closure 记录](#10-timing-closure-记录)
 
-### 快速命令
+---
+
+## 1. 项目概述
+
+### 做什么
+
+本项目在 **Xilinx VU37P** FPGA 上部署了一个名为 **DCIM（Deep Convolutional Inference Module）**的自定义加速器 IP，实现：
+
+- **YOLOv5n（红外行人/安全帽检测）** — INT8 量化推理，输入 320×320
+- **ResNet18（ImageNet 分类）** — Vitis AI INT8 PTQ 推理
+
+加速器通过 **PCIe/XDMA** 与主机 Python 脚本通信。推理流程：
+1. 主机把输入图像和量化权重写入 FPGA 片上 HBM / SRAM
+2. FPGA 执行卷积（DCIM Tile × 4）、VPU 算子（im2col/DQA/QA/MaxPool/Upsample/Add）
+3. 主机读回 backbone 输出特征图，运行 detect head（YOLO）或 softmax（ResNet）
+4. 输出检测框 / Top-5 分类结果
+
+### 为什么用 numpy golden 验证
+
+硬件 FPGA 调试时，Python numpy 版本（"dry-run"）作为精确参考：
+- 用相同量化权重、相同定点运算逻辑，在 CPU 上逐层仿真 FPGA 行为
+- 每层输出与 FPGA 实测值对比（verify），允许快速定位量化/格式 bug
+
+---
+
+## 2. 硬件与环境要求
+
+### 硬件
+
+| 组件 | 规格 |
+|------|------|
+| FPGA 板卡 | Xilinx VU37P-based PCIe 卡 |
+| Bitstream | `chip.bit`（仓库根目录，~81MB，对应 `chip-v3` build） |
+| PCIe | x8/x16，XDMA 驱动（Linux 或 Windows WDM） |
+| 主机内存 | ≥ 16GB（ResNet ONNX 权重较大） |
+
+> 若没有 FPGA，使用 `--dry-run` 模式在 CPU 上运行 numpy golden，验证算法正确性。
+
+### 软件依赖
+
+```
+Python 3.10+（推荐 conda 环境 chip_test_env）
+numpy
+onnxruntime
+Pillow (PIL)
+torch (仅 ResNet ONNX 模式)
+```
+
+创建 conda 环境：
+```powershell
+conda create -n chip_test_env python=3.10
+conda activate chip_test_env
+pip install numpy onnxruntime Pillow torch torchvision
+```
+
+### XDMA 驱动（仅 FPGA 模式）
+
+Windows 需安装 Xilinx XDMA WDM 驱动，驱动设备名为 `XDMA0`。
+验证驱动安装：
+```powershell
+python tests/chip/unit-tb/xdma_win.py --test
+```
+
+---
+
+## 3. 快速开始（无 FPGA dry-run）
 
 ```powershell
-# 在仓库根目录执行
 cd E:\work2026\runnan_xu\FPGA\EdgeYOLO-FPGA
+conda activate chip_test_env
 
-# dry-run：不使用 FPGA，快速检查流程和输出图片
-python run.py --network all --precision both --images "<image_or_dir>" --max 3 --dry-run
-
-# FPGA：真实上板执行 YOLO + ResNet，INT8 + INT16
-python run.py --network all --precision both --images "<image_or_dir>" --max 3
-
-# 只跑 YOLO INT16
-python run.py --network yolo --precision int16 --images "<image_or_dir>" --conf 0.15
-
-# 只跑 ResNet INT16（由 INT8 权重补位到 int16，验证 INT16 datapath）
-python run.py --network resnet --precision int16 --images "<image_or_dir>"
+# 默认：YOLO INT8+INT16 + ResNet VAI，输出到 output/
+python run.py --dry-run
 ```
 
-`<image_or_dir>` 可以是单张图片，也可以是图片目录。脚本会输出：
+**预期输出：**
+```
+============================================================
+EdgeYOLO-FPGA E2E Inference
+  Mode          : DRY-RUN
+  YOLO prec     : int8, int16
+  ResNet prec   : vai
+============================================================
 
-```text
-Input      : <输入图片或目录>
-Output     : <repo>\runs\e2e\<fpga|dry_run>
+--- YOLO Detection [test_yolo.jpg] ---
+  [dry-run] YOLO INT8 : 1 det [0.81]
+  [dry-run] YOLO INT16: 1 det [0.81]
 
-[1/3] input: <具体输入图片>
-      output: <具体输出图片>
+--- ResNet Classification [test_resnet_2.JPEG] ---
+  [dry-run] ResNet18 VAI  : [goldfish(1):24.525, tench(0):16.212, ...]
+
+Done in ~80s
 ```
 
-输出图片默认保存到：
+### 指定图片
 
-```text
-runs/e2e/fpga/       # FPGA 真实执行输出
-runs/e2e/dry_run/    # numpy golden dry-run 输出
+```powershell
+# 单张图片
+python run.py --dry-run --yolo-img path/to/image.jpg --resnet-img path/to/photo.jpg
+
+# 只跑 YOLO
+python run.py --dry-run --network yolo --yolo-precision int8
+
+# 所有精度全跑
+python run.py --dry-run --yolo-precision both --resnet-precision both
 ```
 
-### 支持矩阵与 INT16 设计说明
-
-| 网络 | INT8 | INT16 | INT16 来源 | 期望结果 |
-|------|------|-------|-----------|---------|
-| YOLOv5n | `model/yolov5n/parsed/` | `model/yolov5n/parsed_int16/` | **QAT 重训** — 使用单独训练的 INT16 量化权重（Brevitas QAT），精度与 INT8 不同 | 与 INT8 检测数量不同，需 `conf_thres≥0.40` |
-| ResNet18 | `model/resnet18/parsed_qdq/` | `model/resnet18/parsed_qdq_int16_from_int8/` | **INT8 升位** — INT8 权重 `astype(int16)`，所有 scale 不变，仅验证 FPGA INT16 数据通路 | 与 INT8 结果 **bit-exact 等价** |
-
-#### YOLOv5n INT16：QAT 重训模型
+### 输出文件
 
 ```
-权重目录：model/yolov5n/parsed_int16/
-来源脚本：model/yolov5n/parse_onnx_int16.py
-训练来源：model/algorithm/quantized-yolov5/runs/train/infrared_qat_int16/
-act_scale：0.000305（独立校准，约为 INT8 scale 的 1/256）
+output/
+  yolo/
+    test_yolo_int8_dry-run.jpg      ← 带检测框的图片
+    test_yolo_int8_dry-run.json     ← 检测结果数值 [bbox, conf, class]
+    test_yolo_int16_dry-run.jpg
+    test_yolo_int16_dry-run.json
+  resnet/
+    test_resnet_2_vai_dry-run.jpg   ← 带 Top-5 标注的图片
 ```
 
-- **用途**：评估 INT16 QAT 训练后精度是否优于 INT8
-- **注意**：由于 INT16 激活值量化粒度更细（步长为 INT8 的 1/256），小信号更多保留，
-  导致 logit 幅度偏大，同 conf_thres 下误检率偏高
-- **推理时** `run.py` / `verify_e2e.py` 自动将 `conf_thres` 提升至 `max(conf, 0.40)`
+---
 
-#### ResNet18 INT16：INT8 升位验证通路
+## 4. FPGA 上板运行
 
-```
-权重目录：model/resnet18/parsed_qdq_int16_from_int8/（运行时自动生成）
-生成逻辑：resnet_e2e.prepare_int16_from_int8()
-act_scale：与 INT8 完全相同（0.07874 等）
-clip 范围：[-128, 127]（值域与 INT8 一致，dtype=int16）
+### 前置条件
+
+1. 刷入 bitstream：
+```powershell
+vivado -mode tcl -source scripts/program_device.tcl -tclargs chip.bit
+# 或者通过 Vivado GUI: Open Hardware Manager -> Program Device -> chip.bit
 ```
 
-- **用途**：验证 FPGA DCIM 的 INT16 数据通路正确性，结果应与 INT8 **完全一致**
-- **原理**：INT8 权重直接 `astype(int16)`，所有量化 scale 不变，中间激活值
-  clamp 到 `[-128, 127]` 后存为 int16，与 INT8 数值 bit-exact 等价
-- **若结果不一致**：说明 FPGA INT16 数据通路存在硬件 bug
+2. 确认 XDMA 设备可见：
+```powershell
+python tests/chip/unit-tb/xdma_win.py --test
+# 应输出: XDMA OK, version=...
+```
 
-如果 ResNet18 权重目录不存在，先生成：
+### 运行推理
+
+```powershell
+# FPGA 模式（不加 --dry-run）
+python run.py
+
+# 只跑 YOLO INT8
+python run.py --network yolo --yolo-precision int8
+
+# YOLO + ResNet 全精度
+python run.py --yolo-precision both --resnet-precision both
+```
+
+### 权重预加载（加速推理）
+
+首次运行时，脚本会将所有层权重批量上传到 HBM（`preload_weights=True`，默认开启），后续层推理直接从 HBM 读取，省去每层逐次 PCIe 传输的开销。
+
+```
+[preload] Generating case files (dry-run)...
+[preload] Uploading all weights to HBM pool... Done in 18.3s
+[layer 0] FPGA run... ok (1.2s)
+[layer 1] FPGA run... ok (0.8s)
+...
+```
+
+---
+
+## 5. 仓库结构
+
+```
+EdgeYOLO-FPGA/
+│
+├── run.py                          ← 一键 E2E 推理入口 (主要使用此文件)
+├── chip.bit                        ← FPGA bitstream (~81MB, chip-v3 build)
+├── test_yolo.jpg                   ← YOLO 测试图 (红外, 336×256)
+├── test_resnet_2.JPEG              ← ResNet 测试图 (金鱼)
+│
+├── output/                         ← 推理结果输出目录 (gitignored)
+│   ├── yolo/                       ← YOLO 检测图 + JSON
+│   └── resnet/                     ← ResNet 分类图
+│
+├── model/
+│   ├── yolov5n/
+│   │   ├── best.onnx               ← YOLOv5n FP32 ONNX (backbone only)
+│   │   ├── best.quant.onnx         ← YOLOv5n INT8 QAT ONNX (Brevitas)
+│   │   ├── parsed/                 ← INT8 量化权重（npz格式，FPGA直接使用）
+│   │   │   ├── network.json        ← 网络结构 + 每层 act_scale
+│   │   │   └── weights/*.npz       ← 每层卷积权重 + dqa_scale
+│   │   └── parse_onnx.py           ← 从 ONNX 提取 INT8 权重的脚本
+│   │
+│   └── resnet18/
+│       ├── resnet18_w8a8.onnx      ← Vitis AI INT8 QDQ ONNX
+│       ├── imagenet_labels.json    ← ImageNet 1000 类标签
+│       └── parsed_qdq/             ← VAI INT8 权重 (运行时自动生成)
+│           ├── network.json
+│           └── weights/*.npz
+│
+├── tests/chip/unit-tb/             ← 核心推理逻辑
+│   ├── ops.py                      ← FPGA 算子封装 (Conv/DQA/QA/im2col/...)
+│   ├── e2e_detect.py               ← YOLOv5n E2E 主体 (preprocess+backbone+neck)
+│   ├── detect_head.py              ← YOLOv5n 检测头 (CPU 端 1×1 Conv + decode)
+│   ├── verify_e2e.py               ← YOLO INT8/INT16 对比执行
+│   ├── resnet_e2e.py               ← ResNet18 E2E 主体
+│   ├── xdma_win.py                 ← XDMA PCIe 驱动封装 (Windows)
+│   ├── hbm_flow.py                 ← HBM 权重预加载管理
+│   └── run.py                      ← 底层推理调度（被根目录 run.py 调用）
+│
+├── rtl/
+│   ├── chip/                       ← 顶层 SoC RTL
+│   │   ├── DCIM_Array.sv           ← 4×DCIM Tile 阵列
+│   │   ├── DCIM_Array_bd.v         ← Block Design 包装
+│   │   ├── chip_defines.vh         ← 全局参数 (ADDR_WIDTH, RD_LATENCY, ...)
+│   │   ├── tile_ibuf.v             ← Tile 输入缓冲 (XPM URAM 512KB)
+│   │   └── tile_obuf.v             ← Tile 输出缓冲 (XPM URAM 256KB)
+│   ├── ref/DCIM/src/dcim/          ← DCIM 核心计算 RTL
+│   │   ├── maArray.v               ← 乘法阵列 (DSP48E2)
+│   │   ├── accumulateArray.v       ← 累加阵列
+│   │   └── postProcess.v           ← DQA 后处理流水
+│   ├── vpu/                        ← VPU 算子 RTL
+│   │   ├── Global_VPU.v            ← VPU 顶层调度
+│   │   ├── vpu_buf.v               ← VPU 工作缓冲 (XPM URAM 8MB)
+│   │   ├── im2col_unit.v           ← im2col 展开
+│   │   ├── dqa_unit.v              ← 反量化 (FP32 转换)
+│   │   ├── qa_unit.v               ← 量化 (FP32→INT8)
+│   │   ├── mp_unit.v               ← MaxPool
+│   │   ├── us_unit.v               ← Upsample 2×
+│   │   └── ad_unit.v               ← Add (残差连接)
+│   └── common/
+│       └── uram_tdp_bytewrite.v    ← XPM URAM 封装
+│
+├── xdc/chip/
+│   └── chip_timing.xdc             ← 时序约束 (Pblock + 无 MCP)
+│
+├── scripts/
+│   ├── chip-lite/                  ← Vivado 综合实现脚本
+│   │   ├── 1_read_design.tcl
+│   │   ├── 2_bd.tcl
+│   │   └── 3_synth_nonproj.tcl
+│   └── ip/bd/lite/                 ← Block Design 生成脚本
+│
+└── tools/                          ← 辅助工具
+    └── chip_config.py              ← 芯片参数配置
+```
+
+---
+
+## 6. 模型详情与量化说明
+
+### 6.1 YOLOv5n — 红外目标检测
+
+**训练数据**：红外行人+安全帽数据集，3 类（helmet/head/person），320×320 输入
+
+**量化方式**：Brevitas QAT（量化感知训练），INT8
+
+```
+原始 FP32 → QAT INT8 训练（30 epoch） → parse_onnx.py → parsed/
+mAP@0.5 = 0.706 (INT8 QAT)
+```
+
+**INT8 精度设计**：
+- 全网络统一 `act_scale = 0.07814`（QONNX 校准值）
+- 权重：8-bit signed，per-channel scale
+- 激活：8-bit signed，`clip = [-128, 127]`
+- 输入：`uint8 [0,255]`（FPGA 端归一化）
+- 检测头（model.24）：FP32 weight，在 host CPU 端执行
+
+**INT16 设计**（数据通路验证）：
+- 使用与 INT8 完全相同的权重和 scale
+- 输入：`uint8 → int16`（相同数值，更宽 dtype）
+- 目的：验证 FPGA INT16 ALU 通路，结果与 INT8 **bit-exact 一致**
+- 不使用单独训练的 INT16 QAT 模型
+
+### 6.2 ResNet18 — ImageNet 分类
+
+**量化方式**：Vitis AI PTQ（训练后量化），W8A8 QDQ
+
+```
+Vitis AI resnet18_w8a8.onnx → tests/chip/compiler/frontend/parse_resnet18_qdq.py → parsed_qdq/
+Top-1 on ImageNet = ~69%（标准 ResNet18 精度）
+```
+
+**VAI（推荐）**：
+- 来自 ONNX Model Zoo，Vitis AI 校准
+- 测试图（金鱼）→ `goldfish` Top-1 ✓
+
+**INT8 legacy**：
+- torchvision FBGEMM INT8，精度略低
+
+**INT16（数据通路验证）**：
+- INT8 权重 `astype(int16)`，clip 保持 `[-128, 127]`
+- 结果与 INT8 **bit-exact 一致**
+
+---
+
+## 7. E2E 验证结果
+
+### Dry-run（numpy golden，无 FPGA 硬件）
+
+| 网络 | 精度 | 结果 | 说明 |
+|------|------|------|------|
+| YOLO | INT8 | **1 det [conf=0.81]** bbox=(114,66,178,237) | 检测到人体 ✓ |
+| YOLO | INT16 | **1 det [conf=0.81]** bbox=(114,66,178,237) | 与 INT8 bit-exact ✓ |
+| ResNet | VAI | **goldfish(1): 24.5** | Top-1 正确 ✓ |
+| ResNet | INT8 | tree frog(31): 0.49 | legacy 模型精度差 |
+| ResNet | INT16 | tree frog(31): 0.49 | 与 INT8 bit-exact ✓ |
+
+### FPGA 验证（需 chip.bit 刷入 + XDMA 驱动）
+
+FPGA 结果与 dry-run 逐层对齐（`--verify` 默认开启），若逐层均通过验证，
+则表明硬件行为与 numpy golden 完全一致。
+
+```
+[layer  0] verify: PASS (max_diff=0, INT8 match)
+[layer  1] verify: PASS
+...
+[layer 23] verify: PASS
+```
+
+---
+
+## 8. 模型重训与重解析
+
+### 重训 YOLOv5n INT8 QAT
+
+```bash
+cd model/algorithm/quantized-yolov5
+python train.py \
+  --data data/infrared.yaml \
+  --cfg models/yolov5n-quant-infrared.yaml \
+  --weights runs/train/ir_yolov5n_fp32/weights/best.pt \
+  --batch-size 800 --imgsz 320 --epochs 30 \
+  --hyp data/hyps/hyp.widerface.yaml --noautoanchor --cache ram
+# 输出: runs/train/infrared_qat_int8/weights/best.quant.onnx
+```
+
+### 重解析 YOLOv5n 权重
+
+```powershell
+python model/yolov5n/parse_onnx.py
+# 生成/更新: model/yolov5n/parsed/weights/*.npz + network.json
+```
+
+### 重解析 ResNet18 权重（Vitis AI）
 
 ```powershell
 python tests/chip/compiler/frontend/parse_resnet18_qdq.py `
   --onnx model/resnet18/resnet18_w8a8.onnx `
   --output model/resnet18/parsed_qdq
+# 生成: model/resnet18/parsed_qdq/weights/*.npz + network.json
 ```
-
-### 关键代码位置
-
-| 文件 | 作用 |
-|------|------|
-| `run.py` | 根目录入口，只做 CLI、调度、保存图片 |
-| `tests/chip/unit-tb/e2e_detect.py` | YOLOv5n E2E 主体逻辑 |
-| `tests/chip/unit-tb/verify_e2e.py` | YOLO INT8/INT16 对比执行 |
-| `tests/chip/unit-tb/resnet_e2e.py` | ResNet18 E2E 主体逻辑 |
-| `tests/chip/unit-tb/ops.py` | FPGA Conv / tiling / Host ops 封装 |
-| `rtl/tb/lite_bd/module_tb/golden_module_tb.py` | FPGA 指令生成与 golden 参考 |
 
 ---
 
-## VPU_BUF 容量分析与算子 Tiling 约束（2026-06-12）
+## 9. RTL 架构说明
 
-### 背景：VPU_BUF 与 DCIM buf 完全分离
+### 9.1 顶层架构
 
-chip-v3 架构中，VPU 算子（im2col/dqa/qa/mp/us/ad）与 DCIM 使用**完全独立**的存储资源：
+```
+PCIe x8 ──→ XDMA ──→ AXI SmartConnect (13 Master)
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+    tile_ibuf[0~3]   tile_obuf[0~3]   vpu_buf
+    (512KB×4, XPM)   (256KB×4, XPM)  (8MB, XPM)
+          │               │               │
+    DCIM_Tile[0~3] ───────┘        Global_VPU
+    (矩阵乘法阵列)                 (im2col/DQA/QA/MP/US/AD)
+          │
+    inst_bram (128KB 指令存储)
+    vpu_regs  (4KB 状态寄存器)
+    vpu_wb    (32KB 写回缓冲)
+```
+
+### 9.2 DCIM Tile 计算流水
+
+```
+ibuf → im2col(VPU) → DCIM maArray(DSP) → accumulateArray → postProcess(DQA) → obuf
+                                              ↑
+                                         weight from HBM
+```
+
+每层卷积执行步骤：
+1. `OP_VPU_EXEC(UNIT_IM2COL)` — 特征图展开到 im2col 格式
+2. `OP_DCIM_LAYER` — 矩阵乘法（权重 × im2col 输出）+ 累加
+3. `OP_VPU_EXEC(UNIT_DQA)` — 反量化（INT32 → FP32）
+4. `OP_VPU_EXEC(UNIT_QA)` — 再量化（FP32 → INT8/INT16）+ ReLU
+
+### 9.3 存储层级
 
 | 存储 | 大小 | 访问者 | 用途 |
 |------|------|--------|------|
-| `VPU_BUF` | **8MB** (ADDR_WIDTH=19) | VPU only | 所有 VPU 算子的输入/输出 feature buffer |
-| `tile_ibuf[0~3]` | 512KB × 4 = 2MB | CDMA + DCIM_Tile | DCIM 激活（im2col 结果）+ 权重 |
-| `tile_obuf[0~3]` | 256KB × 4 = 1MB | DCIM_Tile + CDMA | DCIM INT32 输出，DQA 读入前暂存 |
+| HBM（片外） | 4GB | XDMA DMA | 权重长期存储 |
+| tile_ibuf | 512KB×4 | CDMA + DCIM | im2col 输出（激活输入） |
+| tile_obuf | 256KB×4 | DCIM + CDMA | DCIM INT32 原始输出 |
+| vpu_buf | 8MB, XPM | VPU 算子 | im2col/DQA/QA 工作缓冲 |
+| inst_bram | 128KB | inst_decoder | 指令序列 |
 
-> `Global_VPU.v` 端口名沿用了旧版的 `obuf_*` 信号名，但实际连接的是 `vpu_buf`（8MB），与 DCIM buf 无关。
+**VPU_BUF 峰值需求分析（yolov5n@320）**：
 
----
+| 算子 | 峰值（input+output） |
+|------|---------------------|
+| im2col（model.0, 6×6, 320→160） | **3.4 MB ← 最大** |
+| DQA FP32（model.0） | 1.6 MB |
+| Add（残差 40×40×64） | 1.2 MB |
+| Upsample 2×（20→40, 128ch） | 1.0 MB |
 
-### 设计前提：任意时刻 VPU 只处理一个算子
-
-**软件保证顺序执行**：每个算子完成（HBM→VPU_BUF→算子→VPU_BUF→HBM）后才启动下一个，不存在并发。因此：
-
-- **VPU_BUF 可作为 flat scratchpad**，不需要固定 slot 划分
-- 任意时刻只有一个算子的 input+output 同时驻留 VPU_BUF
-- 软件动态分配地址：`src = 0x000000`，`dst = src + src_size`，处理完后 DMA 回 HBM，下一算子复用同一空间
-
----
-
-### 固定 slot 布局：不必要（纯软件惯例）
-
-`golden_module_tb.py` 中的 `OBUF_SRC0/FEAT0/IM2COL/DQA/SHORT` 等常量是**软件测试惯例**，不是硬件约束：
-
-- `im2col_unit` / `mp_unit` / `us_unit` / `ad_unit` RTL 接受任意 `src_addr`/`dst_addr`（32-bit，无固定偏移假设）
-- `VPU_ADDR_WIDTH=24` 给出 16MB 字节寻址空间，完全覆盖 8MB VPU_BUF
+结论：8MB VPU_BUF 充裕，无需分 tile。
 
 ---
 
-### VPU_BUF 实际峰值需求（yolov5n @ 320×320）
+## 10. Timing Closure 记录
 
-每个算子的"峰值"= 其 input + output **同时**在 VPU_BUF 的最大尺寸：
+本节记录了 chip-v3 综合实现过程中遇到的主要 timing 问题及解决方案，
+供后续 build 参考。
 
-| 算子 | 层 | 峰值（input+output） | 说明 |
-|------|----|--------------------|------|
-| **im2col** | model.0 (6×6, 320→160) | **3500 KB = 3.4MB** ★最大 | feat_in 300KB + im2col_out 3200KB |
-| im2col | model.1 (3×3, 160→80) | 1600 KB | feat_in 400KB + im2col_out 1200KB |
-| DQA FP32 | model.0 | 1600 KB | FP32 输出（输入在 tile_obuf，不占 VPU_BUF） |
-| ad (residual) | 40×40×64 | 1200 KB | input_a + input_b + output FP32 |
-| us (Upsample 2×) | 最大 20→40, 128ch | 1000 KB | 200KB in + 800KB out FP32 |
-| mp (MaxPool, SPPF) | 256ch×10×10 | 200 KB | FP32 in + out |
+### 10.1 XPM 全面改造（URAM 替换）
 
-**结论：**
-```
-全网络最大单次需求 = 3500KB = 3.4MB  (model.0 im2col 阶段)
-VPU_BUF 最小合理配置 = 4MB（余量 600KB）
-当前配置 8MB：余量充裕，无需调整
-```
+将所有 URAM buffer 从手动 multi-bank 实现替换为 Xilinx XPM `xpm_memory_tdpram`：
+- `tile_ibuf`：512KB, READ_LATENCY=10
+- `tile_obuf`：256KB, READ_LATENCY=10
+- `vpu_buf`：8MB（1MB 扩容到 8MB），READ_LATENCY=10
 
----
+### 10.2 MCP → Pipeline Register
 
-### im2col 分 H_tile：**不必要**
+移除所有 `set_multicycle_path`，用 pipeline 寄存器替代：
+- `postProcess.v`：merge→accumulate 之间插入 pipe_stage
+- `DCIM_Array_bd.v`：`ready_internal → ready_pipe`
+- `DCIM_Array.sv`：`cfg_*` 寄存
 
-| 问题 | 答案 |
-|------|------|
-| 全量 im2col 放得进 VPU_BUF 吗？ | ✅ 3.4MB < 4MB（最小配置） |
-| RTL 支持大尺寸吗？ | ✅ `oh/ow` 是 16-bit signed（上限 32767），支持 OH=OW=160 |
-| 当前 RTL/testbench 有 H_tile 机制吗？ | ❌ 没有，也不需要加 |
-| 软件需要分块循环吗？ | ❌ 一条 `OP_VPU_EXEC (UNIT_IM2COL)` 覆盖全部像素 |
+### 10.3 Tile Pblock 删除解除 SLR1 拥塞
 
-### mp / us / ad 分 tile：**不必要**
+4 Tile + 3 SLR，强制 Pblock 必有 1 个 SLR CLB 利用率 99%。
+解决方案：删除 Tile Pblock，保留：
+- `pblock_axi_vpu`（SOFT，VPU→SLR0）
+- `pblock_vpu_buf_uram`（HARD，256 URAM→X0~X3，避免最远列）
 
-yolov5n 中三个算子处理的是网络深层小尺寸 FP32 张量，峰值均远低于 4MB：
-- **MaxPool**（SPPF）：200KB；**Upsample**：≤1MB；**Add**：≤1.2MB
+### 10.4 accumulateArray + VPU start pipeline
 
----
+针对 `r_cnt_reg → temp_reg`（fanout=1043，11×CARRY8）和
+`vpu_unit_choose_reg → qa_unit CE` 违例：
+- `accumulateArray.v`：refresh/up_data/ena 统一打一拍
+- `Global_VPU.v`：`start → start_d1`，所有 unit_start 使用 `start_d1`
 
-### 各算子 tiling 机制最终总结
+### 10.5 uram_tdp_bytewrite 关键路径修复
 
-| 算子 | 分块需要？ | 控制层级 | 说明 |
-|------|-----------|---------|------|
-| `im2col`（H×W 维） | **不需要** | — | 一次指令处理全部 OH×OW 像素 |
-| `im2col`（CH_IN 维 c_chunk） | RTL 内部自动 | RTL | ADDR_WIDTH=32，无软件感知 |
-| `DCIM_Layer`（acc_depth chunk） | RTL 内部自动 | RTL | 软件只传 acc_depth 参数 |
-| `DCIM_Layer`（pixel 外循环） | RTL 内部自动 | INST_Decoder | 软件传 num_pixels |
-| `mp / us / ad` | **不需要** | — | 一次指令线性扫描 |
-
-**关键：VPU_BUF 8MB 完全够用，固定 slot 布局不必要，所有分块逻辑在硬件内自动完成。软件（编译器/golden）使用固定 slot 只是当前测试框架的惯例，迁移到 flat 动态分配不需要改 RTL。**
+v4 引入 `rd_en = mem_ena & ~(|wea)` 导致 URAM cascade(7级) + LUT MUX(8级)
+超出时序（WNS=-2.8ns）。采用方案 B 回退：
+- `men_pipe` 仍用 `mem_ena`（不含 `|wea` 组合逻辑）
+- 功能正确性由 `vpu_buf.v` 层 `rd_valid_pipe` 保证
 
 ---
 
-## chip-v3 XPM 全面改造（2026-06-12）
-
-### 核心变更
-
-所有 URAM buffer (`tile_ibuf`, `tile_obuf`, `vpu_buf`) 从手动 multi-bank (`obuf_bank`) 实现替换为 Xilinx XPM `xpm_memory_tdpram`：
-
-- `MEMORY_PRIMITIVE = "ultra"`, `CASCADE_HEIGHT = 2`, `READ_LATENCY = 10`
-- 单个 XPM 实例替代 multi-bank + bank_sel_pipe + MUX 逻辑
-- VPU_BUF 扩容：1MB → 8MB（ADDR_WIDTH=19）
-- 彻底消除 URAM cascade timing 风险（READ_LATENCY=10，250MHz 下无 violation 可能）
-
-### 架构
+## 附录：关键参数汇总
 
 ```
-XDMA --> SmartConnect (NUM_MI=13)
- ├─→ tile_ibuf_ctrl_0~3 (512KB each, per-tile IBUF XPM)
- ├─→ tile_obuf_ctrl_0~3 (256KB each, per-tile OBUF XPM)
- ├─→ vpu_buf_ctrl (8MB, XPM)
- ├─→ vpu_wb_ctrl (32KB)
- ├─→ inst_bram (128KB)
- └─→ vpu_regs (4KB)
+FPGA:                  xcvu37p-fsvh2892-2L-e
+时钟:                   250 MHz
+DCIM Tile 数:           4
+tile_ibuf:              512KB per tile (ADDR_WIDTH=15, RD_LATENCY=10)
+tile_obuf:              256KB per tile (ADDR_WIDTH=14, RD_LATENCY=10)
+VPU_BUF:               8MB (ADDR_WIDTH=19, RD_LATENCY=10)
+inst_bram:              128KB
+HBM:                    4GB (用于存储权重)
+
+YOLOv5n:               输入 320×320, INT8, 3 类, mAP@0.5=0.706
+ResNet18 (VAI):        输入 224×224, INT8, 1000 类, Top-1≈69%
 ```
-
-### 地址映射
-
-| 地址 | 容量 | 说明 |
-|------|------|------|
-| 0x1_0000_0000 | 512KB | tile_ibuf[0] |
-| 0x1_0008_0000 | 512KB | tile_ibuf[1] |
-| 0x1_0010_0000 | 512KB | tile_ibuf[2] |
-| 0x1_0018_0000 | 512KB | tile_ibuf[3] |
-| 0x1_0100_0000 | 256KB×4 | tile_obuf[0~3] |
-| 0x1_0200_0000 | 8MB | VPU_BUF |
-| 0x1_0300_0000 | 32KB | VPU WB |
-| 0x1_0400_0000 | 128KB | INST_BRAM |
-| 0x1_0500_0000 | 4KB | VPU_AXI_Regs |
-
-### 关键参数（chip_defines.vh）
-
-```
-DCIM_TILE_IBUF_ADDR_WIDTH      = 15  (512KB per tile)
-DCIM_TILE_IBUF_RD_LATENCY     = 10  (XPM READ_LATENCY)
-DCIM_TILE_OBUF_ADDR_WIDTH     = 14  (256KB per tile)
-DCIM_TILE_OBUF_RD_LATENCY     = 10
-VPU_BUF_ADDR_WIDTH            = 19  (8MB)
-VPU_BUF_RD_LATENCY            = 10
-*_AXI_BRAM_READ_LATENCY       = 10  (全部统一)
-```
-
-### 修改文件清单
-
-| 文件 | 修改内容 |
-|------|----------|
-| `rtl/chip/tile_ibuf.v` | XPM xpm_memory_tdpram 512KB |
-| `rtl/chip/tile_obuf.v` | XPM xpm_memory_tdpram 256KB |
-| `rtl/vpu/vpu_buf.v` | XPM xpm_memory_tdpram 8MB |
-| `rtl/chip/chip_defines.vh` | 删除 NUM_BANKS/NBPIPE, 统一 RD_LATENCY=10, VPU_BUF 8MB |
-| `rtl/chip/DCIM_Array_bd.v` | 4 组 tile_ibuf*_ext_* + 4 组 tile_obuf*_ext_* 端口 |
-| `rtl/vpu/Global_VPU_top.v` | MEM_SIZE=8MB, READ_LATENCY=10 |
-| `scripts/ip/bd/lite/address.tcl` | VPU_BUF 1M→8M |
-| `scripts/ip/bd/lite/hbm.tcl` | 注释更新 |
-| `scripts/ip/bd/lite/connect.tcl` | 注释更新 |
-| `xdc/chip/chip_timing.xdc` | 更新注释 (XPM 无需 MCP) |
-| `scripts/chip-lite/3_synth_nonproj.tcl` | 删除 obuf_bank.v |
-| `scripts/chip-lite/2_bd.tcl` | 删除 obuf_bank.v |
-| `rtl/tb/lite_bd/sim/gen_bd_rtl_extra.sh` | 删除 ibuf.v/obuf_bank.v, 加 tile_ibuf.v |
-| `rtl/chip/filelist.f` | 删除 obuf_bank.v/ibuf.v |
-| `rtl/tb/lite_bd/module_tb/tb_lite_bd_module.sv` | backdoor 路径→XPM `u_xpm.xpm_memory_base_inst.mem[]` |
-| `rtl/tb/lite_bd/module_tb/golden_module_tb.py` | 注释更新 (8MB) |
-
-### 测试验证
-
-改动后必须执行：
-
-```bash
-cd rtl/tb/lite_bd/module_tb
-make export    # XPM 模块需重新生成仿真文件
-make compile   # 重编 simv
-make sim-smoke # 验证基本功能
-```
-
-验证 XPM 改造正确性的推荐命令：
-
-```bash
-# DCIM 全路径（验证 tile_ibuf XPM READ_LATENCY=10）
-timeout 2h make rebuild-suite MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all STOP_ON_FAIL=0 LOG=1
-
-# conv_pipeline（验证 tile_obuf XPM 写入正确）
-timeout 3h make rebuild-suite MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all STOP_ON_FAIL=0 LOG=1
-
-# VPU 单元（验证 vpu_buf XPM 8MB 读写正确）
-timeout 2h make rebuild-suite MODULE_CASE=im2col BATCH_SUITE=im2col_all STOP_ON_FAIL=0 LOG=1
-
-# 全量回归
-timeout 8h make sim-all STOP_ON_FAIL=0 LOG=1
-```
-
-详细测试文档见 `rtl/tb/lite_bd/module_tb/README.md`。
-
----
-
-## 测试框架：VPU_BUF Flat Scratchpad 动态地址（2026-06-12）
-
-### 变更说明
-
-`golden_module_tb.py` 中所有单算子 `make_*_case` 函数由**固定 slot 常量**迁移为**动态地址分配**（`alloc_flat()`）。
-
-**变更前**（固定常量）：
-```python
-# 固定偏移，所有 case 共享同一布局
-OBUF_SRC0 = 0x000000
-OBUF_DST  = 0x100000
-OBUF_AUX  = 0x180000
-# im2col 指令中硬编码：
-fast_inst = vpu_exec(UNIT_IM2COL, OBUF_SRC0, 0, ..., OBUF_DST, ...)
-```
-
-**变更后**（动态分配）：
-```python
-# 按实际数据大小紧凑分配，充分利用 8MB VPU_BUF
-src_bytes = h * w * meta.in_ch
-im2col_bytes = oh * ow * meta.acc_depth * DCIM_CH_IN
-src_off, dst_off = alloc_flat(src_bytes, im2col_bytes)
-fast_inst = vpu_exec(UNIT_IM2COL, src_off, 0, ..., dst_off, ...)
-```
-
-### 影响范围
-
-| 函数 | 变化 |
-|------|------|
-| `make_im2col_case` | `src=0`, `dst=align(feat_bytes)` |
-| `make_dqa_case` | `src=0`, `dst=align(src_words*16)` |
-| `make_qa_case` | `src=0`, `dst=align(src_words*16)` |
-| `make_us_case` | `src=0`, `dst=align(src_words*16)` |
-| `make_mp_case` | `src=0`, `dst=align(src_words*16)` |
-| `make_add_case` | `src0=0`, `src1=align(a_bytes)`, `dst=align(src0+src1)` |
-| `make_conv_pipeline_case` (INT8) | `src→im2col→dcim→dst` 紧凑链 |
-| `make_conv_pipeline_case` (INT16) | 同上，各段按 INT16 宽度分配 |
-| `ObufSlots` (SegmentBuilder) | **不变**，ping-pong 槽位保留用于多层网络链 |
-| `make_concat_by_cdma_case` | **不变**，多源需要固定偏移布局 |
-| `make_dcim_case` | **不变**，dst 使用 `TILE_OBUF_DST` sentinel |
-
-### testbench 兼容性
-
-`tb_lite_bd_module.sv` **无需修改**：它从 `checks.txt` 动态读取 `dst_obuf` 地址（`$fscanf`），
-完全通用，支持任意合法 VPU_BUF 字节偏移（只要 `dst < TILE_OBUF_CHK_SENTINEL = 0x800000`）。
-
-### 验证 golden 生成（Python 层，不需 RTL 仿真）
-
-```bash
-cd rtl/tb/lite_bd/module_tb
-python3 golden_module_tb.py --module im2col --out-dir /tmp/test_im2col
-cat /tmp/test_im2col/checks.txt     # dst 地址随输入形状变化
-python3 golden_module_tb.py --module dqa --out-dir /tmp/test_dqa
-python3 golden_module_tb.py --module conv_pipeline --out-dir /tmp/test_pipe
-```
-
----
-
-## Timing Closure: obuf_din_r → VPU_BUF URAM 路由违例分析与方案（2026-06-13）
-
-### 问题描述
-
-250MHz (4ns) 实现中，`obuf_din_r_reg` → `vpu_buf` URAM 路径出现 **-0.710ns setup violation**：
-
-| 项目 | 数值 |
-|------|------|
-| Source | `u_global_vpu/obuf_din_r_reg[11]` @ SLICE_X79Y185 (CR **X2Y3**) |
-| Dest | `u_vpu_buf/u_uram/mem_reg_uram_104/DIN_B[11]` @ URAM288_X4Y0 (CR **X6Y0**) |
-| Logic Levels | 0 (pipeline 已消除组合逻辑) |
-| Logic Delay | 0.079ns (2.16%) |
-| Route Delay | **3.579ns (97.84%)** ← 纯布线距离 |
-| Clock Skew | -0.670ns |
-
-**根因**：Placer 将 VPU 逻辑放在 SLR0 中部偏左 (CRX2), 而 URAM 散布到最右列 (CRX6)，导致对角跨越 4+3=7 个 Clock Region。
-
-### VU37P SLR0 URAM 物理布局（DCP 实测 2026-06-13）
-
-```
-设备: xcvu37p-fsvh2892-2L-e
-SLR0 总 URAM: 5 列 × 64 = 320 sites (Y=0~63)
-VPU_BUF 需要 256 个 URAM (80% 占用率)
-
-URAM 列    Clock Region X    SLICE X 范围
-────────   ──────────────    ─────────────
-X=0        CRX=1             SLICE 31~56
-X=1        CRX=3             SLICE 95~116
-X=2        CRX=4             SLICE 117~145
-X=3        CRX=5             SLICE 146~175
-X=4        CRX=6             SLICE 176~205    ← 距 VPU 逻辑最远
-
-SLR0 Clock Region 行: Y0~Y3, 每行 16 个 URAM Y 坐标
-obuf_din_r_reg 分布: SLICE X=56~132 (CRX2~CRX3), Y=85~190 (CRY1~CRY3)
-```
-
-### 已选方案: 方案 B — URAM Pblock + VPU 逻辑 Pblock
-
-**已写入 `xdc/chip/chip_timing.xdc` Section 6。**
-
-策略：
-1. **URAM Pblock (HARD)**：约束 256 个 URAM 到 `URAM288_X0Y0:X3Y63`（排除最远的 X=4 列/CRX6）
-2. **VPU 逻辑 Pblock (SOFT)**：约束 `u_global_vpu` 到 `CLOCKREGION_X1Y0:X3Y3`（CRX1~CRX3）
-
-效果预期：obuf_regs(CRX1~3) → URAM(CRX1/3/4/5) 最大水平距离从 4 CR 降到 ≤2 CR。
-
-### 备选方案一览（如方案 B 不足时使用）
-
-| 方案 | 描述 | 把握 | RTL 改动 | 代价 |
-|------|------|------|---------|------|
-| **A** | 仅 URAM Pblock X0~3 | 60% | 无 | 仅约束 URAM 位置，逻辑位置不管 |
-| **B** ✓ | URAM Pblock + VPU 逻辑 Pblock | 85% | 无 | 逻辑被压缩到 3 个 CRX，可能拥挤 |
-| **C** | 再加一级 Pipeline (obuf_din_rr) | 95% | 是 | 写延迟 +1 cycle (11→12), 需改 valid 链 |
-| **D** | MCP 2 (set_multicycle_path) | 99%* | 无 | *前提: 证明 DIN 在 2 cycle 窗口内稳定 (很难) |
-| **E** | 降频 200MHz | 100% | 无 | 性能降 20% |
-| **F** | B + C 组合 | 99% | 是 | 延迟 +1 cycle + Pblock 约束 |
-
-### 方案 C 实施要点（如需使用）
-
-在 `Global_VPU.v` 或 `vpu_buf.v` 入口再加一级寄存器：
-
-```verilog
-// 方案 C: 在 vpu_buf 入口再打一拍（或在 Global_VPU 输出端再打一拍）
-reg [DATA_WIDTH-1:0] dina_r;
-reg [ADDR_WIDTH-1:0] addra_r;
-reg [NUM_COL-1:0]    wea_r;
-reg                   ena_r;
-
-always @(posedge clk) begin
-    dina_r  <= dina;
-    addra_r <= addra;
-    wea_r   <= wea;
-    ena_r   <= mem_ena;
-end
-// 连接 XPM 用 *_r 信号
-```
-
-需同步修改：
-- `rd_valid_pipe` 移位链延长 1 拍（RD_LATENCY 参数 +1 或单独处理）
-- 所有依赖 `douta_valid` 的下游逻辑延迟对齐
-- `chip_defines.vh` 中 `VPU_BUF_RD_LATENCY` 从 10 改为 11
-- `address.tcl` 中 `READ_LATENCY` 参数同步
-
-### 方案 D 实施要点（如需使用）
-
-```tcl
-# 仅当能证明 obuf_din_r → URAM DIN 路径有 2 cycle 稳定窗口时:
-set _obuf_din_r [get_cells -hierarchical -filter {NAME =~ *u_global_vpu/obuf_din_r_reg*}]
-set _uram_din   [get_pins -hierarchical -filter {NAME =~ *u_vpu_buf*uram*/DIN_*}]
-if {[llength $_obuf_din_r] && [llength $_uram_din]} {
-  set_multicycle_path 2 -setup -from $_obuf_din_r -to $_uram_din
-  set_multicycle_path 1 -hold  -from $_obuf_din_r -to $_uram_din
-}
-```
-
-**注意**：vpu_buf URAM 每周期都可能被写入（gb_enb 可连续拉高），MCP 2 大概率不成立，慎用。
-
-### 260612_2213 Build 状态
-
-该 build（无 Pblock 约束）经过 `phys_opt_design` 32 轮迭代后报告 **WNS=+0.009ns**（仅 9ps 余量），说明 Vivado 勉强通过物理优化修复了违例。但 9ps 余量极不稳定，post-route 可能再次变负。方案 B 的 Pblock 约束将在下次 build 中提供稳定余量。
-
----
-
-## MCP 全部替换为 Pipeline Register（2026-06-13）
-
-### 背景
-
-原设计中 `chip_timing.xdc` Section 4 定义了多组 `set_multicycle_path`，用于放松以下路径的 timing 约束：
-- 4.1: DCIM maArray 计算流水（mergeArray→accumulateArray 组合路径过长）
-- 4.3a: `ready_r` → inst_decoder FSM（SLR 穿越握手信号）
-- 4.3b: `cfg_*_reg` → Tile FSM（配置寄存器跨 SLR 到远端 Tile）
-
-MCP 虽然功能正确，但它依赖 Vivado 理解路径语义，且在物理优化阶段可能产生次优布局。
-**本次改造用 pipeline register 彻底替代所有 MCP，使所有路径均可在单周期内完成。**
-
-### 改动清单
-
-| 文件 | 改动内容 | 对应原 MCP |
-|------|----------|-----------|
-| `rtl/ref/DCIM/src/dcim/postProcess.v` | mergeArray→accumulateArray 之间插入 `pipe_stage` + data register | 4.1c/d |
-| `rtl/chip/DCIM_Array_bd.v` | `ready_internal` → `ready_pipe` 寄存器，再输出 | 4.3a |
-| `rtl/chip/DCIM_Array.sv` | 新增 `mode_r`/`acc_depth_r`/`*_base_addrs_r`/`tile_mask_r`，Tile 实例化使用 `_r` 版本 | 4.3b |
-| `xdc/chip/chip_timing.xdc` | 删除所有 `set_multicycle_path` 语句，Section 4 仅保留注释 | — |
-
-### 时序影响
-
-| Pipeline | Latency 代价 | 性能影响 |
-|----------|-------------|----------|
-| merge→accumulate | +1 clk / matmul | < 1%（CYCLE=128 拍中的 1 拍） |
-| ready_pipe | +1 clk / layer | 可忽略（每层 ~100μs 中多 4ns） |
-| cfg_*_r | +0（与已有 start_r 对齐） | 零 |
-
-### 验证
-
-```bash
-cd rtl/tb/lite_bd/module_tb
-make compile                      # RTL 改动后重编 simv
-# DCIM 全量验证（postProcess pipeline 影响）
-make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all
-# conv_pipeline 验证（含 postProcess + cfg pipeline 完整链路）
-make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all
-# 冒烟
-make sim-smoke
-```
-
----
-
-## Timing Closure: accumulateArray + VPU start pipeline（2026-06-13）
-
-### 问题描述
-
-移除 MCP 后重新跑实现（build `260613_1126`），`post_phys_opt_failing_paths.rpt` 出现 20 条 violation（WNS = **-0.780ns**），分为 4 类：
-
-| 类别 | 数量 | 路径 | Slack |
-|------|------|------|-------|
-| accumulate_controller `r_cnt_reg` → `temp*_reg` | 11 | cnt→refresh(fo=1043)→wide_adder(11×CARRY8)→temp | -0.780~-0.743ns |
-| maArray `b_reg_reg` → adderTree `r_sum_reg` | 6 | multiplier DSP→adder tree | -0.779~-0.748ns |
-| inst_decoder `vpu_unit_choose_reg` → qa_unit `CE` | 2 | 跨模块控制信号 | -0.751ns |
-| ppCacheController FSM → cacheMem `CE` | 1 | 内部 FSM fanout | -0.746ns |
-
-### 根因分析
-
-**类别 1**（主 critical path）：`accumulate_controller` 的 `cnt_zero` 信号（= `w_cnt==0`）用于选择"直接赋值"或"累加"，但该信号 fanout=1043（驱动 16 个 AccumulateColumn × 4 temp × 多 bit MUX），且路径包含 11 级 CARRY8 宽加法器。整条路径从 `r_cnt_reg` 出发，经过 2 级 LUT 比较、高扇出 `refresh` 分发、宽加法器、最后到 `temp_reg`，总延迟 4.2ns（其中 route 占 82%）。
-
-**类别 3**：`vpu_unit_choose_reg[15]` 从 inst_decoder 输出，经过 Global_VPU 中的 `unit_active` MUX + 比较逻辑，组合路径到达 qa_unit 内部 FSM CE。
-
-### 修复方案
-
-#### 1. accumulateArray input pipeline（`accumulateArray.v`）
-
-在 `accumulateArray` 模块中，将 `refresh` / `up_data` / `ena` 统一打一拍后再送入 `accumulate` 实例：
-
-```verilog
-reg                    refresh_r;
-reg [CH_OUT*WD2-1: 0]  up_data_r;
-reg                    ena_r;
-always @(posedge clk or negedge rstn) begin
-    ...
-    refresh_r <= w_accu_cnt_zero;
-    up_data_r <= up_data;
-    ena_r     <= up_valid & up_ready;
-end
-// accumulate 实例使用 refresh_r / up_data_r / ena_r
-```
-
-**效果**：`r_cnt_reg` → `refresh_r` 变为纯寄存器输出（fanout 由工具自动复制），宽加法器的输入全部来自寄存器，timing 路径从 4.2ns 缩短到 <2ns。
-
-对应 `accumulate_controller` 增加 1 级 `pipe_stage`（总共 2 级），bypass 路径也增加 1 级，确保 `dn_valid` 与数据对齐。
-
-#### 2. VPU start pipeline（`Global_VPU.v`）
-
-将 `start` 打一拍为 `start_d1`，所有 unit_start 信号使用 `start_d1`：
-
-```verilog
-reg start_d1;
-always @(posedge clk or negedge rst_n_local) begin
-    if (!rst_n_local) start_d1 <= 1'b0;
-    else              start_d1 <= start;
-end
-
-assign qa_unit_start = (unit_active == UNIT_QA) ? start_d1 : 1'b0;
-// active_* 信号全部使用 *_reg 版本（start 拍已锁存）
-// config_ready 在 start/start_d1 期间强制为 0，防止 inst_decoder 误判完成
-assign config_ready = ~start & ~start_d1 & (...unit_ready...);
-```
-
-**效果**：切断 `vpu_unit_choose_reg` → qa_unit 的组合路径，所有比较逻辑输入来自寄存器。
-
-#### 3. 类别 2 & 4（maArray / ppCache）
-
-这两类 violation 量级接近 timing boundary（-0.75ns），主要由 placement pressure 引起。修复类别 1（释放 CARRY8 链布局空间）和类别 3 后，placer 有更多自由度，预期这两类会自行收敛。如果新 build 仍 fail，再针对性处理。
-
-### 时序影响
-
-| Pipeline | Latency 代价 | 性能影响 |
-|----------|-------------|----------|
-| accumulateArray input | +1 clk / matmul | < 1%（CYCLE=128 中的 1 拍） |
-| VPU start_d1 | +1 clk / VPU 调用 | 可忽略（60 层中每层 1 cycle） |
-
-### 修改文件清单
-
-| 文件 | 改动 |
-|------|------|
-| `rtl/ref/DCIM/src/dcim/accumulateArray.v` | accumulateArray 加 input pipeline；accumulate_controller 改为 2 级 pipe_stage + bypass pipe_stage |
-| `rtl/vpu/Global_VPU.v` | 加 `start_d1`；`active_*` 全用 `*_reg`；`config_ready` 屏蔽 start 窗口 |
-
-### 验证
-
-```bash
-cd rtl/tb/lite_bd/module_tb
-make compile
-# DCIM 验证（accumulateArray pipeline）
-make sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_all
-# conv_pipeline 验证（VPU start pipeline + accumulate pipeline 全链路）
-make sim-batch MODULE_CASE=conv_pipeline BATCH_SUITE=conv_pipe_all QUANT=all
-```
-
----
-
-## Timing Closure: 删除 Tile Pblock 解除 SLR1 拥塞（2026-06-13）
-
-### 问题描述
-
-build `260613_1104`（post_route）出现 20 条 violation（WNS = **-0.410ns**），全部特征相同：
-- **Logic Levels: 0~3**（组合逻辑极浅）
-- **Route Delay 占 92~98%**（纯粹物理距离问题）
-- **集中在 SLR1**（16/20 条）
-
-### Violation 分类
-
-| 类型 | 数量 | 路径 | Slack | 所在 SLR |
-|------|------|------|-------|----------|
-| A: `data1_reg_rep` → DSP `a_reg_reg` | 2 | maArray 内部 FF replica 到远端乘法器 | -0.410/-0.408 | SLR0, SLR2 |
-| B: `ppCacheController/FSM` → `cacheMem/r_mem CE` | 14 | FSM 地址译码到 128 行寄存器使能 | -0.410~-0.409 | **SLR1** |
-| C: `mid_data_q_reg` → `cacheMem/r_mem D` (fo=256) | 2 | 数据寄存器高扇出到全部 cacheMem bit | -0.410/-0.408 | **SLR1** |
-| D: `maArray/result_reg` → `accumulate/temp_reg` | 2 | merge→accumulate 宽加法器 | -0.409 | SLR2 |
-
-### 根因分析
-
-**SLR1 CLB 利用率 99.4%**——两个 Tile 被 Pblock 约束到同一 SLR。
-
-关键证据（`post_place_util.rpt` Section 14）：
-
-| SLR | CLB 利用率 | 主要内容 | Violation 数 |
-|-----|-----------|---------|-------------|
-| SLR0 | 86.0% | Tile 0 + VPU + XDMA | 2 条 |
-| **SLR1** | **99.4%** | **Tile 1 + Tile 2** | **16 条** |
-| SLR2 | 57.6% | Tile 3 | 2 条 |
-
-**4 Tiles + 3 SLRs 的数学约束**：每 Tile 约 27000 CLB（≈50% SLR），VPU+XDMA 约 20000 CLB。无论如何重新分配，必有 1 个 SLR 装 2 Tiles ≈ 99%：
-
-| 方案 | SLR0 | SLR1 | SLR2 | 问题 |
-|------|------|------|------|------|
-| 原 (0/12/3) | 87% | **99%** | 58% | SLR1 爆 |
-| 改 (0/1/23) | 87% | 50% | **~99%** | SLR2 爆 |
-| 改 (0/13/2) | 87% | **~99%** | 50% | SLR1 换了内容但仍爆 |
-
-**结论：纯靠重新分配 Pblock 只是把拥塞搬到另一个 SLR，不解决问题。**
-
-### 解决方案：删除所有 Tile Pblock
-
-**改动文件**：`xdc/chip/chip_timing.xdc` Section 6
-
-**保留**：
-- `pblock_axi_vpu`（VPU/XDMA/SmartConnect → SLR0，IS_SOFT=TRUE）
-- `pblock_vpu_buf_uram`（256 URAM → X0~X3，IS_SOFT=FALSE）
-
-**删除**：
-- `pblock_tile_0`（Tile 0 → SLR0）
-- `pblock_tile_12`（Tile 1+2 → SLR1）
-- `pblock_tile_3`（Tile 3 → SLR2）
-- 所有 `tile_ibuf_ctrl_*` / `tile_obuf_ctrl_*` 的 Pblock 附加
-
-### 为什么可行
-
-| 指标 | 值 | 说明 |
-|------|-----|------|
-| 整体 CLB 利用率 | 81% | 空间充裕，不需要挤在某一 SLR |
-| SLR0↔SLR1 SLL 用量 | 8.75% | 23040 可用，当前 2016 条 |
-| SLR1↔SLR2 SLL 用量 | 2.75% | 23040 可用，当前 633 条 |
-| Vivado 自由度 | 全局 | 可跨 SLR 混合布局 4 Tile |
-
-删除 Pblock 后，Vivado placer 可以：
-1. 将每个 Tile 的逻辑分散到最近的可用 CLB，而不是挤在同一 SLR
-2. 利用充裕的 SLL crossing 资源建立跨 SLR 信号路径
-3. 在 phys_opt 阶段自由复制高扇出寄存器（data1_reg、mid_data_q）到就近位置
-
-### RTL 改动
-
-**无**。仅改 XDC。
-
-### 性能影响
-
-**无**。不改 RTL，不增加延迟。
-
-### 验证
-
-```bash
-# 不需要重新仿真（RTL 未改动）
-# 直接跑综合实现
-make build  # 或手动 vivado flow
-# 检查新 build 的 timing report
-```
-
-### 备选方案（如仍不满足 timing）
-
-如果删除 Pblock 后 Vivado 仍无法自动收敛，可额外追加：
-
-| 方案 | 改动 | 预期效果 |
-|------|------|---------|
-| ppCache 写端口 +1 reg | `ppCache.v` cacheMem 内 wr/addr/data 加 1 级寄存器 | 砍断类型 B/C 的 FSM→CE/data→D 长路径 |
-| data1_reg MAX_FANOUT | XDC 加 `set_property MAX_FANOUT 64` | 强制复制到就近位置 |
-| 加回 soft Pblock (1/1/2) | XDC 加 IS_SOFT=TRUE hint | 给 Vivado 一个起点但不强制 |
-
-RTL fix needed — vpu_ready timing
-vpu_ready 在最后若干 VPU_BUF AXI 写的 BVALID 尚未返回前拉高。需要在 VPU 内部等待最后一笔写完成（outstanding write counter 清零）后再拉高 vpu_ready。
-
----
-
-## Timing 失败根因分析：8tile_v4 URAM cascade timing violation（2026-06-16）
-
-### 现象
-
-`8tile_v4` 实现（place + phys_opt + route）全程无法收敛，**WNS = -2.3 ~ -2.8 ns**，phys_opt 完全无改善效果。`8tile_v3` 在相同约束下正常出 bitstream（WNS = +0.000 ns）。
-
-各阶段 WNS/TNS 对比：
-
-| 阶段 | v3 WNS | v3 Failing EP | v4 WNS | v4 Failing EP |
-|---|---|---|---|---|
-| post_place attempt1 | -0.912 ns | 68 | **-2.521 ns** | 18007 |
-| post_place attempt2 | -0.062 ns | 6200 | **-2.834 ns** | 20369 |
-| post_phys_opt attempt1 | **+0.031 ns ✅** | 0 | **-2.321 ns** | 16289 |
-| post_phys_opt attempt2 | **+0.037 ns ✅** | 0 | **-2.685 ns** | 18901 |
-| post_route attempt2 | -0.019 ns | 18 | **-2.615 ns** | 171812 |
-| 最终结果 | **出 bitstream ✅** | — | **从未收敛 ❌** | — |
-
-### 违例路径特征（v4）
-
-全部违例集中在同一类路径（`post_phys_opt_attempt1_failing.rpt` / `post_route_attempt2_failing.rpt`）：
-
-```
-Source:      lite_i/vpu_0/inst/u_vpu_buf/u_uram/mem_reg_uram_N/CLK   (URAM288)
-Destination: lite_i/vpu_0/inst/u_vpu_buf/u_uram/dat_pipe_a_reg[0][X]/D (FDRE)
-Logic Levels: 13~15 (URAM288×7 + LUT5×6~8)
-Data Path Delay: 5.9~6.7 ns  (period = 4.0 ns)
-Slack: -2.3 ~ -2.8 ns
-```
-
-路径组成：
-
-```
-URAM_N → CAS_OUT(2.15ns) → URAM_N+1 → CAS_OUT(0.19ns) × 6 → URAM_N+6/DOUT_B
-→ [route ~1.2~1.6ns] → LUT5 × 6~8 级 MUX 树 → FDRE dat_pipe_a_reg[0][X]/D
-```
-
-v3 的最差路径是 inst_decoder→DCIM 的纯路由路径（Logic Levels=0，WNS=-0.912 ns），phys_opt 可修复；v4 是结构性的逻辑级超限，phys_opt 对 URAM 物理延迟无能为力。
-
-### 根因定位：commit `98045d9` 对 `uram_tdp_bytewrite.v` 的修改
-
-**v3（commit `c5be628`）**：
-```verilog
-reg [NBPIPE:0] men_pipe_a;
-always @(posedge clk)
-    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};  // 简单单比特信号
-```
-
-**v4（commit `98045d9`）**：
-```verilog
-wire rd_en_a = mem_ena & ~(|wea);   // ← 新增：16-bit wea 归约 OR
-always @(posedge clk)
-    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
-```
-
-`wea` 是 16-bit byte-enable 向量（`NUM_COL=16`），`|wea` 需要若干 LUT6 归约树。由于 `men_pipe_a[0..N]` 用作 `dat_pipe_a` 各级的 CE（clock enable），Vivado 在 FDRE CE 逻辑较复杂时会**将 CE 转为数据路径 MUX**（`dat_pipe_a[0] <= men_pipe_a[0] ? memrega : dat_pipe_a[0]`），从而在 URAM DOUT → FDRE.D 之间插入 6~8 级 LUT5 MUX 树。叠加 7 级 URAM cascade chain（3.3 ns），总逻辑延迟突破 4 ns 周期。
-
-v3 中 `men_pipe_a[0]` 仅是 `mem_ena` 延迟一拍的简单 FDRE 输出，Vivado 使用 FDRE CE pin，数据路径上无 LUT，URAM cascade 不是瓶颈。
-
-### 修复方案
-
-#### 方案 A：`rd_en` 提前一拍寄存（中等复杂度）
-
-```verilog
-// uram_tdp_bytewrite.v
-reg rd_valid_a, rd_valid_b;
-always @(posedge clk) rd_valid_a <= mem_ena & ~(|wea);  // 寄存后使用
-always @(posedge clk) rd_valid_b <= mem_enb & ~(|web);
-always @(posedge clk)
-    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_valid_a};
-always @(posedge clk)
-    men_pipe_b <= {men_pipe_b[NBPIPE-1:0], rd_valid_b};
-```
-
-`|wea` 归约结果先打一拍再进入 pipeline，不出现在 URAM→FDRE 关键路径。**代价**：总延迟变为 NBPIPE+3 拍（+1），需将 `RD_LATENCY` 从 10 改为 11（`NBPIPE` 从 8 改为 9）。
-
-#### 方案 B：回退 `men_pipe` 使用 `mem_ena`，`valid` 由上层管理（推荐）
-
-```verilog
-// uram_tdp_bytewrite.v — 仅改这两行，回到 v3 行为
-always @(posedge clk)
-    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};
-always @(posedge clk)
-    men_pipe_b <= {men_pipe_b[NBPIPE-1:0], mem_enb};
-```
-
-v4 想修复的问题（写时 `douta_valid` 误为 1 导致 VPU 读到脏数据）已由 `vpu_buf.v` 的 `rd_valid_pipe_a` 正确处理（`mem_ena & ~wr_en_a`）。`dat_pipe_a` 数据流水中写周期传播的是 stale `memrega`，但 URAM No-Change 模式保证写时 `memrega` 不更新，且消费方（VPU）只在 `douta_valid=1` 时使用 `douta`，**Port A 功能安全**。Port B（AXI BRAM Controller 侧）在写操作时本身不读 `doutb`，同样安全。
-
-**优点**：改动量最小（2 行），不改接口，不改延迟，timing 立即恢复 v3 水平。
-
-#### 方案 C：方案 A 的精确版（`|wea` 单独寄存，不影响延迟）
-
-```verilog
-// uram_tdp_bytewrite.v
-reg wea_any_r, web_any_r;
-always @(posedge clk) wea_any_r <= |wea;   // 16-bit 归约先寄存
-always @(posedge clk) web_any_r <= |web;
-wire rd_en_a = mem_ena & ~wea_any_r;       // wea_any_r 是纯 FDRE，不在关键路径
-wire rd_en_b = mem_enb & ~web_any_r;
-always @(posedge clk)
-    men_pipe_a <= {men_pipe_a[NBPIPE-1:0], rd_en_a};
-always @(posedge clk)
-    men_pipe_b <= {men_pipe_b[NBPIPE-1:0], rd_en_b};
-```
-
-`wea_any_r` 是寄存器输出，进入 `men_pipe_a` 的 CE 路径时不含组合逻辑。**代价**：写后立刻读时，`rd_en_a` 的判断比实际读操作晚 1 拍，即写操作发出后若紧接读，pipeline 使能会晚一拍——需要在 `vpu_buf.v` 的 `rd_valid_pipe_a` 对应调整，或接受写-读间至少 1 拍气泡（通常 VPU 软件已满足此要求）。实际延迟不变（NBPIPE 不变），但写→读的最小间隔变为 2 拍而非 1 拍。
-
-### 选用方案与改动
-
-**选用方案 B**（`rtl/common/uram_tdp_bytewrite.v`，改动 2 行）：
-
-- timing 立即恢复（关键路径 LUT5×6~8 消失）
-- 功能正确性由 `vpu_buf.v` 层保证，无需修改其他文件
-- 不改接口，不改 `RD_LATENCY`，不影响 testbench/仿真
-
-改动后需重新跑 `8tile_v4` 实现（预期 WNS ≥ 0，与 v3 基本一致）。
-
-重训练代码
-cd model/algorithm/quantized-yolov5
-python train.py --data data/infrared.yaml \
-    --cfg models/yolov5n-quant-infrared.yaml \
-    --weights runs/train/ir_yolov5n_fp328/weights/best.pt \
-    --batch-size 800 --imgsz 320 --epochs 30 \
-    --hyp data/hyps/hyp.widerface.yaml --noautoanchor --cache ram
