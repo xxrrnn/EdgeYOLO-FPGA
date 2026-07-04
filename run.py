@@ -53,8 +53,8 @@
   --yolo-precision {int8,int16,both}
       YOLOv5n 量化精度，默认 both（同时运行 int8 + int16）：
         int8  : INT8 量化（速度最快，推荐日常使用）
-        int16 : INT8 升位 INT16（数值等价于 int8，用于验证 FPGA INT16 数据通路）
-        both  : 同时运行 int8 + int16，输出两份结果（两者结果应 bit-exact 一致）
+        int16 : INT8 升位 INT16（权重数值不变，dtype 扩为 int16，用于验证 FPGA INT16 数据通路，结果应与 int8 bit-exact 一致）
+        both  : 同时运行 int8 + int16，输出两份结果
 
   --resnet-precision {vai,int8,int16,both}
       ResNet18 量化精度，默认 vai（推荐）：

@@ -51,11 +51,10 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
     # 切换精度配置
     if precision == 'int16':
         _e2e.INT16_MODE = True
-        # INT16 = INT8 widened for FPGA INT16 datapath verification.
-        # Uses same INT8 weights/scales with uint8→int16 input cast.
-        # Results are numerically bit-exact with INT8.
-        _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
-        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "network.json"))
+        # INT16 = INT8 widened: weight_int8 arrays stored as int16 dtype.
+        # Numerically identical to INT8; exercises FPGA INT16 datapath correctly.
+        _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16_widened" / "weights")
+        set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed_int16_widened" / "network.json"))
     else:
         _e2e.INT16_MODE = False
         _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
