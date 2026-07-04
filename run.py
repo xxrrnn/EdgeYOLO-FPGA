@@ -27,7 +27,7 @@
   # 5. 只运行 ResNet，Vitis AI 权重，dry-run：
   python run.py --network resnet --resnet-precision vai --dry-run
 
-  # 6. ResNet int8 + int16 都跑，dry-run：
+  # 6. ResNet VAI + INT16 都跑，dry-run：
   python run.py --network resnet --resnet-precision both --dry-run
 
   # 7. 同时跑 ONNX baseline 对比（需 onnxruntime）：
@@ -56,12 +56,11 @@
         int16 : INT8 升位 INT16（权重数值不变，dtype 扩为 int16，用于验证 FPGA INT16 数据通路，结果应与 int8 bit-exact 一致）
         both  : 同时运行 int8 + int16，输出两份结果
 
-  --resnet-precision {vai,int8,int16,both}
-      ResNet18 量化精度，默认 vai（推荐）：
-        vai   : Vitis AI PTQ INT8 权重（ResNet_int.onnx），精度最高
-        int8  : legacy torchvision FBGEMM INT8（需先运行 parse_resnet18_qdq.py）
-        int16 : INT8 权重拓宽到 INT16 数据通路（数值等价于 int8，用于测试 INT16 通路）
-        both  : 同时运行 int8 + int16
+  --resnet-precision {vai,int16,both}
+      ResNet18 量化精度，默认 both（同时运行 vai + int16）：
+        vai   : Vitis AI PTQ INT8（ResNet_int.onnx），精度最高，推荐使用
+        int16 : VAI 权重升位 INT16（数值等价于 vai，用于验证 FPGA INT16 数据通路）
+        both  : 同时运行 vai + int16，输出两份结果（两者结果应 bit-exact 一致）
 
   --precision {vai,int8,int16,both}
       （兼容旧版）同时设置 YOLO 和 ResNet 的精度；
@@ -381,8 +380,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--network", choices=["yolo", "resnet", "all"], default="all")
     ap.add_argument("--yolo-precision", choices=["int8", "int16", "both"], default="both",
                     help="YOLOv5n precision: int8 / int16 / both (default: both)")
-    ap.add_argument("--resnet-precision", choices=["vai", "int8", "int16", "both"], default="vai",
-                    help="ResNet18 precision: vai=Vitis AI INT8 (推荐) / int8 / int16 / both (default: vai)")
+    ap.add_argument("--resnet-precision", choices=["vai", "int16", "both"], default="both",
+                    help="ResNet18 precision: vai=Vitis AI INT8 / int16=VAI widened to INT16 / both (default: both)")
     # Legacy alias kept for compatibility
     ap.add_argument("--precision", choices=["vai", "int8", "int16", "both"], default=None,
                     help="(deprecated) 同时设置 YOLO 和 ResNet 精度；建议用 --yolo-precision / --resnet-precision")
@@ -422,7 +421,7 @@ def main() -> int:
         return [raw]
 
     yolo_precisions = _expand(yolo_raw, ["int8", "int16"])
-    resnet_precisions = _expand(resnet_raw, ["vai", "int8", "int16"])
+    resnet_precisions = _expand(resnet_raw, ["vai", "int16"])
 
     mode = "dry-run" if args.dry_run else "fpga"
     verify = not args.no_verify
@@ -431,8 +430,16 @@ def main() -> int:
 
     yolo_img = Path(args.yolo_img)
     resnet_img = Path(args.resnet_img)
-    yolo_out = Path(args.out_dir) / "yolo"
-    resnet_out = Path(args.out_dir) / "resnet"
+    out_root = Path(args.out_dir)
+    yolo_out = out_root / "yolo"
+    resnet_out = out_root / "resnet"
+
+    # Clear output directory before generating new results
+    import shutil
+    if out_root.exists():
+        shutil.rmtree(out_root)
+    yolo_out.mkdir(parents=True, exist_ok=True)
+    resnet_out.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
     print("EdgeYOLO-FPGA E2E Inference")

@@ -216,6 +216,8 @@ model/**/*.onnx
 model/**/*.npz
 !model/yolov5n/parsed/weights/*.npz
 !model/yolov5n/parsed_int16_widened/weights/*.npz
+!model/resnet18/parsed_vai/weights/*.npz
+!model/resnet18/parsed_vai_int16_widened/weights/*.npz
 model/**/*.pt
 model/**/*.pth
 model/**/*.pkl

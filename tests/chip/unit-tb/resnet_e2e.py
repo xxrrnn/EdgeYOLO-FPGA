@@ -24,10 +24,8 @@ from ops import FPGAOps, HostOps, conv_meta, _net, set_network_json
 from golden_module_tb import out_hw as _out_hw
 
 RESNET_DIR = REPO_ROOT / "model" / "resnet18"
-PARSED_INT8 = RESNET_DIR / "parsed_qdq"
-PARSED_INT16 = RESNET_DIR / "parsed_qdq_int16_from_int8"
-PARSED_VAI = RESNET_DIR / "parsed_vai"           # Vitis AI quantized (correct model)
-ONNX_QDQ = RESNET_DIR / "resnet18_w8a8.onnx"     # legacy; used only if parsed_vai absent
+PARSED_VAI = RESNET_DIR / "parsed_vai"                   # Vitis AI quantized (INT8, correct model)
+PARSED_VAI_INT16 = RESNET_DIR / "parsed_vai_int16_widened"  # VAI weights widened to int16 dtype
 ONNX_VAI = (REPO_ROOT / "model" / "algorithm" / "Resnet18-quantization"
             / "resnet18" / "quantize_result" / "ResNet_int.onnx")
 IMG_SIZE = 224
@@ -56,35 +54,33 @@ def _weights_ready(parsed_dir: Path) -> bool:
     return (parsed_dir / "network.json").exists() and weights_dir.exists() and any(weights_dir.glob("*.npz"))
 
 
-def prepare_int16_from_int8() -> Path:
-    """Create ResNet INT16 weights by widening INT8 weights to int16.
+def prepare_vai_int16() -> Path:
+    """Create ResNet INT16 weights by widening VAI INT8 weights to int16 dtype.
 
-    This is intentionally equivalent numerically to the INT8 model; it is used
-    to exercise the FPGA INT16 datapath for ResNet.
+    Numerically identical to VAI INT8; used to exercise the FPGA INT16 datapath.
     """
-    if not _weights_ready(PARSED_INT8):
+    if not _weights_ready(PARSED_VAI):
         raise FileNotFoundError(
-            "ResNet INT8 parsed weights are missing. Run:\n"
-            "  python tests/chip/compiler/frontend/parse_resnet18_qdq.py "
-            "--onnx model/resnet18/resnet18_w8a8.onnx --output model/resnet18/parsed_qdq"
+            "ResNet VAI parsed weights are missing. Run:\n"
+            "  python tests/chip/compiler/frontend/parse_resnet18_vai.py"
         )
 
-    PARSED_INT16.mkdir(parents=True, exist_ok=True)
-    (PARSED_INT16 / "weights").mkdir(parents=True, exist_ok=True)
+    PARSED_VAI_INT16.mkdir(parents=True, exist_ok=True)
+    (PARSED_VAI_INT16 / "weights").mkdir(parents=True, exist_ok=True)
 
-    net = json.loads((PARSED_INT8 / "network.json").read_text())
+    net = json.loads((PARSED_VAI / "network.json").read_text())
     net.setdefault("model_info", {}).setdefault("quantization", {})
     net["model_info"]["quantization"]["activation_bits"] = 16
     net["model_info"]["quantization"]["weight_bits"] = 16
-    net["model_info"]["name"] = "resnet18-int16-from-int8"
+    net["model_info"]["name"] = "resnet18-vai-int16-widened"
     net["int16_from_int8"] = True
-    (PARSED_INT16 / "network.json").write_text(json.dumps(net, indent=2))
+    (PARSED_VAI_INT16 / "network.json").write_text(json.dumps(net, indent=2))
 
-    src_pre = PARSED_INT8 / "input_mean_std.json"
+    src_pre = PARSED_VAI / "input_mean_std.json"
     if src_pre.exists():
-        shutil.copyfile(src_pre, PARSED_INT16 / "input_mean_std.json")
+        shutil.copyfile(src_pre, PARSED_VAI_INT16 / "input_mean_std.json")
 
-    for src in (PARSED_INT8 / "weights").glob("*.npz"):
+    for src in (PARSED_VAI / "weights").glob("*.npz"):
         data = np.load(src)
         out = {}
         for key in data.files:
@@ -93,9 +89,9 @@ def prepare_int16_from_int8() -> Path:
                 out[key] = arr.astype(np.int16)
             else:
                 out[key] = arr
-        np.savez_compressed(PARSED_INT16 / "weights" / src.name, **out)
+        np.savez_compressed(PARSED_VAI_INT16 / "weights" / src.name, **out)
 
-    return PARSED_INT16
+    return PARSED_VAI_INT16
 
 
 def configure_resnet_precision(precision: str) -> Path:
@@ -103,22 +99,13 @@ def configure_resnet_precision(precision: str) -> Path:
         parsed = PARSED_VAI
         if not _weights_ready(parsed):
             raise FileNotFoundError(
-                "ResNet Vitis AI parsed weights not found. Run:\n"
+                "ResNet VAI parsed weights not found. Run:\n"
                 "  python tests/chip/compiler/frontend/parse_resnet18_vai.py"
             )
     elif precision == "int16":
-        parsed = prepare_int16_from_int8()
-    elif precision == "int8":
-        parsed = PARSED_INT8
-        if not _weights_ready(parsed):
-            raise FileNotFoundError(
-                f"ResNet INT8 parsed weights not found: {parsed / 'weights'}\n"
-                "Generate them with:\n"
-                "  python tests/chip/compiler/frontend/parse_resnet18_qdq.py "
-                "--onnx model/resnet18/resnet18_w8a8.onnx --output model/resnet18/parsed_qdq"
-            )
+        parsed = prepare_vai_int16()
     else:
-        raise ValueError(f"unsupported ResNet precision: {precision}")
+        raise ValueError(f"unsupported ResNet precision: {precision!r}  (use 'vai' or 'int16')")
 
     if not _weights_ready(parsed):
         raise FileNotFoundError(f"ResNet parsed weights not found: {parsed / 'weights'}")
@@ -238,7 +225,7 @@ def _add_output_scales(parsed_dir: Path | None = None) -> dict[str, float]:
     dirs_to_try = []
     if parsed_dir is not None:
         dirs_to_try.append(parsed_dir)
-    dirs_to_try += [PARSED_VAI, PARSED_INT8]
+    dirs_to_try += [PARSED_VAI, PARSED_VAI_INT16]
     for d in dirs_to_try:
         sc_file = d / "add_output_scales.json"
         if sc_file.exists():
@@ -268,7 +255,7 @@ def _op_output_scales(op_type: str, parsed_dir: Path | None = None) -> dict[str,
 
     # For MaxPool: try network.json first
     if op_type == "MaxPool":
-        dirs_to_try = ([parsed_dir] if parsed_dir else []) + [PARSED_VAI, PARSED_INT8]
+        dirs_to_try = ([parsed_dir] if parsed_dir else []) + [PARSED_VAI, PARSED_VAI_INT16]
         for d in dirs_to_try:
             net_file = d / "network.json"
             if net_file.exists():
