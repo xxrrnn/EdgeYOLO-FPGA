@@ -515,16 +515,13 @@ def run_single_image(img_path: str, runner, dry_run: bool, precision: str = "int
     q_input = preprocess_resnet18(img_rgb, parsed)
     rb = Path(runs_base) if runs_base is not None else _THIS / "runs" / "e2e" / f"resnet18_{precision}"
 
-    # Phase 1+2: generate case files then batch-upload weights
+    # Phase 1+2: generate case files then batch-upload weights.
+    # Always regenerate to ensure case files match current weight config (vai/int8/int16).
     weight_hbm_map = None
     if preload_weights and not dry_run and runner is not None:
-        needs_generate = not rb.exists() or not any(
-            (d / "preload.txt").exists() for d in rb.iterdir() if d.is_dir()
-        ) if rb.exists() else True
-        if needs_generate:
-            print("[preload] Generating case files (dry-run)...", flush=True)
-            run_backbone(parsed, q_input, runner=None, dry_run=True, runs_base=rb,
-                         verify=False)
+        print("[preload] Generating case files (dry-run)...", flush=True)
+        run_backbone(parsed, q_input, runner=None, dry_run=True, runs_base=rb,
+                     verify=False)
         if rb.exists():
             run_dirs = [d for d in sorted(rb.iterdir())
                         if d.is_dir() and (d / "preload.txt").exists()]

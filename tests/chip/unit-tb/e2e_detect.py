@@ -197,19 +197,13 @@ def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0
 
     _runs_base = runs_base or str(RUNS_BASE / "yolov5n")
 
-    # Phase 1: dry-run to generate all case files (weight hex, preload.txt, inst.hex)
-    # This is fast (~1-2s) and only needed once per image layout.
+    # Phase 1: dry-run to generate all case files (weight hex, preload.txt, inst.hex).
+    # Always regenerate to ensure case files match the current weight config (INT8 vs INT16).
     weight_hbm_map = None
     if preload_weights and not dry_run and runner is not None:
-        from pathlib import Path as _Path
-        rb = _Path(_runs_base)
-        needs_generate = not rb.exists() or not any(
-            (d / "preload.txt").exists() for d in rb.iterdir() if d.is_dir()
-        ) if rb.exists() else True
-        if needs_generate:
-            print("[preload] Generating case files (dry-run)...", flush=True)
-            run_fpga_backbone_neck(quant_input, runner=None, dry_run=True,
-                                   runs_base=_runs_base, verify=False)
+        print("[preload] Generating case files (dry-run)...", flush=True)
+        run_fpga_backbone_neck(quant_input, runner=None, dry_run=True,
+                               runs_base=_runs_base, verify=False)
         # Phase 2: upload all weights to HBM pool
         print("[preload] Uploading all weights to HBM pool...", flush=True)
         t_pre = time.time()
