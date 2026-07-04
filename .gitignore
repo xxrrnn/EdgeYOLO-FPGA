@@ -1,12 +1,12 @@
 # ============================================
-# 白名单策略: 默认忽略所有，只保留源文件和关键报告
+# ?????: ??????????????????
 # ============================================
 
-# 忽略所有文件
+# ??????
 *
 
 # ============================================
-# 保留: 脚本文件
+# ??: ????
 # ============================================
 !*.tcl
 !*.py
@@ -14,7 +14,7 @@
 !Makefile
 
 # ============================================
-# 保留: tools/ 目录（chip_config.py 等工具脚本）
+# ??: tools/ ???chip_config.py ??????
 # ============================================
 !tools/
 !tools/*.py
@@ -23,8 +23,8 @@
 !tools/Makefile
 
 # ============================================
-# 保留: model/ 目录（脚本、网络描述 json、量化权重 npz、onnx）
-# 忽略: 大体积备份/原始格式 .onnx.bak/.tar.gz/.pb
+# ??: model/ ?????????? json????? npz?onnx?
+# ??: ?????/???? .onnx.bak/.tar.gz/.pb
 # ============================================
 !model/
 !model/**/
@@ -32,14 +32,12 @@
 !model/**/*.md
 !model/**/*.json
 !model/**/*.onnx
-!model/yolov5n/parsed/weights/*.npz
-!model/yolov5n/parsed_int16_widened/weights/*.npz
 model/**/*.onnx.bak
 model/**/*.tar.gz
 model/**/*.pb
 
 # ============================================
-# 保留: RTL 源码（仅 rtl/ 目录下）
+# ??: RTL ???? rtl/ ????
 # ============================================
 !rtl/
 !rtl/**/
@@ -52,7 +50,7 @@ model/**/*.pb
 !rtl/**/.gitignore
 
 # ============================================
-# 保留: 文档和配置
+# ??: ?????
 # ============================================
 !*.md
 !README*
@@ -60,20 +58,20 @@ model/**/*.pb
 !.gitattributes
 
 # ============================================
-# 保留: Jupyter Notebook 和数据文件
+# ??: Jupyter Notebook ?????
 # ============================================
 !*.ipynb
 !*.data
 
 # ============================================
-# 保留: XDC 约束文件（仅 xdc/ 目录下）
+# ??: XDC ?????? xdc/ ????
 # ============================================
 !xdc/
 !xdc/**/
 !xdc/**/*.xdc
 
 # ============================================
-# 保留: Build 目录中的 RPT 报告
+# ??: Build ???? RPT ??
 # ============================================
 !build/
 !build/**/
@@ -83,23 +81,23 @@ model/**/*.pb
 !build/**/SynOutputDir/*.rpt
 
 # ============================================
-# 保留: 顶层 scripts 目录和所有 tcl
+# ??: ?? scripts ????? tcl
 # ============================================
 !scripts/
 !scripts/**/
 
 # ============================================
-# 保留: filelist（用于仿真）
+# ??: filelist??????
 # ============================================
 !*.f
 
 # ============================================
-# 保留: gtkw 波形配置
+# ??: gtkw ????
 # ============================================
 !*.gtkw
 
 # ============================================
-# 忽略: Spyglass 生成文件
+# ??: Spyglass ????
 # ============================================
 rtl/**/spyglass/
 rtl/**/.project*
@@ -107,7 +105,7 @@ rtl/**/.design*
 rtl/**/.CurrentSessionRunSummaryFiles
 
 # ============================================
-# 保留: 仿真测试目录
+# ??: ??????
 # ============================================
 !tests/
 !tests/**/
@@ -116,12 +114,12 @@ rtl/**/.CurrentSessionRunSummaryFiles
 !tests/**/*.sh
 
 # ============================================
-# 忽略: 顶层 bd 目录所有内容（scripts/ip/bd/ 下的 tcl 不受影响）
+# ??: ?? bd ???????scripts/ip/bd/ ?? tcl ?????
 # ============================================
 /bd/
 
 # ============================================
-# 忽略: Vivado 生成文件
+# ??: Vivado ????
 # ============================================
 .Xil/
 *.jou
@@ -136,7 +134,7 @@ rtl/**/.CurrentSessionRunSummaryFiles
 *.runs/
 
 # ============================================
-# 忽略: Python 缓存
+# ??: Python ??
 # ============================================
 __pycache__/
 *.pyc
@@ -144,31 +142,31 @@ __pycache__/
 venv/
 
 # ============================================
-# 忽略: Jupyter 检查点
+# ??: Jupyter ???
 # ============================================
 .ipynb_checkpoints/
 
 # ============================================
-# 再次忽略: 白名单中的误放行（须列在 !rtl/** 之后）
+# ????: ???????????? !rtl/** ???
 # ============================================
-# 外部参考 RTL 树（内含独立 .git，勿入库）
+# ???? RTL ?????? .git?????
 rtl/ref/YOLOv11-RTL/
-# VCS / DPI 在 csrc 下自动生成的头文件（勿提交）
+# VCS / DPI ? csrc ??????????????
 rtl/**/csrc/rmapats.h
 rtl/**/csrc/rmar.h
 rtl/**/csrc/rmar0.h
 
 # ============================================
-# 忽略: Cursor IDE 文件
+# ??: Cursor IDE ??
 # ============================================
 .codex
 .cursor/
 rtl/chip/build/
 
 # ============================================
-# 忽略: 本地构建/仿真生成物（覆盖前面的白名单）
+# ??: ????/???????????????
 # ============================================
-# 顶层 build 只保留关键 rpt，忽略 memory_map 等派生文件
+# ?? build ????? rpt??? memory_map ?????
 build/**
 !build/**/
 !build/**/ImplOutputDir/
@@ -176,7 +174,7 @@ build/**
 !build/**/SynOutputDir/
 !build/**/SynOutputDir/*.rpt
 
-# XSim/VCS/Verdi 仿真输出目录与中间文件
+# XSim/VCS/Verdi ???????????
 rtl/**/xsim.dir/
 rtl/**/sim/build_*/
 rtl/**/simv*
@@ -194,20 +192,20 @@ rtl/**/xsim*.jou
 rtl/**/xsim*.log
 rtl/**/xsim*.pb
 
-# 测试自动生成数据
+# ????????
 rtl/vpu/tb/golden_*.hex
 rtl/vpu/tb/tb_im2col_*.hex
 rtl/vpu/tb/regression_l1/golden_*.hex
 rtl/vpu/tb/regression_l1/params.json
 rtl/vpu/tb/standalone/generated/
 
-# VCS 编译版本探针
+# VCS ??????
 .cxl.vcs*.version
 synopsys_sim.setup
 rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
 rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
 
-# model/algorithm ����Ƕ�� git �ֿ⣬����Ϊ submodule ����
+# model/algorithm ??????? git ???????? submodule ????
 model/algorithm/Infrared-Object-Detection/
 model/algorithm/Resnet18-quantization/
 model/algorithm/quantized-yolov5/
@@ -216,18 +214,20 @@ model/algorithm/quantized-yolov5_arcive/
 # Large binary model files - track only JSON metadata
 model/**/*.onnx
 model/**/*.npz
+!model/yolov5n/parsed/weights/*.npz
+!model/yolov5n/parsed_int16_widened/weights/*.npz
 model/**/*.pt
 model/**/*.pth
 model/**/*.pkl
 
 # ============================================
-# ����: FPGA Bitstream (chip.bit)
+# ????: FPGA Bitstream (chip.bit)
 # ============================================
 !chip.bit
 !*.bit
 
 # ============================================
-# ����: ��������ͼƬ
+# ????: ??????????
 # ============================================
 !test_yolo.jpg
 !test_resnet*.jpg
