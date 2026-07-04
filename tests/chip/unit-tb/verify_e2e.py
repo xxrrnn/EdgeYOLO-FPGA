@@ -60,6 +60,17 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
         _e2e.WEIGHTS_DIR = str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "weights")
         set_network_json(str(REPO_ROOT / "model" / "yolov5n" / "parsed" / "network.json"))
 
+    # Clear FPGA HBM weight cache and on-chip TILE_IBUF before each run.
+    # This prevents stale INT8/INT16 data in IBUF from contaminating the next run
+    # when switching precision within the same session.
+    if runner is not None and not dry_run:
+        if hasattr(runner, 'clear_weight_cache'):
+            runner.clear_weight_cache()
+        if hasattr(runner, 'x'):
+            from xdma_win import TILE_IBUF_BASE, TILE_IBUF_SIZE
+            NTILES = 8
+            runner.x.write(TILE_IBUF_BASE, b'\x00' * (NTILES * TILE_IBUF_SIZE))
+
     # INT8 和 INT16 各用独立的 runs_base，避免 case 文件互相覆盖
     runs_base = str(RUNS_BASE / f"yolov5n_{precision}")
 

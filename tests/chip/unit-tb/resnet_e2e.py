@@ -515,6 +515,15 @@ def run_single_image(img_path: str, runner, dry_run: bool, precision: str = "int
     q_input = preprocess_resnet18(img_rgb, parsed)
     rb = Path(runs_base) if runs_base is not None else _THIS / "runs" / "e2e" / f"resnet18_{precision}"
 
+    # Clear FPGA HBM weight cache and on-chip TILE_IBUF before each run.
+    if runner is not None and not dry_run:
+        if hasattr(runner, 'clear_weight_cache'):
+            runner.clear_weight_cache()
+        if hasattr(runner, 'x'):
+            from xdma_win import TILE_IBUF_BASE, TILE_IBUF_SIZE
+            NTILES = 8
+            runner.x.write(TILE_IBUF_BASE, b'\x00' * (NTILES * TILE_IBUF_SIZE))
+
     # Phase 1+2: generate case files then batch-upload weights.
     # Always regenerate to ensure case files match current weight config (vai/int8/int16).
     weight_hbm_map = None
