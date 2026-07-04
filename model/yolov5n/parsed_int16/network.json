@@ -1,0 +1,2003 @@
+{
+  "model": "yolov5n-int16",
+  "bit_width": 16,
+  "input_act_scale": 3.051850947599719e-05,
+  "layers": [
+    {
+      "name": "model.0.conv",
+      "type": "conv",
+      "out_channels": 16,
+      "in_channels": 3,
+      "kernel_h": 6,
+      "kernel_w": 6,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "pad_h": 2,
+      "pad_w": 2,
+      "group": 1,
+      "weight_shape": [
+        16,
+        6,
+        6,
+        3
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 3.051850947599719e-05,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.1.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 16,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        32,
+        3,
+        3,
+        16
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.2.cv1.conv",
+      "type": "conv",
+      "out_channels": 16,
+      "in_channels": 32,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        16,
+        1,
+        1,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.2.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 16,
+      "in_channels": 16,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        16,
+        1,
+        1,
+        16
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.2.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 16,
+      "in_channels": 16,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        16,
+        3,
+        3,
+        16
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.2.cv2.conv",
+      "type": "conv",
+      "out_channels": 16,
+      "in_channels": 32,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        16,
+        1,
+        1,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.2.cv3.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.3.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 32,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.cv1.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        32,
+        3,
+        3,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.m.1.cv1.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.m.1.cv2.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        32,
+        3,
+        3,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.cv2.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.4.cv3.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.5.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        128,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.m.1.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.m.1.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.m.2.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.m.2.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.6.cv3.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.7.conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        256,
+        3,
+        3,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.8.cv1.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.8.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.8.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        128,
+        3,
+        3,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.8.cv2.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.8.cv3.conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        256,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.9.cv1.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.9.cv2.conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 512,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        256,
+        1,
+        1,
+        512
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.10.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.13.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.13.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.13.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.13.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.13.cv3.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.14.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.17.cv1.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.17.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.17.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 32,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        32,
+        3,
+        3,
+        32
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.17.cv2.conv",
+      "type": "conv",
+      "out_channels": 32,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        32,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.17.cv3.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.18.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.20.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.20.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.20.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.20.cv2.conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        64,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.20.cv3.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.21.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 2,
+      "stride_w": 2,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        128,
+        3,
+        3,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.23.cv1.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.23.m.0.cv1.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.23.m.0.cv2.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pad_h": 1,
+      "pad_w": 1,
+      "group": 1,
+      "weight_shape": [
+        128,
+        3,
+        3,
+        128
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.23.cv2.conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        128,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    },
+    {
+      "name": "model.23.cv3.conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride_h": 1,
+      "stride_w": 1,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "pad_h": 0,
+      "pad_w": 0,
+      "group": 1,
+      "weight_shape": [
+        256,
+        1,
+        1,
+        256
+      ],
+      "act_scale": 0.0003052472020499408,
+      "act_zero_point": 0,
+      "in_act_scale": 0.0003052472020499408,
+      "has_activation": true,
+      "activation": "relu",
+      "bit_width": 16
+    }
+  ],
+  "hard_quant_scale": 0.0001526236010249704
+}

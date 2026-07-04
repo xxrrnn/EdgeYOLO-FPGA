@@ -1,0 +1,1455 @@
+{
+  "model_info": {
+    "name": "resnet18",
+    "source": "torchvision FBGEMM IMAGENET1K_FBGEMM_V1, exported with torch.onnx.export QDQ",
+    "input_shape": [
+      1,
+      3,
+      224,
+      224
+    ],
+    "output_shape": [
+      1,
+      1000
+    ],
+    "num_conv_layers": 20,
+    "data_layout": "NHWC",
+    "quantization": {
+      "weight_bits": 8,
+      "activation_bits": 8,
+      "accumulator_bits": 32
+    }
+  },
+  "preprocess": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "resize": 256,
+    "crop": 224
+  },
+  "layers": [
+    {
+      "name": "conv1.Conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 3,
+      "kernel_h": 7,
+      "kernel_w": 7,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        3,
+        3,
+        3,
+        3
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        64,
+        3,
+        7,
+        7
+      ],
+      "act_scale": 0.004903303924947977,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer1.0.conv1.Conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "act_scale": 0.007217978127300739,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer1.0.conv2.Conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "act_scale": 0.013608044944703579,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer1.1.conv1.Conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "act_scale": 0.010249387472867966,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer1.1.conv2.Conv",
+      "type": "conv",
+      "out_channels": 64,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "act_scale": 0.019001930952072144,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer2.0.conv1.Conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 64,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        128,
+        64,
+        3,
+        3
+      ],
+      "act_scale": 0.013115596026182175,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer2.0.conv2.Conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "act_scale": 0.03189662843942642,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer2.0.downsample.0.Conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 64,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        128,
+        64,
+        1,
+        1
+      ],
+      "act_scale": 0.023560311645269394,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer2.1.conv1.Conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "act_scale": 0.017281942069530487,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer2.1.conv2.Conv",
+      "type": "conv",
+      "out_channels": 128,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "act_scale": 0.03079024702310562,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer3.0.conv1.Conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 128,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        256,
+        128,
+        3,
+        3
+      ],
+      "act_scale": 0.015888279303908348,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer3.0.conv2.Conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 256,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "act_scale": 0.03611596301198006,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer3.0.downsample.0.Conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 128,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        256,
+        128,
+        1,
+        1
+      ],
+      "act_scale": 0.03768739104270935,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer3.1.conv1.Conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 256,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "act_scale": 0.023626472800970078,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer3.1.conv2.Conv",
+      "type": "conv",
+      "out_channels": 256,
+      "in_channels": 256,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "act_scale": 0.05310198292136192,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer4.0.conv1.Conv",
+      "type": "conv",
+      "out_channels": 512,
+      "in_channels": 256,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        512,
+        256,
+        3,
+        3
+      ],
+      "act_scale": 0.026286758482456207,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer4.0.conv2.Conv",
+      "type": "conv",
+      "out_channels": 512,
+      "in_channels": 512,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "act_scale": 0.05783197656273842,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer4.0.downsample.0.Conv",
+      "type": "conv",
+      "out_channels": 512,
+      "in_channels": 256,
+      "kernel_h": 1,
+      "kernel_w": 1,
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        512,
+        256,
+        1,
+        1
+      ],
+      "act_scale": 0.05858407914638519,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer4.1.conv1.Conv",
+      "type": "conv",
+      "out_channels": 512,
+      "in_channels": 512,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": true,
+      "weight_shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "act_scale": 0.04681682214140892,
+      "act_zero_point": 0.0
+    },
+    {
+      "name": "layer4.1.conv2.Conv",
+      "type": "conv",
+      "out_channels": 512,
+      "in_channels": 512,
+      "kernel_h": 3,
+      "kernel_w": 3,
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "group": 1,
+      "has_bn": false,
+      "has_activation": false,
+      "weight_shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "act_scale": 0.06793654710054398,
+      "act_zero_point": 0.0
+    }
+  ],
+  "topology": [
+    {
+      "name": "conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/conv1/DequantizeLinear_output_0",
+        "/conv1/DequantizeLinear_1_output_0",
+        "/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        7,
+        7
+      ],
+      "pads": [
+        3,
+        3,
+        3,
+        3
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "maxpool.MaxPool",
+      "op": "MaxPool",
+      "inputs": [
+        "/maxpool/DequantizeLinear_output_0"
+      ],
+      "outputs": [
+        "/maxpool/MaxPool_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer1.0.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer1/0/conv1/DequantizeLinear_output_0",
+        "/layer1/0/conv1/DequantizeLinear_1_output_0",
+        "/layer1/0/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer1/0/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer1.0.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer1/0/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer1/0/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer1.0.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer1/0/conv2/DequantizeLinear_output_0",
+        "/layer1/0/conv2/DequantizeLinear_1_output_0",
+        "/layer1/0/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer1/0/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer1.0.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer1/0/DequantizeLinear_output_0",
+        "/layer1/0/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer1/0/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer1.0.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer1/0/Add_output_0"
+      ],
+      "outputs": [
+        "/layer1/0/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer1.1.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer1/1/conv1/DequantizeLinear_output_0",
+        "/layer1/1/conv1/DequantizeLinear_1_output_0",
+        "/layer1/1/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer1/1/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer1.1.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer1/1/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer1/1/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer1.1.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer1/1/conv2/DequantizeLinear_output_0",
+        "/layer1/1/conv2/DequantizeLinear_1_output_0",
+        "/layer1/1/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer1/1/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer1.1.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer1/1/DequantizeLinear_output_0",
+        "/layer1/1/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer1/1/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer1.1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer1/1/Add_output_0"
+      ],
+      "outputs": [
+        "/layer1/1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer2.0.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer2/0/conv1/DequantizeLinear_output_0",
+        "/layer2/0/conv1/DequantizeLinear_1_output_0",
+        "/layer2/0/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer2/0/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer2.0.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer2/0/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer2/0/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer2.0.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer2/0/conv2/DequantizeLinear_output_0",
+        "/layer2/0/conv2/DequantizeLinear_1_output_0",
+        "/layer2/0/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer2/0/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer2.0.downsample.0.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer2/0/downsample/0/DequantizeLinear_output_0",
+        "/layer2/0/downsample/0/DequantizeLinear_1_output_0",
+        "/layer2/0/downsample/0/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer2/0/downsample/0/Conv_output_0"
+      ],
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "pads": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer2.0.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer2/0/DequantizeLinear_output_0",
+        "/layer2/0/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer2/0/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer2.0.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer2/0/Add_output_0"
+      ],
+      "outputs": [
+        "/layer2/0/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer2.1.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer2/1/conv1/DequantizeLinear_output_0",
+        "/layer2/1/conv1/DequantizeLinear_1_output_0",
+        "/layer2/1/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer2/1/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer2.1.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer2/1/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer2/1/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer2.1.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer2/1/conv2/DequantizeLinear_output_0",
+        "/layer2/1/conv2/DequantizeLinear_1_output_0",
+        "/layer2/1/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer2/1/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer2.1.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer2/1/DequantizeLinear_output_0",
+        "/layer2/1/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer2/1/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer2.1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer2/1/Add_output_0"
+      ],
+      "outputs": [
+        "/layer2/1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer3.0.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer3/0/conv1/DequantizeLinear_output_0",
+        "/layer3/0/conv1/DequantizeLinear_1_output_0",
+        "/layer3/0/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer3/0/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer3.0.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer3/0/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer3/0/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer3.0.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer3/0/conv2/DequantizeLinear_output_0",
+        "/layer3/0/conv2/DequantizeLinear_1_output_0",
+        "/layer3/0/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer3/0/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer3.0.downsample.0.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer3/0/downsample/0/DequantizeLinear_output_0",
+        "/layer3/0/downsample/0/DequantizeLinear_1_output_0",
+        "/layer3/0/downsample/0/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer3/0/downsample/0/Conv_output_0"
+      ],
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "pads": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer3.0.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer3/0/DequantizeLinear_output_0",
+        "/layer3/0/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer3/0/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer3.0.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer3/0/Add_output_0"
+      ],
+      "outputs": [
+        "/layer3/0/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer3.1.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer3/1/conv1/DequantizeLinear_output_0",
+        "/layer3/1/conv1/DequantizeLinear_1_output_0",
+        "/layer3/1/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer3/1/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer3.1.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer3/1/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer3/1/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer3.1.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer3/1/conv2/DequantizeLinear_output_0",
+        "/layer3/1/conv2/DequantizeLinear_1_output_0",
+        "/layer3/1/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer3/1/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer3.1.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer3/1/DequantizeLinear_output_0",
+        "/layer3/1/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer3/1/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer3.1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer3/1/Add_output_0"
+      ],
+      "outputs": [
+        "/layer3/1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer4.0.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer4/0/conv1/DequantizeLinear_output_0",
+        "/layer4/0/conv1/DequantizeLinear_1_output_0",
+        "/layer4/0/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer4/0/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer4.0.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer4/0/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer4/0/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer4.0.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer4/0/conv2/DequantizeLinear_output_0",
+        "/layer4/0/conv2/DequantizeLinear_1_output_0",
+        "/layer4/0/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer4/0/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer4.0.downsample.0.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer4/0/downsample/0/DequantizeLinear_output_0",
+        "/layer4/0/downsample/0/DequantizeLinear_1_output_0",
+        "/layer4/0/downsample/0/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer4/0/downsample/0/Conv_output_0"
+      ],
+      "kernel_shape": [
+        1,
+        1
+      ],
+      "pads": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "strides": [
+        2,
+        2
+      ]
+    },
+    {
+      "name": "layer4.0.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer4/0/DequantizeLinear_output_0",
+        "/layer4/0/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer4/0/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer4.0.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer4/0/Add_output_0"
+      ],
+      "outputs": [
+        "/layer4/0/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer4.1.conv1.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer4/1/conv1/DequantizeLinear_output_0",
+        "/layer4/1/conv1/DequantizeLinear_1_output_0",
+        "/layer4/1/conv1/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer4/1/conv1/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer4.1.conv1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer4/1/conv1/Conv_output_0"
+      ],
+      "outputs": [
+        "/layer4/1/conv1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "layer4.1.conv2.Conv",
+      "op": "Conv",
+      "inputs": [
+        "/layer4/1/conv2/DequantizeLinear_output_0",
+        "/layer4/1/conv2/DequantizeLinear_1_output_0",
+        "/layer4/1/conv2/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/layer4/1/conv2/Conv_output_0"
+      ],
+      "kernel_shape": [
+        3,
+        3
+      ],
+      "pads": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "strides": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "layer4.1.Add",
+      "op": "Add",
+      "inputs": [
+        "/layer4/1/DequantizeLinear_output_0",
+        "/layer4/1/DequantizeLinear_1_output_0"
+      ],
+      "outputs": [
+        "/layer4/1/Add_output_0"
+      ]
+    },
+    {
+      "name": "layer4.1.Relu",
+      "op": "Relu",
+      "inputs": [
+        "/layer4/1/Add_output_0"
+      ],
+      "outputs": [
+        "/layer4/1/Relu_output_0"
+      ]
+    },
+    {
+      "name": "avgpool.GlobalAveragePool",
+      "op": "GlobalAveragePool",
+      "inputs": [
+        "/avgpool/DequantizeLinear_output_0"
+      ],
+      "outputs": [
+        "/avgpool/GlobalAveragePool_output_0"
+      ]
+    },
+    {
+      "name": "Flatten",
+      "op": "Flatten",
+      "inputs": [
+        "/DequantizeLinear_output_0"
+      ],
+      "outputs": [
+        "/Flatten_output_0"
+      ]
+    },
+    {
+      "name": "fc.Gemm",
+      "op": "Gemm",
+      "inputs": [
+        "/fc/DequantizeLinear_output_0",
+        "/fc/DequantizeLinear_1_output_0",
+        "/fc/DequantizeLinear_2_output_0"
+      ],
+      "outputs": [
+        "/fc/Gemm_output_0"
+      ]
+    }
+  ]
+}
