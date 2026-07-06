@@ -420,6 +420,7 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
         .ad_src_h(active_src_h),
         .ad_src_w(active_src_w),
         .ad_dst_addr(active_dst_addr),
+        .ad_relu_en(active_addr_break[0]),
 
         .gb_addrb( ad_gb_addrb),
         .gb_dinb( ad_gb_dinb),

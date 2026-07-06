@@ -20,6 +20,7 @@ module ad_unit #(
     input   wire[ADDR_WIDTH - 1:0]   ad_src_h,
     input   wire[ADDR_WIDTH - 1:0]   ad_src_w,
     input   wire[ADDR_WIDTH - 1:0]   ad_dst_addr,
+    input   wire                     ad_relu_en,
 
     output logic [VB_ADDR_WIDTH-1:0]    gb_addrb, 
     output logic [VB_BANDWIDTH-1:0]     gb_dinb,  
@@ -58,6 +59,7 @@ module ad_unit #(
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              ad_fp_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              ad_fp_in2_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]              ad_out_reg;
+    logic   [FP_CORE_NUM * FP_WIDTH - 1 : 0]              ad_relu_res;
     wire     [FP_CORE_NUM * FP_WIDTH - 1 : 0]             fp_a_tdata;
     wire     [FP_CORE_NUM * FP_WIDTH - 1 : 0]             fp_b_tdata;
     wire     [FP_CORE_NUM * FP_WIDTH - 1 : 0]             res;
@@ -207,11 +209,22 @@ module ad_unit #(
     end
     wire fp_res_tvalid;
 
+    always_comb begin
+        ad_relu_res = res;
+        if (ad_relu_en) begin
+            for (int i = 0; i < FP_CORE_NUM; i++) begin
+                if (res[i*FP_WIDTH + FP_WIDTH - 1]) begin
+                    ad_relu_res[i*FP_WIDTH +: FP_WIDTH] = '0;
+                end
+            end
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             ad_out_reg <= '0;
         end else begin
-            ad_out_reg <= fp_res_tvalid ? res : ad_out_reg;
+            ad_out_reg <= fp_res_tvalid ? ad_relu_res : ad_out_reg;
         end
     end
 
