@@ -148,7 +148,8 @@ module INST_Decoder #(
         S_CDMA_STRIDE_INIT       = 6'd54,
         S_CDMA_STRIDE_ISSUE      = 6'd55,
         S_CDMA_STRIDE_WAIT       = 6'd56,
-        S_CDMA_STRIDE_NEXT       = 6'd57
+        S_CDMA_STRIDE_DONE       = 6'd57,
+        S_CDMA_STRIDE_NEXT       = 6'd58
     } state_t;
 
     localparam int DCIM_NUM_TILES_L = `DCIM_NUM_TILES;
@@ -223,8 +224,8 @@ module INST_Decoder #(
             decoder_start_d <= decoder_start;
             // 检测上升沿并锁存pulse，直到状态机离开IDLE状态
             if (decoder_start && !decoder_start_d) begin
-                decoder_start_pulse_reg <= 1'b1;
-            end else if (state != S_IDLE) begin
+                decoder_start_pulse_reg <= (inst_count != 32'd0);
+            end else if (state != S_IDLE || decoder_soft_reset) begin
                 decoder_start_pulse_reg <= 1'b0;
             end
         end
@@ -284,7 +285,7 @@ module INST_Decoder #(
                     OP_DCIM_EXEC: next_state = S_EXEC_DCIM;
                     OP_DCIM_CFG:  next_state = S_DCIM_CFG_INIT;
                     OP_DCIM_LAYER: next_state = (inst_rd_data_pipe[23:0] == (DCIM_LAYER_BODY_WORDS << 2)) ? S_FETCH_BODY : S_ERROR;
-                    OP_CDMA_STRIDE: next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
+                    OP_CDMA_STRIDE: next_state = (inst_rd_data_pipe[23:0] == 24'd32) ? S_FETCH_BODY : S_ERROR;
                     OP_WAIT_CDMA: next_state = S_EXEC_WAIT_CDMA;
                     OP_WAIT_VPU:  next_state = S_EXEC_WAIT_VPU;
                     OP_WAIT_DCIM: next_state = S_EXEC_WAIT_DCIM;
@@ -404,6 +405,11 @@ module INST_Decoder #(
             end
 
             S_CDMA_STRIDE_WAIT: begin
+                if (cdma_config_ready)
+                    next_state = S_CDMA_STRIDE_DONE;
+            end
+
+            S_CDMA_STRIDE_DONE: begin
                 if (cdma_config_ready)
                     next_state = S_CDMA_STRIDE_NEXT;
             end
