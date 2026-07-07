@@ -201,6 +201,8 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_out_current;
     reg [DCIM_TILE_IDX_W-1:0] dcim_layer_tile_idx;
     reg        dcim_layer_seen_busy;
+    reg [31:0] dcim_layer_wait_count;
+    localparam [31:0] DCIM_LAYER_WAIT_TIMEOUT = 32'd250_000_000;
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -209,6 +211,7 @@ module INST_Decoder #(
     // 启动边沿检测（修复：使用寄存器锁存pulse）
     reg decoder_start_d;
     reg decoder_start_pulse_reg;
+    wire decoder_soft_reset = decoder_start && !decoder_start_d && (inst_count == 32'd0);
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -228,6 +231,8 @@ module INST_Decoder #(
     // 状态机：状态转移
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
+            state <= S_IDLE;
+        else if (decoder_soft_reset)
             state <= S_IDLE;
         else
             state <= next_state;
@@ -458,7 +463,9 @@ module INST_Decoder #(
             end
 
             S_DCIM_LAYER_WAIT: begin
-                if (dcim_layer_seen_busy && dcim_ready)
+                if (dcim_layer_wait_count >= DCIM_LAYER_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (dcim_layer_seen_busy && dcim_ready)
                     next_state = S_DCIM_LAYER_NEXT;
             end
 
@@ -560,7 +567,33 @@ module INST_Decoder #(
             dcim_layer_out_stride <= '0;
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
+            dcim_layer_wait_count <= '0;
                 
+        end else if (decoder_soft_reset) begin
+            decoder_busy <= 1'b0;
+            decoder_done <= 1'b0;
+            decoder_status <= STATUS_IDLE;
+            inst_rd_addr <= '0;
+            cdma_start <= 1'b0;
+            cdma_config_valid <= 1'b0;
+            vpu_start <= 1'b0;
+            dcim_cfg_wr_en <= 1'b0;
+            current_word_idx <= '0;
+            words_remaining <= '0;
+            current_opcode <= '0;
+            current_flags <= '0;
+            body_length <= '0;
+            inst_header <= '0;
+            body_word_count <= '0;
+            body_word_idx <= '0;
+            dcim_cfg_total_pairs <= '0;
+            dcim_cfg_pair_count <= '0;
+            dcim_cfg_load <= 1'b0;
+            dcim_layer_num_pixels <= '0;
+            dcim_layer_pixel_idx <= '0;
+            dcim_layer_tile_idx <= '0;
+            dcim_layer_seen_busy <= 1'b0;
+            dcim_layer_wait_count <= '0;
         end else begin
             // 默认清除脉冲信号
             decoder_done <= 1'b0;
@@ -838,12 +871,14 @@ module INST_Decoder #(
                     dcim_cfg_wr_addr <= `DCIM_REG_CTRL;
                     dcim_cfg_wr_data <= 32'h1;
                     dcim_layer_seen_busy <= 1'b0;
+                    dcim_layer_wait_count <= '0;
 `ifdef PROBE_DCIM_LAYER
                     $display("[%0t] DCIM_LAYER start pixel=%0d/%0d", $time, dcim_layer_pixel_idx, dcim_layer_num_pixels);
 `endif
                 end
 
                 S_DCIM_LAYER_WAIT: begin
+                    dcim_layer_wait_count <= dcim_layer_wait_count + 1'b1;
                     if (!dcim_ready)
                         dcim_layer_seen_busy <= 1'b1;
 `ifdef PROBE_DCIM_LAYER
@@ -856,6 +891,7 @@ module INST_Decoder #(
                     dcim_layer_pixel_idx <= dcim_layer_pixel_idx + 1'b1;
                     dcim_layer_act_current <= dcim_layer_act_current + dcim_layer_act_stride;
                     dcim_layer_out_offset <= dcim_layer_out_offset + dcim_layer_out_stride;
+                    dcim_layer_wait_count <= '0;
                 end
 
                 // ---- OP_CDMA_STRIDE sequential logic ----
