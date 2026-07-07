@@ -187,7 +187,9 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_out_stride;
 
     // OP_CDMA_STRIDE internal registers
+    reg [31:0] cstride_src_msb;
     reg [31:0] cstride_src_cur;
+    reg [31:0] cstride_dst_msb;
     reg [31:0] cstride_dst_cur;
     reg [31:0] cstride_copy_bytes;
     reg [31:0] cstride_src_stride;
@@ -556,7 +558,9 @@ module INST_Decoder #(
             dcim_layer_act_base <= '0;
             dcim_layer_act_stride <= '0;
             dcim_layer_act_current <= '0;
+            cstride_src_msb <= '0;
             cstride_src_cur <= '0;
+            cstride_dst_msb <= '0;
             cstride_dst_cur <= '0;
             cstride_copy_bytes <= '0;
             cstride_src_stride <= '0;
@@ -594,6 +598,15 @@ module INST_Decoder #(
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
             dcim_layer_wait_count <= '0;
+            cstride_src_msb <= '0;
+            cstride_src_cur <= '0;
+            cstride_dst_msb <= '0;
+            cstride_dst_cur <= '0;
+            cstride_copy_bytes <= '0;
+            cstride_src_stride <= '0;
+            cstride_dst_stride <= '0;
+            cstride_count <= '0;
+            cstride_idx <= '0;
         end else begin
             // 默认清除脉冲信号
             decoder_done <= 1'b0;
@@ -896,19 +909,21 @@ module INST_Decoder #(
 
                 // ---- OP_CDMA_STRIDE sequential logic ----
                 S_CDMA_STRIDE_INIT: begin
-                    cstride_src_cur    <= body_buffer[0];
-                    cstride_dst_cur    <= body_buffer[1];
-                    cstride_copy_bytes <= body_buffer[2];
-                    cstride_src_stride <= body_buffer[3];
-                    cstride_dst_stride <= body_buffer[4];
-                    cstride_count      <= body_buffer[5];
+                    cstride_src_msb    <= body_buffer[0];
+                    cstride_src_cur    <= body_buffer[1];
+                    cstride_dst_msb    <= body_buffer[2];
+                    cstride_dst_cur    <= body_buffer[3];
+                    cstride_copy_bytes <= body_buffer[4];
+                    cstride_src_stride <= body_buffer[5];
+                    cstride_dst_stride <= body_buffer[6];
+                    cstride_count      <= body_buffer[7];
                     cstride_idx        <= '0;
                 end
 
                 S_CDMA_STRIDE_ISSUE: begin
-                    cdma_src_addr_msb <= 32'h0;
+                    cdma_src_addr_msb <= cstride_src_msb;
                     cdma_src_addr_lsb <= cstride_src_cur;
-                    cdma_dst_addr_msb <= 32'h0;
+                    cdma_dst_addr_msb <= cstride_dst_msb;
                     cdma_dst_addr_lsb <= cstride_dst_cur;
                     cdma_length       <= cstride_copy_bytes;
                     cdma_config_valid <= 1'b1;

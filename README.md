@@ -22,6 +22,160 @@
 
 ---
 
+## 当前里程碑
+
+### 2026-07-07 one-shot progressive 修复进展
+
+- YOLO INT8 one-shot L2/L3/L4/L5/L6 已在当前 FPGA 上通过 data-level compare：
+  - L3：`max_abs=9.53674e-07`。
+  - L4：`max_abs=9.53674e-07`，总耗时约 0.79s，其中 execute 约 0.60s。
+  - L5：`max_abs=9.53674e-07`。
+  - L6：`max_abs=9.53674e-07`。
+- 修复了 YOLO route tensor 的真实 buffer 生命周期问题：当 named/residual 输入需要保留且 conv 按 output-H 分块时，QA 的 compact activation 不能和本层 FP32 输出共用同一地址；否则第一块 DQA 会覆盖后续 chunk 尚未读取的 quantized input。compiler 现在在这种情况下从 skip/free-list 分配临时 QA scratch，并在该层 emit 后释放。
+- L7 首次失败点已收敛到 `model.2` C3 concat 后的 `model.2.cv3.conv`。L5/L6 两个 concat 输入分支单独正确，concat probe 读回为错误地址空间垃圾。
+- 已定位 `OP_CDMA_STRIDE` RTL/codegen 地址格式 bug：旧 RTL 在 stride CDMA issue 时把 `src_msb/dst_msb` 固定为 0，而 VPU_BUF/OBUF 物理地址位于 `0x1_0200_0000`，必须使用 64-bit 地址。普通 `OP_CDMA_COPY` 已经发送 MSB+LSB，所以卷积路径正常，concat stride 路径异常。
+- 已做最小 RTL+compiler 修复：`OP_CDMA_STRIDE` 指令体改为 8 word，包含 `src_msb/src_lsb/dst_msb/dst_lsb/copy_bytes/src_stride/dst_stride/count`；`INST_Decoder` 发送 stride CDMA 时使用这两个 MSB，soft reset 也清理 stride 状态。
+- 该 RTL 修复需要重新综合/生成 bitstream 后才能验证 L7/L8 及后续 full YOLO。当前旧 bitstream 仍可继续验证无 concat 的 L1-L6，但不能用于新的 concat stride program。
+
+### 2026-07-07 新 bitstream one-shot 功能复测
+
+- 已刷入包含 AD ReLU mode 的新 bitstream；对应 RTL commit 为 `15964cc rtl: add optional relu mode to ad unit`。该 RTL 只给 `ad_unit` 增加可选 ReLU clamp，用于 ResNet residual `add + relu`，避免再把 residual add 长期留在 host。
+- 当前工作分支已切到 `eff`，RTL 变更保持单独 commit，compiler/runtime one-shot 变更继续在工作树中迭代。
+- 新 bitstream 基础健康检查未通过：reset/reprogram 后 `--status-only` 读到 `DECODER_STATUS=0x00000001`，说明 decoder 仍处 busy。随后用 1-word `OP_END` probe 测试主机链路，16B H2C 写 `VPU_BUF 0x102000000` 超时 30s，报 `xdma_rw.exe hung`。因此当前不是 YOLO/ResNet data-level mismatch，而是 XDMA/decoder 基础状态不可用；需要重新 reset/reprogram FPGA 或重启 XDMA driver 后再上板跑 progressive gate。
+- 第二次 reset 后基础链路恢复：`DECODER_STATUS=0x00000000`，1-word `OP_END` probe 可正常上传 16B input / 4B program，decoder 返回 `DONE`，总耗时约 0.09s。已修复 `hw_runner_win.py` 对小于 16B program 的写后读回验证，避免 tiny probe 访问 `INST_BASE-12`。
+- 随后运行 YOLO INT8 L4 one-shot，weights/WB/input/program 上传均成功，但 segment 0 在 120s 后仍 `DECODER_STATUS=0x00000001` busy。当前判断卡点在执行阶段，优先怀疑 `OP_DCIM_LAYER` / DCIM ready handshake 路径；已生成 `output/probe_yolo_l4_before_first_dcim` 与 `output/probe_yolo_l4_first_dcim`，下一次 reset 后用 prefix probe 定位是否第一个 DCIM_LAYER 即 hang。
+- 为减少后续整板 reset 频率，RTL 已增加 decoder 控制保护：`INST_COUNT=0` 的 decoder start pulse 作为 decoder-local soft reset；`OP_DCIM_LAYER_WAIT` 增加 watchdog，超时进入 `STATUS_ERROR` 而不是永久 busy。该改动只在 `INST_Decoder` 控制状态机内，不改 DCIM datapath。当前 bitstream 尚不包含该 RTL，需要下一次综合后生效；Windows runner 已预留 `--soft-reset-decoder`。
+- 当前 FPGA 不再冒险直接跑 `probe_yolo_l4_first_dcim`：`probe_yolo_l4_before_first_dcim` 已通过，证明卡点之前的 WB/weight/input/program upload、im2col、CDMA activation load 都正常；下一版 bitstream 带 watchdog 后再跑 first-DCIM probe，可避免再次要求整板 reset。
+- 已新增 `--dcim-loop legacy` 诊断编译路径：把高效的 `OP_DCIM_LAYER` 展开为显式 `dcim_cfg + dcim_exec + wait_dcim` per-pixel loop，只用于定位当前 bitstream 的 layer-loop 控制问题，不作为最终效率方案。
+  - YOLO INT8 L1 legacy-loop artifact：`output/compile_yolo_int8_l1_legacy_loop`，无 `dcim_layer`，无 runtime warnings，program 被拆成 6 个 INST_BRAM segments。
+  - 上板通过：6 个 segment 全部 `DONE`，读回 `160x160x16` feature，总耗时 1.227s，其中 execute 0.508s、program upload 0.166s、readback 0.318s。
+  - Data-level 对齐通过：`compare_one_shot.py` 对 compiler golden 的 `primary max_abs=1.90735e-06, mean_abs=2.57629e-08, rmse=7.45895e-08`。
+  - 结论：DCIM primitive 数据通路、weight/WB/input staging、im2col/CDMA/DQA 对 L1 是正确的；当前 one-shot 高效路径的 blocker 进一步收敛到 `OP_DCIM_LAYER` decoder-side loop / DCIM ready handshake。最终性能仍必须修复/验证 `OP_DCIM_LAYER`，不能用 legacy-loop 扩展到 full network。
+- YOLO INT16 L1 legacy-loop 已定位并修复多处 compiler 语义问题，但 data-level 仍未通过：
+  - 修复默认 parsed 目录：`mode=int16` 现在默认使用 `model/yolov5n/parsed_int16_widened`。
+  - 修复 INT16 `acc_depth`：按 `ceil(K / DCIM_CH_IN)` 计算；INT16 只增加每个 acc step 的 activation words，不应按 `ceil(K / 8)` 或 `ceil(K / 32)` 放大 logical acc depth。
+  - 修复 INT16 weight packer：按 `golden_module_tb.pack_weight_tile_int16` 的 nibble matrix / `DCIM_CYCLE` 顺序打包；首层 `weights.bin` 从 57,344B 降到 16,384B。
+  - 修复 one-shot im2col：INT16 conv 的 `UNIT_IM2COL` 指令现在带 `VPU_FLAG_INT16`。
+  - 上板可稳定 DONE，最新耗时：8 segments，总耗时 1.577s，execute 0.626s，readback 0.437s。
+  - 最新 compare 仍失败：`primary max_abs=14.9612, mean_abs=1.34532, rmse=1.99379`。相比修复前 `max_abs=24.646, mean_abs=3.096, rmse=5.047` 已明显收敛；剩余 blocker 暂定为 INT16 DCIM output lane 到 DQA FP32 layout / compiler golden 语义未完全对齐。
+- 当前 bitstream 的 legacy E2E baseline 已重新复测通过，作为 one-shot correctness oracle：
+  - YOLO INT8 `--no-verify --reuse-cases`：1 det，conf 0.8108，总耗时 36.8s。
+  - YOLO INT16 `--no-verify --reuse-cases`：1 det，conf 0.7381，总耗时 86.4s。
+  - ResNet18 VAI `--no-verify --reuse-cases`：Top-1 goldfish，总耗时 131.2s。
+  - ResNet18 INT16 `--no-verify --reuse-cases`：Top-1 goldfish，总耗时 172.8s。
+  - 每次运行后 `DECODER_STATUS=0x00000002`，说明 legacy path 没有留下 busy 状态。
+- one-shot YOLO INT8 已修复并通过前两层 data-level gate：
+  - L1 (`max-layers 1`)：上板 DONE，读回 feature 与 compiler numpy golden 对齐，`max_abs=1.90735e-06`。
+  - L2 (`max-layers 2`)：上板 DONE，读回 feature 与 compiler numpy golden 对齐，`max_abs=1.90735e-06`。
+- ResNet one-shot 工具链已补齐到可上板验证状态：
+  - Windows runner 新增 `--resnet-image`，可直接按 ResNet18 ImageNet resize/crop/normalize/quantize 生成输入并一次上传到 VPU_BUF。
+  - `compare_one_shot.py` 新增 ResNet compiler-semantics golden：conv DQA 按 `has_activation` 控 ReLU，stem maxpool 走 FP32 3x3 stride2 pad1，residual add 走 FP32 add + ReLU，FC/softmax 留在 host 边界外。
+  - 离线 golden-only 已通过：ResNet18 VAI / INT16 full 均生成 `7x7x512 float32` backbone feature，作为下一次 FPGA 读回 data-level 对齐目标。
+- Windows one-shot runner 已补 timing/report 能力：
+  - `hw_runner_win.py` 新增 `--timing-json`，记录 weights/WB/input/program upload、每个 segment execute、output readback 和 total time；segment timeout/error 时也会尽量写出 partial timing，便于定位 hang 的 segment。
+  - 新增 `--status-only`，可只读 `DECODER_STATUS`，用于 reset 后确认 decoder 是否 idle。
+  - 新增 `tests/chip/runtime/progressive_gate_win.py`，可按 staged artifacts 自动跑硬件 + compare，失败即停，并在 summary JSON 内嵌每一阶段 compact timing/return code。
+  - YOLO full staged gate 会自动加 `--output-dir`，读回并比较 `PAN_P3/PAN_P4/PAN_P5` 三路 feature，避免只验证 primary `PAN_P5`。
+- 已新增最终 host-boundary gate：`tests/chip/runtime/one_shot_host_head.py`。
+  - YOLO：读取 one-shot `PAN_P3/PAN_P4/PAN_P5` FP32 feature，按 detect-head input scale 重新量化到 INT8，再运行 host `DetectHead.forward + decode/NMS`；progressive 默认要求 `test_yolo.jpg` 输出 1 个 detection。
+  - ResNet：读取 one-shot `7x7x512` feature，运行 host FC/top-k；progressive 默认要求 `test_resnet_2.JPEG` Top-1 为 goldfish(class 1)。
+  - 已修复 YOLO one-shot schedule 与旧 E2E oracle 的 C3 shortcut 语义差异：当前 parsed/legacy YOLO C3 bottleneck 不执行 shortcut add，one-shot schedule 已去掉这些 C3 add。离线 YOLO INT8 full compiler-golden + host head 已恢复为 1 个 detection，conf 0.8108。
+  - ResNet VAI full 离线 host-head gate 仍会失败：Top-1 为 lighter(class 626)，不是 goldfish(class 1)。这说明 ResNet one-shot full-network correctness 还没有达标，下一步必须对齐 one-shot ResNet schedule/golden 与旧 E2E oracle，而不能只看中间 feature 自洽 compare。
+- 本轮修复的关键问题：
+  - host 上传 C=3 输入时按 im2col RTL 期望补齐到每 pixel 16B stride，避免 tight NHWC 输入导致首层 im2col 错位。
+  - `OP_DCIM_LAYER.act_stride_words` 改为使用 `DCIM_INT8_ACT_WORDS` / `DCIM_INT16_ACT_WORDS`，而不是只按 accumulator depth 估算。
+  - output-H tile crop 的源地址使用 16B 对齐后的 pixel stride，避免输入/中间 tensor 行步长不一致。
+  - `wb.bin` 内 QA scale 改为 `1 / act_scale`，匹配 RTL `qa_unit` 的 `fp32 * qa_scale -> int` 语义。
+- YOLO INT8 full one-shot 最新 artifact 已能 compile 到 runtime warnings = 0 / unsupported = 0；但上板 full run 在 240s 后仍 `DECODER_STATUS=0x00000001` busy，说明 full path 仍有 hang/超慢 op 需要定位。当前 FPGA 需要 reset/reprogram 后才能继续下一轮硬件测试。
+- 离线 full compile 已通过：
+  - YOLO INT16：57/57 conv，`program.bin` 184,916B，`weights.bin` 7,979,008B，`wb.bin` 38,928B，2 个 program segment。
+  - ResNet18 VAI：20/20 conv，`program.bin` 159,828B，`weights.bin` 3,989,504B，`wb.bin` 38,720B，2 个 program segment。
+  - ResNet18 INT16 widened：20/20 conv，`program.bin` 846,136B，`weights.bin` 15,937,536B，`wb.bin` 38,720B，7 个 program segment。
+- 2026-07-07 `eff` fresh artifacts 已重新生成，供 reset/reprogram 后直接上板：
+  - YOLO INT8 progressive：`output/compile_yolo_int8_l4_eff`、`l8_eff`、`l16_eff`、`l32_eff`、`full_eff`；full 为 57/57 conv，`program.bin` 68,296B，runtime warnings = 0。
+  - YOLO INT16：`output/compile_yolo_int16_l4_eff`、`output/compile_yolo_int16_full_eff`；full 为 57/57 conv，`program.bin` 184,328B，2 segments，runtime warnings = 0。
+  - ResNet VAI：`output/compile_resnet_vai_l2_eff`、`output/compile_resnet_vai_l7_eff`、`output/compile_resnet_vai_full_eff`；full 为 20/20 conv，2 segments，runtime warnings = 0。
+  - ResNet INT16：`output/compile_resnet_int16_full_eff`；full 为 20/20 conv，7 segments，runtime warnings = 0。
+- 已修复 ResNet one-shot partial compile：当 `max-layers` 截在 basic block 中间，compiler/compare 现在停在当前 conv 输出，不再错误发 residual add；离线 golden-only 通过：
+  - YOLO INT8 L4：`80x80x16 float32`。
+  - YOLO INT8 L32：`10x10x128 float32`。
+  - YOLO INT16 L4：`80x80x16 float32`。
+  - ResNet VAI L2：`56x56x64 float32`。
+  - ResNet VAI L7：`28x28x128 float32`。
+  - ResNet VAI/INT16 full：`7x7x512 float32`。
+- 下一步硬件策略：reset/reprogram 后先做 progressive gate，而不是直接 full：YOLO INT8 `max-layers 4/8/16/32/full`，定位 busy 的具体 layer/op；ResNet VAI/INT16 则直接用 one-shot runner + golden compare 做 data-level gate。
+- 下一轮 YOLO progressive 上板命令示例：
+  - `python tests\chip\runtime\hw_runner_win.py --build-dir output\compile_yolo_int8_l4_eff --yolo-image test_yolo.jpg --output output\hw_yolo_int8_l4_eff.bin --poll-timeout-s 120 --quiet-xdma --read-chunk-bytes 65536`
+  - `python tests\chip\runtime\compare_one_shot.py --build-dir output\compile_yolo_int8_l4_eff --image test_yolo.jpg --output output\hw_yolo_int8_l4_eff.bin --atol 1e-3`
+- 自动 progressive 命令示例：
+  - `python tests\chip\runtime\hw_runner_win.py --build-dir output\compile_yolo_int8_l4_eff --status-only --quiet-xdma`
+  - `python tests\chip\runtime\progressive_gate_win.py --suite yolo-int8 --quiet-xdma --out-dir output\progressive_yolo_int8_eff`
+  - `python tests\chip\runtime\progressive_gate_win.py --suite resnet-vai --quiet-xdma --out-dir output\progressive_resnet_vai_eff`
+- 下一轮 ResNet 上板命令示例：
+  - `python tests\chip\runtime\hw_runner_win.py --build-dir output\compile_resnet_vai_full_eff --resnet-image test_resnet_2.JPEG --output output\hw_resnet_vai_full_eff.bin --poll-timeout-s 240 --quiet-xdma --read-chunk-bytes 65536`
+  - `python tests\chip\runtime\compare_one_shot.py --build-dir output\compile_resnet_vai_full_eff --image test_resnet_2.JPEG --output output\hw_resnet_vai_full_eff.bin --atol 1e-3`
+  - `python tests\chip\runtime\one_shot_host_head.py --build-dir output\compile_resnet_vai_full_eff --image test_resnet_2.JPEG --output output\hw_resnet_vai_full_eff.bin --expect-top1 1`
+
+### 2026-07-06 基线连通与端到端正确性
+
+- XDMA smoke 通过：HBM `0x0`、HBM `0x1000`、INST_BRAM `0x104000000` 写读均 PASS。
+- dry-run 基线通过：YOLO INT8 输出 1 个检测框，conf 0.81；ResNet18 VAI Top-1 为 goldfish。
+- FPGA `--no-verify` 基线通过：
+  - YOLO INT8：1 个检测框，conf 0.81，耗时 51.1s。
+  - YOLO INT16 widened：1 个检测框，conf 0.74，耗时 74.7s。
+  - ResNet18 VAI：Top-1 goldfish，Top-5 分数与 dry-run 一致，耗时 111.7s。
+  - ResNet18 INT16 widened：Top-1 goldfish，Top-5 分数与 dry-run 一致，耗时 287.9s。
+- FPGA 逐层 verify：
+  - ResNet18 VAI/INT16 均无 FAIL，逐层数据与 numpy golden 对齐。
+  - YOLO INT8/INT16 最终检测正确；`model.0.conv` 与 `model.1.conv` 各有 1 个 word 的 +1 LSB 差异，属于当前 README 定义的量化舍入容差，但还不是严格 bit-exact。
+- 已修复运行链路基础问题：case/work 目录改到 `output/work/e2e`，Windows XDMA wrapper 支持 `tests/bin/xdma_rw.exe` 和 `XDMA_RW_EXE`，runtime/compiler 地址表同步到 chip-v3 BD，补齐默认 `hw_caps.yaml`。
+- 当前瓶颈：老 E2E 路径仍然是逐层生成 case、逐层上传输入/指令、逐层启动 decoder；要达到“ResNet + YOLO INT8/INT16 全部 1 分钟内”，必须切到单 program、权重一次上传、VPU/CDMA 内部算子尽量上 FPGA 的 one-shot 路径。
+- one-shot compiler 当前 blockers：
+  - YOLO INT8 full compile 已清零 runtime warnings，但首次 one-shot 上板运行 decoder busy 超时，尚未完成 data-level 对齐。
+  - YOLO INT16、ResNet VAI/INT16 已清掉 IBUF/tile_obuf 容量 warning；超过 128KB INST_BRAM 的 program 已改为 segmented execution，但还需要上板验证。
+  - ResNet 3x3 stride2 pad1 maxpool 已映射到 `mp_unit_fixed` mode=1；ResNet full compile 的 unsupported 已降到 0。
+  - 大输出通道层的 output-channel pass / 权重分段还需要继续验证，尤其是 INT16 和 ResNet 后段大层。
+  - 当前硬件侧 blocker：YOLO L2 读回超时后，重新测试时读取 `DECODER_STATUS` 4B 仍 C2H timeout；需要重新 reset/restart XDMA 后继续 one-shot 上板。
+
+### 2026-07-06 one-shot compiler 进展
+
+- YOLOv5n full compiler 已能生成 INT8/INT16 backbone+neck artifacts，并已切到 `OP_DCIM_LAYER` + tile_obuf collect + tile-sequential DQA 路径：
+  - INT8：57/57 conv + C3 residual add + concat/upsample/maxpool，`program.bin` 68,884B，`weights.bin` 2,056,192B，`wb.bin` 38,928B；runtime warnings = 0；unsupported = 0。
+  - INT16 widened：57/57 conv + C3 residual add + concat/upsample/maxpool，`program.bin` 184,916B，`weights.bin` 7,979,008B，`wb.bin` 38,928B；2 个 program segment，runtime warnings = 0；unsupported = 0。
+  - host detect head 所需三路 feature 已写入 `host_io.outputs`：`PAN_P3` = 40x40x64 FP32，`PAN_P4` = 20x20x128 FP32，`PAN_P5` = 10x10x256 FP32。
+- ResNet18 full compiler：
+  - VAI：20/20 conv + stem maxpool，`program.bin` 159,828B，`weights.bin` 3,989,504B，`wb.bin` 38,720B；2 个 program segment；runtime warnings = 0；unsupported = 0。
+  - INT16 widened：20/20 conv + stem maxpool，`program.bin` 846,136B，`weights.bin` 15,937,536B，`wb.bin` 38,720B；7 个 program segment；runtime warnings = 0；unsupported = 0。
+- 已把 `lower_full.py` 的 YOLO VPU_BUF 静态布局迁到 chip-v3 8MB，并修复 full lowering 对 `yolov5n-int8-signed` / `resnet18-vai` 名称的 dispatch。
+- 已补 `OP_DCIM_LAYER` codegen encoder；full conv lowering 已从逐 primitive `dcim_cfg`/`dcim_exec` 切到 decoder 内部 layer loop。
+- 已实现 compiler output-H tiling：按 512KB tile_ibuf 和 256KB tile_obuf 自动拆输出行 chunk，YOLO INT8 full compile 的容量 warning 已降到 0。
+- 已实现 one-shot 权重 staging：host 只需把 `weights.bin` 上传一次到 HBM，program 按层、按 tile 通过 CDMA 搬到各 tile_ibuf；`hw_runner.py` 也改为从 HBM staging 权重。
+- 已实现 program segmentation：`program_manifest.json` + `program_segments/segment_*.bin`，host 逐段写 INST_BRAM 执行，权重/input/WB 仍只上传一次，中间 activation 保持在 FPGA buffer。
+- 已新增 Windows runner：`tests/chip/runtime/hw_runner_win.py`，支持 `program_manifest.json`、YOLO image preprocess、INT8/INT16 input bytes、busy 状态快速检查。
+- Windows/Linux runner 均支持 `--output-dir` 多输出读回；YOLO full 可一次读回 `PAN_P3.bin`、`PAN_P4.bin`、`PAN_P5.bin` 给 host detect head。
+- 已新增 `tests/chip/runtime/compare_one_shot.py`，按 compiler schedule 生成 numpy golden FP32 taps，用于 one-shot L1/L2/full 读回后的 data-level 对齐；YOLO INT8 full 与 INT16 full 的 golden 生成路径均已本地跑通。
+- 已修复 `DCIM_LAYER` weight base：每个 tile 使用自己的 tile_ibuf，因此 `wei_base_words[t]` 必须是相同 local offset，不能按 tile 递增。
+- 已修复 output-channel pass 布局：大通道层的第二/后续 pass 会加载对应 weight tile group，并把 DQA 写回同一 NHWC tensor 的 channel offset，而不是写成独立连续 block。
+- 已重写 YOLO full schedule 以匹配 `network.json` 的真实 layer 顺序，并补上 backbone C3 的 residual add；这些 add 通过 VPU `UNIT_AD` 在 FPGA 内执行。
+- 已接通 ResNet stem maxpool：compiler 发 `UNIT_MP` 且 `addr_break[1:0]=1`，使用 RTL 现有 3x3 stride2 pad1 mode，不改 RTL timing。
+- one-shot 上板状态：
+  - `output/compile_yolo_int8_l1`：旧 artifact 曾 DONE 并读回 1,638,400B feature；当前 artifact 已在 19:45 之后重新生成，必须重新上板读回后再做 data-level 对齐。
+  - `output/compile_yolo_int8_l2`：decoder DONE；读回 819,200B feature 时单次 C2H 读超时，已把 Windows runner 改成 chunked read。
+  - 2026-07-06 复测：重新运行 L2 时，最开始读取 `REGS_BASE+DECODER_STATUS` 的 4B C2H 读超时，说明当时还没进入计算/上传，XDMA C2H 通道仍处于异常状态。
+  - YOLO INT8 full artifact 曾在修复前尝试运行，权重/WB/input/program 上传成功，但 segment 0 decoder busy 180s 超时；后续需 reset/reprogram 后用已修复 artifacts 继续 L2/full 验证。
+
+### 2026-07-06 旧 E2E 路径复用 case 加速
+
+- `run.py` 不再删除 `output/work/e2e`，只清理结果图/JSON；已生成的 case 文件可跨运行保留。
+- 新增 `--reuse-cases`：复用现有 case，跳过在线 dry-run case 生成。
+- 实测 YOLO INT8 FPGA `--no-verify`：
+  - 重新生成 case：60.6s，1 个检测框，conf 0.81。
+  - `--reuse-cases`：39.8s，1 个检测框，conf 0.81。
+  - one-shot compiler 修改后复测 `--reuse-cases`：33.1s，1 个检测框，conf 0.81。
+- 这仍不是最终 one-shot 方案，因为权重仍会每次上传到 HBM pool，且各层仍逐 case 启动 decoder；但它能显著加快当前硬件调试迭代。
+
+---
+
 ## 1. 项目概述
 
 ### 做什么
@@ -33,7 +187,7 @@
 
 加速器通过 **PCIe/XDMA** 与主机 Python 脚本通信。推理流程：
 1. 主机把输入图像和量化权重写入 FPGA 片上 HBM / SRAM
-2. FPGA 执行卷积（DCIM Tile × 4）、VPU 算子（im2col/DQA/QA/MaxPool/Upsample/Add）
+2. FPGA 执行卷积（DCIM Tile × 8）、VPU 算子（im2col/DQA/QA/MaxPool/Upsample/Add）
 3. 主机读回 backbone 输出特征图，运行 detect head（YOLO）或 softmax（ResNet）
 4. 输出检测框 / Top-5 分类结果
 
@@ -252,7 +406,7 @@ EdgeYOLO-FPGA/
 │
 ├── rtl/
 │   ├── chip/                       ← 顶层 SoC RTL
-│   │   ├── DCIM_Array.sv           ← 4×DCIM Tile 阵列
+│   │   ├── DCIM_Array.sv           ← 8×DCIM Tile 阵列
 │   │   ├── DCIM_Array_bd.v         ← Block Design 包装
 │   │   ├── chip_defines.vh         ← 全局参数 (ADDR_WIDTH, RD_LATENCY, ...)
 │   │   ├── tile_ibuf.v             ← Tile 输入缓冲 (XPM URAM 512KB)
@@ -521,7 +675,7 @@ v4 引入 `rd_en = mem_ena & ~(|wea)` 导致 URAM cascade(7级) + LUT MUX(8级)
 ```
 FPGA:                  xcvu37p-fsvh2892-2L-e
 时钟:                   250 MHz
-DCIM Tile 数:           4
+DCIM Tile 数:           8
 tile_ibuf:              512KB per tile (ADDR_WIDTH=15, RD_LATENCY=10)
 tile_obuf:              256KB per tile (ADDR_WIDTH=14, RD_LATENCY=10)
 VPU_BUF:               8MB (ADDR_WIDTH=19, RD_LATENCY=10)
