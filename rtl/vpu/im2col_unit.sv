@@ -547,25 +547,24 @@ module im2col_unit #(
                         in_kw_acc_r      <= in_kw_acc_r + in_col_stride_r;
                         out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
                         state <= S_BOUND_CHECK;
+                    end else begin
+                        kw <= 0;
+                        in_kw_acc_r <= 0;
+                        if (kh + 1 < $signed({1'b0, kH_r})) begin
+                            kh <= kh + 1;
+                            in_kh_acc_r <= in_kh_acc_r + w_times_c_r;
+                            // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 elem_total_bytes
+                            out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
+                            state <= S_BOUND_CHECK;
                         end else begin
-                            kw <= 0;
-                            in_kw_acc_r      <= 0;
-                            if (kh + 1 < $signed({1'b0, kH_r})) begin
-                                kh <= kh + 1;
-                                in_kh_acc_r      <= in_kh_acc_r + w_times_c_r;
-                                // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 elem_total_bytes
-                                out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
-                                state <= S_BOUND_CHECK;
+                            kh <= 0;
+                            in_kh_acc_r <= 0;
+                            out_col_offset_r <= 0;
+                            if (kH_kw_c_r < row_stride_r) begin
+                                tail_offset_r <= kH_kw_c_r;
+                                state <= S_ROW_TAIL_WRITE;
                             end else begin
-                                kh <= 0;
-                                in_kh_acc_r      <= 0;
-                                out_col_offset_r <= 0;
-                                if (kH_kw_c_r < row_stride_r) begin
-                                    tail_offset_r <= kH_kw_c_r;
-                                    state <= S_ROW_TAIL_WRITE;
-                                end else begin
-                                    state <= S_ADVANCE_PIXEL;
-                                end
+                                state <= S_ADVANCE_PIXEL;
                             end
                         end
                     end
