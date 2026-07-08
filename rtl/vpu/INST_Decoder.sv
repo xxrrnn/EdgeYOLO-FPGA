@@ -205,7 +205,10 @@ module INST_Decoder #(
     reg [DCIM_TILE_IDX_W-1:0] dcim_layer_tile_idx;
     reg        dcim_layer_seen_busy;
     reg [31:0] dcim_layer_wait_count;
+    reg        dcim_seen_busy;
+    reg [31:0] dcim_wait_count;
     localparam [31:0] DCIM_LAYER_WAIT_TIMEOUT = 32'd250_000_000;
+    localparam [31:0] DCIM_WAIT_TIMEOUT = 32'd250_000_000;
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -382,11 +385,13 @@ module INST_Decoder #(
             end
             
             S_EXEC_DCIM: begin
-                next_state = S_NEXT_INST;
+                next_state = S_WAIT_DCIM_DONE;
             end
             
             S_WAIT_DCIM_DONE: begin
-                if (dcim_ready)
+                if (dcim_wait_count >= DCIM_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (dcim_seen_busy && dcim_ready)
                     next_state = S_NEXT_INST;
             end
             
@@ -578,6 +583,8 @@ module INST_Decoder #(
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
             dcim_layer_wait_count <= '0;
+            dcim_seen_busy <= 1'b0;
+            dcim_wait_count <= '0;
                 
         end else if (decoder_soft_reset) begin
             decoder_busy <= 1'b0;
@@ -604,6 +611,8 @@ module INST_Decoder #(
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
             dcim_layer_wait_count <= '0;
+            dcim_seen_busy <= 1'b0;
+            dcim_wait_count <= '0;
             cstride_src_msb <= '0;
             cstride_src_cur <= '0;
             cstride_dst_msb <= '0;
@@ -782,6 +791,8 @@ module INST_Decoder #(
                     dcim_cfg_wr_en <= 1'b1;
                     dcim_cfg_wr_addr <= 12'h000;
                     dcim_cfg_wr_data <= 32'h1;
+                    dcim_seen_busy <= 1'b0;
+                    dcim_wait_count <= '0;
 `ifdef SIMULATION
                     $display("[%0t] DCIM_EXEC start (pixel fired)", $time);
 `endif
@@ -789,8 +800,11 @@ module INST_Decoder #(
                 
                 S_WAIT_DCIM_DONE: begin
                     // 等待 DCIM 完成
+                    dcim_wait_count <= dcim_wait_count + 1'b1;
+                    if (!dcim_ready)
+                        dcim_seen_busy <= 1'b1;
 `ifdef SIMULATION
-                    if (dcim_ready)
+                    if (dcim_seen_busy && dcim_ready)
                         $display("[%0t] DCIM_WAIT_DONE: dcim_ready asserted → pixel done", $time);
 `endif
                 end

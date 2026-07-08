@@ -121,6 +121,8 @@ module im2col_unit #(
     localparam S_READ_TAIL_REQ      = 5'd11; // 输入数据跨读字边界时补读下一字
     localparam S_READ_TAIL_WAIT     = 5'd12;
     localparam S_READ_TAIL_LATCH    = 5'd13;
+    localparam S_ROW_TAIL_WRITE     = 5'd17; // 写零补齐 row_stride padding
+    localparam S_ADVANCE_PIXEL      = 5'd18; // 推进 ow/oh 到下一个输出像素
 
     reg [4:0] state;
 
@@ -132,6 +134,7 @@ module im2col_unit #(
     reg [15:0]        c_chunk_max;   // = ceil(CH_IN * ELEM_BYTES / 16)
     reg [31:0]        c_chunk_byte_offset_r;  // c_chunk * 16 byte，提前寄存以切断写数据路径
     reg [4:0]         write_chunk_nbyte_r;
+    reg [31:0]        tail_offset_r;  // 当前 output row 内需要清零的 byte offset
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
     // 读延迟：douta_valid 握手（lite DCIM_OBUF_NBPIPE=4 → 端到端 10 拍）
@@ -238,6 +241,27 @@ module im2col_unit #(
         end
     end
 
+    wire [VB_ADDR_WIDTH-1:0] row_tail_byte_addr =
+        dst_addr_r + out_row_offset_r + tail_offset_r;
+    wire [3:0] row_tail_byte_in_word = row_tail_byte_addr[3:0];
+    wire [VB_ADDR_WIDTH-1:0] row_tail_addr_aligned = row_tail_byte_addr & ~32'd15;
+    wire [31:0] row_tail_remaining = row_stride_r - tail_offset_r;
+    wire [5:0] row_tail_capacity =
+        {1'b0, WORD_BYTES[4:0]} - {2'b0, row_tail_byte_in_word};
+    wire [4:0] row_tail_nbyte =
+        (row_tail_remaining > row_tail_capacity) ?
+        row_tail_capacity[4:0] : row_tail_remaining[4:0];
+    reg [VB_BANDWIDTH/8-1:0] row_tail_mask;
+    reg [LOOP_BITS-1:0] row_tail_i, row_tail_byte_pos;
+    always_comb begin
+        row_tail_mask = {VB_BANDWIDTH/8{1'b0}};
+        for (row_tail_i = 0; row_tail_i < row_tail_nbyte; row_tail_i = row_tail_i + 1'b1) begin
+            row_tail_byte_pos = row_tail_byte_in_word + row_tail_i;
+            if (row_tail_byte_pos < WORD_BYTES)
+                row_tail_mask[row_tail_byte_pos] = 1'b1;
+        end
+    end
+
     // 输入坐标组合计算（S_BOUND_CHECK 注册，S_READ_REQ 使用寄存版）
     wire signed [15:0] ih_calc = $signed(oh) * strideH_r - padH_r + $signed({8'd0, kh});
     wire signed [15:0] iw_calc = $signed(ow) * strideW_r - padW_r + $signed({8'd0, kw});
@@ -271,6 +295,7 @@ module im2col_unit #(
             c_chunk <= 0; c_chunk_max <= 0;
             c_chunk_byte_offset_r <= '0;
             write_chunk_nbyte_r <= '0;
+            tail_offset_r      <= '0;
             in_bound          <= 1'b0;
             rd_wait_cnt       <= 0;
             latch_stall_cnt   <= 0;
@@ -327,6 +352,7 @@ module im2col_unit #(
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
                     c_chunk_byte_offset_r <= '0;
                     write_chunk_nbyte_r <= (elem_total_bytes_r > C_CHUNK_BYTES) ? 5'd16 : elem_total_bytes_r[4:0];
+                    tail_offset_r <= '0;
                     in_oh_acc_r <= 0; in_kh_acc_r <= 0;
                     in_ow_acc_r <= 0; in_kw_acc_r <= 0;
                     out_row_offset_r <= 0; out_col_offset_r <= 0;
@@ -534,6 +560,32 @@ module im2col_unit #(
                                 kh <= 0;
                                 in_kh_acc_r      <= 0;
                                 out_col_offset_r <= 0;
+                                if (kH_kw_c_r < row_stride_r) begin
+                                    tail_offset_r <= kH_kw_c_r;
+                                    state <= S_ROW_TAIL_WRITE;
+                                end else begin
+                                    state <= S_ADVANCE_PIXEL;
+                                end
+                            end
+                        end
+                    end
+                end
+
+                S_ROW_TAIL_WRITE: begin
+                    gb_addrb <= row_tail_addr_aligned;
+                    gb_enb   <= 1'b1;
+                    gb_web   <= row_tail_mask;
+                    gb_dinb  <= '0;
+                    if ((tail_offset_r + row_tail_nbyte) < row_stride_r) begin
+                        tail_offset_r <= tail_offset_r + row_tail_nbyte;
+                        state <= S_ROW_TAIL_WRITE;
+                    end else begin
+                        tail_offset_r <= '0;
+                        state <= S_ADVANCE_PIXEL;
+                    end
+                end
+
+                S_ADVANCE_PIXEL: begin
                             if (ow + 1 < $signed(ow_max_r)) begin
                                 ow <= ow + 1;
                                 in_ow_acc_r      <= in_ow_acc_r + stride_w_c_r;
@@ -551,8 +603,6 @@ module im2col_unit #(
                                     state <= S_DONE;
                                 end
                             end
-                        end
-                    end
                 end
 
                 S_DONE: begin
