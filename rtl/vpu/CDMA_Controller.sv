@@ -44,6 +44,7 @@
 
     wire aw_handshake_cdma = cdma_axilm_awready && cdma_axilm_awvalid;
     wire w_handshake_cdma  = cdma_axilm_wready  && cdma_axilm_wvalid;
+    wire b_handshake_cdma  = cdma_axilm_bvalid  && cdma_axilm_bready;
     wire ar_handshake_cdma = cdma_axilm_arready && cdma_axilm_arvalid;
     wire r_handshake_cdma  = cdma_axilm_rvalid  && cdma_axilm_rready;
 
@@ -54,6 +55,9 @@
     reg [31:0] cdma_length_reg;
     reg        sr_idle_flag;  // 锁存 SR 读取结果的 IDLE 位
     reg [$clog2(`CDMA_COOLDOWN_CYCLES+1)-1:0] cooldown_cnt;
+    reg        write_addr_done;
+    reg        write_data_done;
+    reg        write_resp_done;
 
     assign cdma_axilm_awprot = '0;
     assign cdma_axilm_arprot = '0;
@@ -83,6 +87,18 @@
 
     assign cdma_config_ready = c_state == IDLE;
 
+    wire cdma_write_state =
+        (c_state == CDMA_ENABLE_IRQ) ||
+        (c_state == CDMA_WRITE_SRC_MSB) ||
+        (c_state == CDMA_WRITE_SRC_LSB) ||
+        (c_state == CDMA_WRITE_DST_MSB) ||
+        (c_state == CDMA_WRITE_DST_LSB) ||
+        (c_state == CDMA_WRITE_LEN);
+    wire cdma_write_done =
+        (write_addr_done || aw_handshake_cdma) &&
+        (write_data_done || w_handshake_cdma) &&
+        (write_resp_done || b_handshake_cdma);
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             c_state <= IDLE;
@@ -97,17 +113,17 @@
             CDMA_CONFIG:      n_state = CDMA_CHECK;
             CDMA_CHECK:       if (r_handshake_cdma && cdma_axilm_rdata[1]) n_state = CDMA_ENABLE_IRQ;
 
-            CDMA_ENABLE_IRQ:        if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_ENABLE_IRQ_CLR;
+            CDMA_ENABLE_IRQ:        if (cdma_write_done) n_state = CDMA_ENABLE_IRQ_CLR;
             CDMA_ENABLE_IRQ_CLR:    n_state = CDMA_WRITE_SRC_MSB;
-            CDMA_WRITE_SRC_MSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_SRC_MSB_CLR;
+            CDMA_WRITE_SRC_MSB:     if (cdma_write_done) n_state = CDMA_WRITE_SRC_MSB_CLR;
             CDMA_WRITE_SRC_MSB_CLR: n_state = CDMA_WRITE_SRC_LSB;
-            CDMA_WRITE_SRC_LSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_SRC_LSB_CLR;
+            CDMA_WRITE_SRC_LSB:     if (cdma_write_done) n_state = CDMA_WRITE_SRC_LSB_CLR;
             CDMA_WRITE_SRC_LSB_CLR: n_state = CDMA_WRITE_DST_MSB;
-            CDMA_WRITE_DST_MSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_DST_MSB_CLR;
+            CDMA_WRITE_DST_MSB:     if (cdma_write_done) n_state = CDMA_WRITE_DST_MSB_CLR;
             CDMA_WRITE_DST_MSB_CLR: n_state = CDMA_WRITE_DST_LSB;
-            CDMA_WRITE_DST_LSB:     if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_DST_LSB_CLR;
+            CDMA_WRITE_DST_LSB:     if (cdma_write_done) n_state = CDMA_WRITE_DST_LSB_CLR;
             CDMA_WRITE_DST_LSB_CLR: n_state = CDMA_WRITE_LEN;
-            CDMA_WRITE_LEN:         if (aw_handshake_cdma && w_handshake_cdma) n_state = CDMA_WRITE_LEN_CLR;
+            CDMA_WRITE_LEN:         if (cdma_write_done) n_state = CDMA_WRITE_LEN_CLR;
             CDMA_WRITE_LEN_CLR:     n_state = CDMA_POLL_ISSUE;
 
             // 轮询 CDMA SR 直到 IDLE=1（传输完成）
@@ -131,6 +147,7 @@
     localparam logic [31:0] CDMA_DST_ADDR_LSB_OFFSET   = 32'h00000020;
     localparam logic [31:0] CDMA_DST_ADDR_MSB_OFFSET   = 32'h00000024;
     localparam logic [31:0] CDMA_LEN_OFFSET            = 32'h00000028;
+    localparam int          RUN_STOP_BIT               = 0;
     localparam int          IOC_IRQ_EN_BIT             = 12;
     localparam int          ERR_IRQ_EN_BIT             = 14;
 
@@ -150,6 +167,22 @@
             cooldown_cnt <= cooldown_cnt + 1;
         else
             cooldown_cnt <= '0;
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            write_addr_done <= 1'b0;
+            write_data_done <= 1'b0;
+            write_resp_done <= 1'b0;
+        end else if (!cdma_write_state) begin
+            write_addr_done <= 1'b0;
+            write_data_done <= 1'b0;
+            write_resp_done <= 1'b0;
+        end else begin
+            if (aw_handshake_cdma) write_addr_done <= 1'b1;
+            if (w_handshake_cdma)  write_data_done <= 1'b1;
+            if (b_handshake_cdma)  write_resp_done <= 1'b1;
+        end
     end
 
     // AXI-Lite 输出信号
@@ -176,49 +209,50 @@
                     cdma_axilm_rready  <= 1;
                 end
                 CDMA_ENABLE_IRQ: begin
-                    cdma_axilm_awvalid <= 1;
+                    cdma_axilm_awvalid <= ~write_addr_done;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_CR_OFFSET;
-                    cdma_axilm_wvalid  <= 1;
-                    cdma_axilm_wdata   <= (1 << IOC_IRQ_EN_BIT) | (1 << ERR_IRQ_EN_BIT);
+                    cdma_axilm_wvalid  <= ~write_data_done;
+                    // AXI CDMA requires CR.RS=1 before SRC/DST/LEN writes can start a transfer.
+                    cdma_axilm_wdata   <= (1 << RUN_STOP_BIT) | (1 << IOC_IRQ_EN_BIT) | (1 << ERR_IRQ_EN_BIT);
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
                 CDMA_WRITE_SRC_MSB: begin
-                    cdma_axilm_awvalid <= 1;
+                    cdma_axilm_awvalid <= ~write_addr_done;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_SRC_ADDR_MSB_OFFSET;
-                    cdma_axilm_wvalid  <= 1;
+                    cdma_axilm_wvalid  <= ~write_data_done;
                     cdma_axilm_wdata   <= cdma_src_addr_msb_reg;
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
                 CDMA_WRITE_SRC_LSB: begin
-                    cdma_axilm_awvalid <= 1;
+                    cdma_axilm_awvalid <= ~write_addr_done;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_SRC_ADDR_LSB_OFFSET;
-                    cdma_axilm_wvalid  <= 1;
+                    cdma_axilm_wvalid  <= ~write_data_done;
                     cdma_axilm_wdata   <= cdma_src_addr_lsb_reg;
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
                 CDMA_WRITE_DST_MSB: begin
-                    cdma_axilm_awvalid <= 1;
+                    cdma_axilm_awvalid <= ~write_addr_done;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_DST_ADDR_MSB_OFFSET;
-                    cdma_axilm_wvalid  <= 1;
+                    cdma_axilm_wvalid  <= ~write_data_done;
                     cdma_axilm_wdata   <= cdma_dst_addr_msb_reg;
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
                 CDMA_WRITE_DST_LSB: begin
-                    cdma_axilm_awvalid <= 1;
+                    cdma_axilm_awvalid <= ~write_addr_done;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_DST_ADDR_LSB_OFFSET;
-                    cdma_axilm_wvalid  <= 1;
+                    cdma_axilm_wvalid  <= ~write_data_done;
                     cdma_axilm_wdata   <= cdma_dst_addr_lsb_reg;
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
                 end
                 CDMA_WRITE_LEN: begin
-                    cdma_axilm_awvalid <= 1;
+                    cdma_axilm_awvalid <= ~write_addr_done;
                     cdma_axilm_awaddr  <= CDMA_BASE_ADDR + CDMA_LEN_OFFSET;
-                    cdma_axilm_wvalid  <= 1;
+                    cdma_axilm_wvalid  <= ~write_data_done;
                     cdma_axilm_wdata   <= cdma_length_reg;
                     cdma_axilm_wstrb   <= {C_CDMA_AXILM_DATA_WIDTH/8{1'b1}};
                     cdma_axilm_bready  <= 1;
