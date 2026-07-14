@@ -60,8 +60,11 @@ module memory#(
 	);
 
 	// Pipeline register: break BRAM rdata → ppCache critical path (WNS fix)
+	// MAX_FANOUT=16: CYCLE=64 × 2 cacheMemN = fo=128 per bit, spans SLR0→SLR2.
+	// Synthesis tool replicates mid_data_q up to ceil(128/16)=8 copies,
+	// each placed near its cacheMem entries, eliminating cross-SLR long nets.
 	wire pip_valid, pip_ready;
-	reg [WD-1: 0] mid_data_q;
+	(* shreg_extract = "no" *) (* MAX_FANOUT = 16 *) reg [WD-1: 0] mid_data_q;
 
 	pipe_stage u_mid_pipe_stage(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
