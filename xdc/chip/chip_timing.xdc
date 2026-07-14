@@ -112,6 +112,18 @@ if {[llength $_dcim_cfg_regs]} { set_property MAX_FANOUT 16 $_dcim_cfg_regs }
 set _dqa_gs [get_cells -quiet -hierarchical -filter {NAME =~ *dqa_inst/dqa_scale_bias_group_sel_reg*}]
 if {[llength $_dqa_gs]} { set_property MAX_FANOUT 64 $_dqa_gs }
 
+# mid_data_q_reg 高扇出寄存器复制（3d400ea WNS=0.000ns 根因）
+# Source: gen_tiles[0].u_tile/u_dcim/u_memory/mid_data_q_reg（SLR0/Y≈489, fo=128）
+# Dest:   同 Tile u_ppCache/u_cacheMem0/r_mem_reg（SLR2/Y≈708，跨 SLR[0->2]）
+# route delay=4.058ns (98%), 纯连线延迟，无法靠逻辑优化解决
+# MAX_FANOUT=16 迫使 Vivado 在 ppCache 各 cacheMem 附近就地复制 mid_data_q_reg，
+# 消除跨 SLR 长距离 net，目标使 WNS 从 0.000ns 提升至 ≥0.3ns
+set _mid_data_q [get_cells -quiet -hierarchical -filter {NAME =~ */u_memory/mid_data_q_reg*}]
+if {[llength $_mid_data_q]} {
+    set_property MAX_FANOUT 16 $_mid_data_q
+    puts "INFO: mid_data_q_reg MAX_FANOUT=16: [llength $_mid_data_q] cells"
+}
+
 # ############################################################################
 # Section 6: Pblock / SLR 分配
 # ############################################################################
