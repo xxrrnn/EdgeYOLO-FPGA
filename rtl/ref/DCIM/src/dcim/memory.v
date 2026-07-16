@@ -59,12 +59,10 @@ module memory#(
 		.dn_valid(mid_valid),	.dn_ready(mid_ready)
 	);
 
-	// Pipeline register: break BRAM rdata → ppCache critical path (WNS fix)
-	// MAX_FANOUT=16: CYCLE=64 × 2 cacheMemN = fo=128 per bit, spans SLR0→SLR2.
-	// Synthesis tool replicates mid_data_q up to ceil(128/16)=8 copies,
-	// each placed near its cacheMem entries, eliminating cross-SLR long nets.
+	// Stage 1: capture BRAM rdata, placed near BRAM.
+	// Fanout is now 1 per bit (only drives pip_data_q), so no MAX_FANOUT needed here.
 	wire pip_valid, pip_ready;
-	(* shreg_extract = "no" *) (* MAX_FANOUT = 16 *) reg [WD-1: 0] mid_data_q;
+	(* shreg_extract = "no" *) reg [WD-1: 0] mid_data_q;
 
 	pipe_stage u_mid_pipe_stage(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
@@ -81,10 +79,31 @@ module memory#(
 			mid_data_q <= mid_data;
 	end
 
+	// Stage 2: broadcast register placed near ppCache (breaks mid_data_q→r_mem critical path).
+	// MAX_FANOUT=16: Vivado replicates pip_data_q near each cacheMem region,
+	// splitting fo=128 into 8 local copies (each fo=16), eliminating long-distance routing.
+	wire pip2_valid, pip2_ready;
+	(* shreg_extract = "no" *) (* MAX_FANOUT = 16 *) reg [WD-1: 0] pip_data_q;
+
+	pipe_stage u_pip_pipe_stage(
+		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
+		.up_valid(pip_valid),	.up_ready(pip_ready),
+		.dn_valid(pip2_valid),	.dn_ready(pip2_ready)
+	);
+
+	always @(posedge clk or negedge rstn) begin
+		if (!rstn)
+			pip_data_q <= {WD{1'b0}};
+		else if (clr)
+			pip_data_q <= {WD{1'b0}};
+		else if (pip_valid & pip_ready)
+			pip_data_q <= mid_data_q;
+	end
+
 	ppCache#(.CH_IN(CH_IN), .CH_OUT(CH_OUT), .WD1(WD1), .CYCLE(CYCLE)) u_ppCache(
 		.clk(clk), .rstn(rstn), .clr(clr), .ena(ena),
 		.swap(swap),
-		.up_valid(pip_valid), .up_ready(pip_ready), .up_data(mid_data_q),
+		.up_valid(pip2_valid), .up_ready(pip2_ready), .up_data(pip_data_q),
 		.dn_valid(dn_valid),  .dn_data(dn_data)
 	);
 
