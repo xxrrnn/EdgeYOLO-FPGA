@@ -49,12 +49,15 @@ class DetectHead:
         net_json = wdir.parent / 'network.json'
         if net_json.exists():
             net_cfg = json.load(open(str(net_json)))
+            self.num_classes = int(net_cfg.get("num_classes", NUM_CLASSES))
             layers_dict = {l["name"]: l for l in net_cfg.get("layers", [])}
             feed_layers = ["model.17.cv3.conv", "model.20.cv3.conv", "model.23.cv3.conv"]
             # Each scale corresponds to P3, P4, P5 respectively
             det_scales = [layers_dict[l]["act_scale"] for l in feed_layers if l in layers_dict]
         else:
+            self.num_classes = NUM_CLASSES
             det_scales = []
+        self.out_channels = NUM_ANCHORS * (self.num_classes + 5)
 
         # Fallback default (INT8 QONNX scale for yolov5n)
         default_scale = 0.07814328372478485
@@ -67,8 +70,8 @@ class DetectHead:
             act_scale = det_scales[i] if i < len(det_scales) else default_scale
             if 'weight_fp32' in npz:
                 self.convs.append({
-                    'weight_fp32': npz['weight_fp32'],   # (24, Cin, 1, 1)
-                    'bias': npz['bias'],                 # (24,)
+                    'weight_fp32': npz['weight_fp32'],   # (out_channels, Cin, 1, 1)
+                    'bias': npz['bias'],                 # (out_channels,)
                     'act_scale': act_scale,
                 })
             else:
@@ -83,22 +86,22 @@ class DetectHead:
         """1×1 Conv (FP32 weights) on INT8 input → FP32 output.
 
         feat_int8: (H, W, Cin) INT8
-        Returns: (H, W, 24) FP32
+        Returns: (H, W, out_channels) FP32
         """
         h, w, cin = feat_int8.shape
         c = self.convs[conv_idx]
-        weight = c['weight_fp32']  # (24, Cin, 1, 1) FP32
-        bias = c['bias']           # (24,) FP32
+        weight = c['weight_fp32']  # (out_channels, Cin, 1, 1) FP32
+        bias = c['bias']           # (out_channels,) FP32
         act_scale = c['act_scale']
 
         # Dequantize input: FP32 = INT8 * act_scale
         # act_scale is the QONNX scale (0.07814), NOT hard_quant_scale (0.007874)
         feat_fp32 = feat_int8.reshape(-1, cin).astype(np.float32) * act_scale  # (H*W, Cin)
-        w_flat = weight.reshape(24, cin).astype(np.float32)  # (24, Cin)
+        w_flat = weight.reshape(self.out_channels, cin).astype(np.float32)
 
         # FP32 matmul
         out_fp32 = feat_fp32 @ w_flat.T + bias[None, :]  # (H*W, 24)
-        return out_fp32.reshape(h, w, 24)
+        return out_fp32.reshape(h, w, self.out_channels)
 
     def forward(self, feat_p3: np.ndarray, feat_p4: np.ndarray, feat_p5: np.ndarray) -> List[np.ndarray]:
         """Run detection head on 3 feature maps.
@@ -112,9 +115,9 @@ class DetectHead:
         feats = [feat_p3, feat_p4, feat_p5]
         preds = []
         for i, feat in enumerate(feats):
-            raw = self._conv1x1_dqa(feat, i)  # (H, W, 24)
+            raw = self._conv1x1_dqa(feat, i)  # (H, W, out_channels)
             h, w, _ = raw.shape
-            pred = raw.reshape(h, w, NUM_ANCHORS, NUM_CLASSES + 5)
+            pred = raw.reshape(h, w, NUM_ANCHORS, self.num_classes + 5)
             preds.append(pred)
         return preds
 
@@ -156,7 +159,7 @@ class DetectHead:
                 x1y1.reshape(n, 2),
                 x2y2.reshape(n, 2),
                 obj.reshape(n, 1),
-                cls.reshape(n, NUM_CLASSES),
+                cls.reshape(n, self.num_classes),
             ], axis=-1)  # (n, 4+1+nc)
             all_boxes.append(boxes)
 
@@ -195,7 +198,7 @@ class DetectHead:
         # NMS per class
         boxes = candidates[:, :4]
         results = []
-        for cls_id in range(NUM_CLASSES):
+        for cls_id in range(self.num_classes):
             cls_mask = class_ids == cls_id
             if not cls_mask.any():
                 continue
