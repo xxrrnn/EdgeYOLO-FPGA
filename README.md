@@ -24,6 +24,119 @@
 
 ## 当前里程碑
 
+### 2026-07-17 COCO/original YOLOv5n export separated from infrared YOLO
+
+- 原 infrared YOLO 继续使用默认目录和命令：
+  - model: `model/yolov5n/parsed`
+  - build: `output/compile_yolo_int8_full_eff` / `output/compile_yolo_int16_full_eff`
+  - command: `python run.py --one-shot --network yolo --yolo-precision int8 --one-shot-poll-timeout-s 300`
+- 新 COCO/original YOLO export 独立放置，不覆盖 infrared：
+  - source: `model/yolov5n_coco50k_qat/int8|int16/{best.pt,best.onnx,best.quant.onnx}`
+  - parsed: `model/yolov5n_coco50k_qat/parsed_int8` / `parsed_int16`
+  - build: `output/compile_yolo_coco50k_int8_full` / `output/compile_yolo_coco50k_int16_full`
+  - sample: `model/yolov5n_coco50k_qat/template/000000000139.jpg`
+- COCO INT8 one-shot FPGA 已通过：
+  - command: `python run.py --one-shot --network yolo --yolo-precision int8 --one-shot-build-dir output\compile_yolo_coco50k_int8_full --one-shot-yolo-parsed-dir model\yolov5n_coco50k_qat\parsed_int8 --one-shot-yolo-expect-detections -1 --yolo-img model\yolov5n_coco50k_qat\template\000000000139.jpg --out-dir output\inference\yolov5n_coco50k_qat\int8_fpga --conf 0.25 --iou 0.45 --one-shot-poll-timeout-s 300`
+  - data compare: `PAN_P3/P4/P5 max_abs <= 1.90735e-06`
+  - host detect head: 3 COCO detections at 320 input, `chair/chair/tv`
+  - timing: total `2.629s`，execute `2.132s`
+  - result image: `output/inference/yolov5n_coco50k_qat/int8_fpga/yolo/one_shot_int8/000000000139_yolo_int8_fpga_oneshot.jpg`
+- COCO true INT16 one-shot 目前未通过 data-level：
+  - command: same as INT8 but using `--yolo-precision int16`, `output\compile_yolo_coco50k_int16_full`, and `parsed_int16`
+  - FPGA executes and returns DONE, timing total `3.039s`，execute `2.546s`
+  - compare still fails (`PAN max_abs` about `14-19`) and host head returns 0 detections
+  - L1-only probe also fails (`max_abs` about `21.6`), so blocker is in base true-INT16 DCIM/DQA path, not in network scheduling.
+  - root cause narrowed to DQA reading only 16 bits from INT16 DCIM output while `DCIM_Tile` writes 32-bit accumulators. `rtl/vpu/dqa_relu_unit.sv` now treats non-`DQA_ACT` INT16 DCIM output as 32-bit accumulator; this RTL needs resynthesis before COCO true INT16 can be re-tested on FPGA.
+  - software alignment update: INT16 compiler `pack_layer_weights_int16()` now matches `golden_module_tb.pack_weight_tile_int16()` for all 57 COCO conv layers (`3,522,560` bytes, 0 mismatch). Module golden no longer models a fake `dqa_accum16` path; INT16 packed activation is represented only by `DQA_ACT`, while DCIM INT16 accumulator input remains INT32.
+
+### 2026-07-17 Full one-shot YOLO/ResNet INT8/INT16 PASS on new bitstream
+
+- 新 bitstream 基础稳定性通过：
+  - `status_read`: 10/10 pass。
+  - host 小块 HBM/INST/WB 写读：60/60 pass。
+  - CDMA `HBM->WB` 与 `WB->HBM` 双向小块搬运：20/20 pass。
+- YOLO INT8 one-shot full 通过：
+  - build: `output/compile_yolo_int8_full_eff`
+  - output: `output/inference/yolo/one_shot_int8/`
+  - feature compare: `PAN_P3/P4/P5 max_abs <= 9.53674e-07`
+  - host detect head: 1 detection，bbox `[113.7, 64.6, 178.1, 237.4]`，conf `0.8108`
+  - timing: total `2.495s`，execute `2.121s`
+- ResNet INT8 one-shot full 通过：
+  - build: `output/compile_resnet_vai_full_qdq_fixscale`
+  - output: `output/inference/resnet/one_shot_int8/`
+  - feature compare: `max_abs=0`
+  - host FC/top-k: Top-1 `goldfish(class 1)`
+  - timing: total `2.799s`，execute `2.375s`
+- YOLO INT16 one-shot full 通过：
+  - build: `output/compile_yolo_int16_full_eff`
+  - output: `output/inference/yolo/one_shot_int16/`
+  - feature compare: `PAN_P3/P4/P5 max_abs <= 9.53674e-07`
+  - host detect head: 1 detection，bbox `[111.5, 56.5, 185.1, 242.5]`，conf `0.7381`
+  - timing: total `3.022s`，execute `2.567s`
+- ResNet INT16 one-shot full 通过：
+  - build: `output/compile_resnet_int16_full_qdq_fixscale`
+  - output: `output/inference/resnet/one_shot_int16/`
+  - feature compare: `max_abs=0`
+  - host FC/top-k: Top-1 `goldfish(class 1)`
+  - timing: total `7.214s`，execute `4.070s`
+- 本轮 compiler root cause：
+  - ResNet downsample/conv 的 QA scale 不能固定使用本层 `act_scale`；必须使用实际输入 activation 的 scale。`layer2.0.downsample.0.Conv` 输入来自 `layer1.1.Add` scale `0.03125`，而该 downsample 自身 `act_scale=0.015625`，旧 lowering 因此把 residual 分支重缩放错。
+  - ResNet one-shot conv 输出现在显式插入 `QA -> DQA_ACT`，stem maxpool 和 residual add 后也保持 VAI 量化边界，和旧 E2E oracle 对齐。
+  - `compare_one_shot.py` 已同步 ResNet golden 语义，避免 FPGA 和错误 compiler golden 自洽但 host Top-1 错误。
+- `run.py` 已新增统一 full one-shot 入口，默认最终推理输出统一写到 `output/inference/`；以下命令会按顺序运行 YOLO INT8/INT16 + ResNet INT8/INT16、做 data-level compare、跑允许的 host head，并输出 timing/json/result image：
+  - `python run.py --one-shot --network all --yolo-precision both --resnet-precision both --one-shot-poll-timeout-s 300`
+  - 已上板验证通过，四个 workload 合计 FPGA runner total `15.530s`。
+- 四条单独运行命令：
+  - YOLO INT8: `python run.py --one-shot --network yolo --yolo-precision int8 --one-shot-poll-timeout-s 300`
+  - YOLO INT16: `python run.py --one-shot --network yolo --yolo-precision int16 --one-shot-poll-timeout-s 300`
+  - ResNet INT8: `python run.py --one-shot --network resnet --resnet-precision vai --one-shot-poll-timeout-s 300`
+  - ResNet INT16: `python run.py --one-shot --network resnet --resnet-precision int16 --one-shot-poll-timeout-s 300`
+  - 每条命令都会打印数字结果，保存 `*.json`、`*_timing.json`，并生成可查看的结果图片 `*.jpg`。
+- 历史 probe/debug/check 输出不作为最终结果保存；如需临时调试，请显式传 `--out-dir output\probes\<name>`，最终 demo/inference 保持使用默认 `output/inference/`。
+- 当前四个 full one-shot workload 已经低于 1 分钟目标，也低于 30s 目标；后续优化重点从 correctness 转向减少 segmented program upload、压缩 ResNet INT16 execute time、整理 runtime/compiler 代码。
+
+### 2026-07-13 ResNet residual QDQ root cause and RTL/compiler fix
+
+- YOLO INT8 one-shot 复测通过：`python run.py --one-shot-yolo-int8 --yolo-img test_yolo.jpg --out-dir output --conf 0.25 --iou 0.45`
+  - FPGA timing: total `2.532s`，execute `2.120s`
+  - PAN feature compare: `max_abs <= 9.53674e-07`
+  - host detect head: 1 detection，conf `0.810775`，class_id `0`
+- ResNet INT8 full one-shot 当前旧 bitstream 可稳定 DONE，但 Top-1 错误：
+  - artifact: `output/compile_resnet_vai_full_finalqa`
+  - timing: total `2.525s`，execute `2.089s`
+  - host head Top-1 为 `lighter(626)`，不是 `goldfish(1)`
+- Root cause：one-shot ResNet residual Add 只做 `FP32 add + ReLU`，缺少旧 E2E/numpy oracle 中每个 BasicBlock 后的 `round/clip` 量化边界。只在最后加 final QA 不能修复分类，因为后续 block 的 skip path 已经使用了未量化的 FP32 residual。
+- 已实现最小 RTL/compiler 修复：
+  - `dqa_relu_unit.sv` 新增 `dqa_act_mode`，支持从 QA packed INT8/INT16 activation 读入并 sign-extend，再复用原 DQA int32->FP32 + scale/bias 路径。
+  - `Global_VPU.v` 新增 `VPU_FLAG_DQA_ACT=2` 并传给 DQA；旧 DCIM accumulator DQA 路径不置该 flag，行为保持不变。
+  - ResNet full lowering 在 8 个 residual Add 后插入 `AD -> QA -> DQA(act_mode)`，输出仍为 FP32，最后 host boundary 继续 final QA 成 INT8/INT16。
+  - `wb_packer.py` 新增 `qdq` WB section；`parsed_vai_int16_widened` 缺失 `add_output_scales.json` 时复用 sibling `parsed_vai` 的 add scales。
+- 新 artifact 已生成但需要包含上述 RTL 的新 bitstream 才能上板：
+  - `output/compile_resnet_vai_full_qdq`: 20/20 conv，`program.bin` 68,968B，`weights.bin` 11,169,792B，`wb.bin` 54,224B。
+  - `output/compile_resnet_int16_full_qdq`: 20/20 conv，2 segments，`program.bin` 209,836B，`weights.bin` 22,339,584B，`wb.bin` 54,224B。
+- 本机 Codex 环境看不到用户 WSL distro，Verilator 需在用户 shell 运行：
+  - `wsl -d Ubuntu-22.04 -- bash -lc "cd /mnt/g/PKU/Task/Yolo_on_FPGA/EdgeYOLO-FPGA && verilator --lint-only -sv -Wall -Wno-fatal -Irtl/chip -Irtl/vpu rtl/vpu/dqa_relu_unit.sv rtl/vpu/Global_VPU.v"`
+
+### 2026-07-08 YOLO INT8 full one-shot data-level PASS
+
+- 当前 bitstream/FPGA 健康，使用 `--soft-reset-decoder` 连续跑 progressive gate 未再要求整板 reset。
+- YOLO INT8 one-shot 已跑通 full backbone/FPN/PAN，host 边界只剩 detect head 和 postprocess/NMS：
+  - build: `output/compile_yolo_int8_full_concat_persist_check`
+  - output: `output/yolo_int8_full_concat_persist_outputs/{PAN_P3,PAN_P4,PAN_P5}.bin`
+  - FPGA timing: total `2.427s`，execute `2.121s`，weights upload `0.030s`，WB upload `0.022s`，input upload `0.022s`，program upload `0.022s`，readback `0.085s`
+  - data compare:
+    - primary/PAN_P5 `max_abs=4.76837e-07`
+    - PAN_P3 `max_abs=9.53674e-07`
+    - PAN_P4 `max_abs=9.53674e-07`
+  - host detect head gate: 1 detection，conf `0.810775`，class_id `0`
+- 本轮修复的 compiler root cause：
+  - `OP_CDMA_STRIDE` concat 仍保留 64B chunk，避免当前 CDMA stride 128B same-memory path 卡死。
+  - weight packer 不再固定只打包 8 个硬件 tile；按 `expected_tiles` 打包 INT8/INT16 权重，支持 `Cout > 128` 的 output-channel multi-pass。
+  - multi-pass 后续 pass 的 im2col 现在复用第一 pass 的 QA scratch，不再误读 FP32 input。
+  - concat 后紧跟 save 的 tensor 现在写入 persistent skip buffer，避免 C3 主分支中间输出覆盖旁路输入。
+- 已通过 progressive checkpoints：L26、L28、L32、L38、L40、L48、full。
+- 下一步：复测 YOLO INT16 full，随后复测 ResNet VAI/INT16 full；若 INT16 或 ResNet 后段仍错，继续用同样的 staged data gate 定位，暂不需要重新综合 RTL。
+
 ### 2026-07-07 one-shot progressive 修复进展
 
 - YOLO INT8 one-shot L2/L3/L4/L5/L6 已在当前 FPGA 上通过 data-level compare：
@@ -36,6 +149,7 @@
 - 已定位 `OP_CDMA_STRIDE` RTL/codegen 地址格式 bug：旧 RTL 在 stride CDMA issue 时把 `src_msb/dst_msb` 固定为 0，而 VPU_BUF/OBUF 物理地址位于 `0x1_0200_0000`，必须使用 64-bit 地址。普通 `OP_CDMA_COPY` 已经发送 MSB+LSB，所以卷积路径正常，concat stride 路径异常。
 - 已做最小 RTL+compiler 修复：`OP_CDMA_STRIDE` 指令体改为 8 word，包含 `src_msb/src_lsb/dst_msb/dst_lsb/copy_bytes/src_stride/dst_stride/count`；`INST_Decoder` 发送 stride CDMA 时使用这两个 MSB，soft reset 也清理 stride 状态。
 - 该 RTL 修复需要重新综合/生成 bitstream 后才能验证 L7/L8 及后续 full YOLO。当前旧 bitstream 仍可继续验证无 concat 的 L1-L6，但不能用于新的 concat stride program。
+- 2026-07-07 复测新 bitstream 后，L5/L6 concat 输入分支仍逐层对齐，但截断到第一处 concat 的 probe 读回仍是旧 input/垃圾；进一步检查 RTL 发现 `S_CDMA_STRIDE_WAIT` 只等到 CDMA 接收配置的 ready，未像 `OP_CDMA_COPY` 一样等待 CDMA 传输完成后再进入下一 stride。已在 `INST_Decoder` 增加 `S_CDMA_STRIDE_DONE`，并修正 `INST_COUNT=0` soft reset 不再 latch start pulse。该修复需要重新综合后再验证 L7/L8。
 
 ### 2026-07-07 新 bitstream one-shot 功能复测
 
@@ -632,6 +746,45 @@ ibuf → im2col(VPU) → DCIM maArray(DSP) → accumulateArray → postProcess(D
 
 本节记录了 chip-v3 综合实现过程中遇到的主要 timing 问题及解决方案，
 供后续 build 参考。
+
+### 10.0 当前 Vivado build 策略
+
+一次 build 只使用一个唯一输出根目录：`build/lite/<tag>/`。`<tag>` 默认是
+当前 git short SHA；不要再把 log、bitstream 或 summary 分散到顶层 `logs/`
+或 `artifacts/`。
+
+推荐在远程 tmux 中执行：
+
+```bash
+cd /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-eff
+git checkout eff
+git pull --ff-only origin eff
+
+TAG=$(git rev-parse --short HEAD)
+make synth-to-opt TAG=$TAG SYNTH_JOBS=128 VIVADO_THREADS=32
+make impl-race TAG=$TAG IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 RACE_STOP_ON_WIN=1
+```
+
+所有结果都在 `build/lite/<tag>/` 下：
+
+| 路径 | 内容 |
+|------|------|
+| `logs/` | Vivado batch log、journal、每个 race worker stdout |
+| `SynOutputDir/` | synthesis checkpoint/report |
+| `ImplOutputDir/` | opt/place/route checkpoint/report；`race/` 下是每个策略的独立实现目录 |
+| `bitstreams/` | 每个 timing-clean attempt 单独复制出的 `.bit/.bin` |
+| `summary/impl_race_summary.md` | 人读报告：每个 attempt/bitstream 的 WNS/TNS/WHS/THS/失败端点 |
+| `summary/impl_race_summary.tsv` | 机器可读总表，便于排序或归档 |
+
+如果希望比较全部 8 个策略而不是第一个成功就停：
+
+```bash
+make impl-race TAG=$TAG IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 RACE_STOP_ON_WIN=0
+```
+
+Vivado 2024.2.2 单进程 `general.maxThreads` 上限为 32。当前推荐是 8 个
+implementation worker 并行、每个 worker 的 place/route 使用 16 threads；
+如果服务器内存和 license 都稳定，再尝试 `RACE_PLACE_THREADS=32 RACE_ROUTE_THREADS=32`。
 
 ### 10.1 XPM 全面改造（URAM 替换）
 

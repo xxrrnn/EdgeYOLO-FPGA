@@ -9,8 +9,7 @@
 #   make resume TAG=260612_2210 FROM=place   # 从 checkpoint 续跑
 #   make bd TAG=my_exp                # 只跑 1_build + 2_bd（生成 IP DCP）
 #
-# 日志位置：logs/<tag>_vivado_<mode>.log
-# 产物位置：build/lite/<tag>/SynOutputDir/  build/lite/<tag>/ImplOutputDir/
+# 产物位置：build/lite/<tag>/，其中包含 logs/、SynOutputDir/、ImplOutputDir/、bitstreams/、summary/
 # ==============================================================================
 
 VIVADO     ?= vivado
@@ -35,7 +34,7 @@ TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%y%m%d_%H%M)
 _TAG_ENV = BUILD_TAG=$(TAG) VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(PLACE_THREADS) ROUTE_THREADS=$(ROUTE_THREADS) SYNTH_JOBS=$(SYNTH_JOBS)
 
 _BUILD_DIR  = build/lite/$(TAG)
-_LOG_DIR    = logs
+_LOG_DIR    = $(_BUILD_DIR)/logs
 _LOG_PRJ    = $(_LOG_DIR)/$(TAG)_vivado_project.log
 _LOG_NP     = $(_LOG_DIR)/$(TAG)_vivado_nonproj.log
 _LOG_BD     = $(_LOG_DIR)/$(TAG)_vivado_bd.log
@@ -117,7 +116,7 @@ endif
 # impl-race: 从 post_opt.dcp 并行跑多个 place/route 策略，最快拿到 timing-clean bitstream
 # ------------------------------------------------------------------------------
 impl-race:
-	@mkdir -p $(_BUILD_DIR) $(_LOG_DIR) artifacts/bitstreams
+	@mkdir -p $(_BUILD_DIR) $(_LOG_DIR)
 	@echo "[Makefile] Impl race | tag=$(TAG) | jobs=$(IMPL_JOBS) | place=$(RACE_PLACE_THREADS) route=$(RACE_ROUTE_THREADS)"
 	cd $(CURDIR) && TAG=$(TAG) VIVADO=$(VIVADO) \
 	  VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(RACE_PLACE_THREADS) ROUTE_THREADS=$(RACE_ROUTE_THREADS) \
@@ -148,6 +147,11 @@ help:
 	@echo "  make synth VIVADO_THREADS=32 PLACE_THREADS=8 ROUTE_THREADS=32 SYNTH_JOBS=128"
 	@echo "      Vivado 单进程线程上限通常为 32；SYNTH_JOBS 用于 OOC/IP 并行"
 	@echo ""
-	@echo "默认 TAG: git short sha；日志: logs/<tag>_vivado_<mode>.log"
-	@echo "产物: build/lite/<tag>/SynOutputDir/  ImplOutputDir/"
+	@echo "默认 TAG: git short sha"
+	@echo "唯一产物根目录: build/lite/<tag>/"
+	@echo "  logs/         Vivado logs and journals"
+	@echo "  SynOutputDir/ synthesis checkpoints/reports"
+	@echo "  ImplOutputDir implementation checkpoints/reports/race attempts"
+	@echo "  bitstreams/   timing-clean bitstreams copied from successful attempts"
+	@echo "  summary/      impl-race TSV/Markdown summary"
 	@echo ""

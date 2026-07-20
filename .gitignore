@@ -104,12 +104,6 @@ bd/
 rtl/chip/build/
 scripts/chip-lite/tmp/
 
-# Local bitstream copies: keep only the manifest/README in git.
-!artifacts/
-!artifacts/bitstreams/
-artifacts/bitstreams/**
-!artifacts/bitstreams/README.md
-
 # ==============================================================================
 # Runtime outputs and temporary probes
 # ==============================================================================

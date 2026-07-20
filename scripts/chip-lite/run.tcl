@@ -34,13 +34,12 @@
 # ==============================================================================
 # 每次 run 的产物位于独立子目录 build/lite/<tag>/，BD 也在其中，完全隔离。
 #
-#   # 自动时间戳（无需指定，每次唯一，默认行为）
-#   vivado -mode batch -source scripts/chip-lite/run.tcl > logs/run1.log 2>&1 &
-#   vivado -mode batch -source scripts/chip-lite/run.tcl > logs/run2.log 2>&1 &
+#   # 推荐入口：Makefile 会把 Vivado log 放进 build/lite/<tag>/logs/
+#   make synth TAG=$(git rev-parse --short HEAD)
 #
 #   # 自定义 tag（方便区分实验，两个进程并行）
-#   BUILD_TAG=aggressive vivado -mode batch -source scripts/chip-lite/run.tcl > logs/agg.log 2>&1 &
-#   BUILD_TAG=default    vivado -mode batch -source scripts/chip-lite/run.tcl > logs/def.log 2>&1 &
+#   make synth TAG=aggressive
+#   make synth TAG=default
 #
 # ==============================================================================
 # 断点恢复（通过环境变量 RESUME_FROM 指定从哪个 checkpoint 继续）

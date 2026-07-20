@@ -16,10 +16,12 @@ vivado_threads="${VIVADO_THREADS:-32}"
 synth_jobs="${SYNTH_JOBS:-128}"
 
 impl_dir="$repo_root/build/lite/$tag/ImplOutputDir"
+build_dir="$repo_root/build/lite/$tag"
 source_dcp="$impl_dir/post_opt.dcp"
 race_root="$impl_dir/race"
-log_dir="$repo_root/logs"
-artifact_dir="$repo_root/artifacts/bitstreams"
+log_dir="$build_dir/logs"
+bitstream_dir="$build_dir/bitstreams"
+summary_dir="$build_dir/summary"
 
 if [[ ! -f "$source_dcp" ]]; then
   echo "ERROR: missing post_opt checkpoint: $source_dcp" >&2
@@ -27,7 +29,7 @@ if [[ ! -f "$source_dcp" ]]; then
   exit 1
 fi
 
-mkdir -p "$race_root" "$log_dir" "$artifact_dir"
+mkdir -p "$race_root" "$log_dir" "$bitstream_dir" "$summary_dir"
 
 strategies=(
   "ExtraTimingOpt|AggressiveExplore|NoTimingRelaxation"
@@ -70,25 +72,29 @@ launch_attempt() {
   local stdout_log="$log_dir/${tag}_race_${idx}.stdout.log"
   local vivado_log="$log_dir/${tag}_race_${idx}.vivado.log"
   local journal="$log_dir/${tag}_race_${idx}.jou"
+  local env_cmd=(
+    env
+    "BUILD_TAG=$tag"
+    "SOURCE_DCP=$source_dcp"
+    "RACE_ROOT=$race_root"
+    "IMPL_ATTEMPT=$attempt"
+    "PLACE_DIRECTIVE=$place"
+    "PHYS_OPT_DIRECTIVE=$phys"
+    "ROUTE_DIRECTIVE=$route"
+    "VIVADO_THREADS=$vivado_threads"
+    "PLACE_THREADS=$place_threads"
+    "ROUTE_THREADS=$route_threads"
+    "SYNTH_JOBS=$synth_jobs"
+    "$vivado_bin"
+    -mode batch
+    -source "$repo_root/scripts/chip-lite/impl_race_worker.tcl"
+    -journal "$journal"
+    -log "$vivado_log"
+  )
 
   mkdir -p "$attempt_dir"
   echo "[impl-race] launch $attempt"
-  setsid bash -c "exec env \
-    BUILD_TAG='$tag' \
-    SOURCE_DCP='$source_dcp' \
-    RACE_ROOT='$race_root' \
-    IMPL_ATTEMPT='$attempt' \
-    PLACE_DIRECTIVE='$place' \
-    PHYS_OPT_DIRECTIVE='$phys' \
-    ROUTE_DIRECTIVE='$route' \
-    VIVADO_THREADS='$vivado_threads' \
-    PLACE_THREADS='$place_threads' \
-    ROUTE_THREADS='$route_threads' \
-    SYNTH_JOBS='$synth_jobs' \
-    '$vivado_bin' -mode batch \
-      -source '$repo_root/scripts/chip-lite/impl_race_worker.tcl' \
-      -journal '$journal' \
-      -log '$vivado_log'" >"$stdout_log" 2>&1 &
+  setsid "${env_cmd[@]}" >"$stdout_log" 2>&1 &
 
   pids+=("$!")
   attempt_dirs+=("$attempt_dir")
@@ -114,50 +120,136 @@ find_success() {
   return 1
 }
 
-copy_winner() {
-  local winner_dir="$1"
-  local status_file="$winner_dir/status.txt"
-  local bit="$winner_dir/top.bit"
-  local bin="$winner_dir/top.bin"
+timing_summary_value() {
+  local report="$1"
+  local mode="$2"
+  local column="$3"
 
-  if [[ ! -f "$bit" ]]; then
-    echo "ERROR: winner has no bitstream: $bit" >&2
-    return 1
-  fi
-
-  cp -f "$bit" "$artifact_dir/${tag}.bit"
-  if [[ -f "$bin" ]]; then
-    cp -f "$bin" "$artifact_dir/${tag}.bin"
-  fi
-
-  local attempt place phys route wns whs
-  attempt="$(status_value "$status_file" ATTEMPT)"
-  place="$(status_value "$status_file" PLACE)"
-  phys="$(status_value "$status_file" PHYS_OPT)"
-  route="$(status_value "$status_file" ROUTE)"
-  wns="$(status_value "$status_file" POST_ROUTE_WNS)"
-  whs="$(status_value "$status_file" POST_ROUTE_WHS)"
-
-  cat >"$artifact_dir/${tag}.manifest.json" <<EOF_MANIFEST
-{
-  "tag": "$tag",
-  "source_commit": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
-  "vivado": "$("$vivado_bin" -version 2>/dev/null | head -1 | sed 's/"/\\"/g')",
-  "winner_attempt": "$attempt",
-  "place_directive": "$place",
-  "phys_opt_directive": "$phys",
-  "route_directive": "$route",
-  "place_threads": "$place_threads",
-  "route_threads": "$route_threads",
-  "post_route_wns": "$wns",
-  "post_route_whs": "$whs",
-  "remote_build_dir": "$impl_dir",
-  "bitstream": "$artifact_dir/${tag}.bit"
+  [[ -f "$report" ]] || return 0
+  awk -v mode="$mode" -v col="$column" '
+    function is_number(x) { return x ~ /^[-+]?[0-9]+([.][0-9]+)?$/ }
+    function emit_fields() {
+      n = 0
+      for (i = 1; i <= NF; i++) {
+        if (is_number($i)) {
+          n++
+          vals[n] = $i
+        }
+      }
+      if (n >= col) {
+        print vals[col]
+        exit
+      }
+    }
+    mode == "setup" && /WNS\(ns\)/ && /TNS\(ns\)/ { want = 1; next }
+    mode == "hold" && /WHS\(ns\)/ && /THS\(ns\)/ { want = 1; next }
+    want { emit_fields() }
+  ' "$report" 2>/dev/null || true
 }
-EOF_MANIFEST
 
-  echo "[impl-race] WINNER $attempt WNS=$wns WHS=$whs"
-  echo "[impl-race] artifact: $artifact_dir/${tag}.bit"
+copy_success_bitstreams() {
+  local dir status_file attempt bit bin out_base
+  for dir in "${attempt_dirs[@]}"; do
+    status_file="$dir/status.txt"
+    [[ -f "$status_file" ]] || continue
+    [[ "$(status_value "$status_file" STATUS)" == "SUCCESS" ]] || continue
+
+    attempt="$(status_value "$status_file" ATTEMPT)"
+    bit="$dir/top.bit"
+    bin="$dir/top.bin"
+    out_base="$bitstream_dir/${tag}_${attempt}"
+    if [[ -f "$bit" ]]; then
+      cp -f "$bit" "${out_base}.bit"
+    fi
+    if [[ -f "$bin" ]]; then
+      cp -f "$bin" "${out_base}.bin"
+    fi
+  done
+}
+
+write_summary() {
+  local tsv="$summary_dir/impl_race_summary.tsv"
+  local md="$summary_dir/impl_race_summary.md"
+  local dir status_file report attempt status detail place phys route
+  local pp_wns wns tns setup_fail whs ths hold_fail bitstream rel_bitstream
+  local success_count=0
+
+  copy_success_bitstreams
+
+  printf "attempt\tstatus\tplace\tphys_opt\troute\tpost_place_wns\tpost_route_wns\tpost_route_tns\tsetup_fail_endpoints\tpost_route_whs\tpost_route_ths\thold_fail_endpoints\tbitstream\tdetail\n" >"$tsv"
+
+  {
+    echo "# Impl Race Summary"
+    echo
+    echo "- tag: $tag"
+    echo "- source_commit: $(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    echo "- vivado: $("$vivado_bin" -version 2>/dev/null | head -1)"
+    echo "- build_dir: $build_dir"
+    echo "- jobs: $impl_jobs"
+    echo "- place_threads: $place_threads"
+    echo "- route_threads: $route_threads"
+    echo
+    echo "| Attempt | Status | Place | Phys Opt | Route | WNS | TNS | Setup Fail | WHS | THS | Hold Fail | Bitstream | Detail |"
+    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+  } >"$md"
+
+  for dir in "${attempt_dirs[@]}"; do
+    status_file="$dir/status.txt"
+    report="$dir/post_route_timing_summary.rpt"
+
+    if [[ -f "$status_file" ]]; then
+      attempt="$(status_value "$status_file" ATTEMPT)"
+      status="$(status_value "$status_file" STATUS)"
+      detail="$(status_value "$status_file" DETAIL)"
+      place="$(status_value "$status_file" PLACE)"
+      phys="$(status_value "$status_file" PHYS_OPT)"
+      route="$(status_value "$status_file" ROUTE)"
+      pp_wns="$(status_value "$status_file" POST_PLACE_WNS)"
+      wns="$(status_value "$status_file" POST_ROUTE_WNS)"
+      whs="$(status_value "$status_file" POST_ROUTE_WHS)"
+    else
+      attempt="$(basename "$dir")"
+      status="NO_STATUS"
+      detail="worker did not write status.txt"
+      place=""
+      phys=""
+      route=""
+      pp_wns=""
+      wns=""
+      whs=""
+    fi
+
+    tns="$(timing_summary_value "$report" setup 2)"
+    setup_fail="$(timing_summary_value "$report" setup 3)"
+    ths="$(timing_summary_value "$report" hold 2)"
+    hold_fail="$(timing_summary_value "$report" hold 3)"
+
+    bitstream=""
+    rel_bitstream=""
+    if [[ "$status" == "SUCCESS" ]]; then
+      rel_bitstream="bitstreams/${tag}_${attempt}.bit"
+      if [[ -f "$build_dir/$rel_bitstream" ]]; then
+        bitstream="$build_dir/$rel_bitstream"
+      else
+        rel_bitstream=""
+      fi
+      ((success_count += 1))
+    fi
+
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$attempt" "$status" "$place" "$phys" "$route" "$pp_wns" "$wns" "$tns" \
+      "$setup_fail" "$whs" "$ths" "$hold_fail" "$bitstream" "$detail" >>"$tsv"
+
+    printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n" \
+      "$attempt" "$status" "$place" "$phys" "$route" "${wns:-NA}" "${tns:-NA}" \
+      "${setup_fail:-NA}" "${whs:-NA}" "${ths:-NA}" "${hold_fail:-NA}" \
+      "${rel_bitstream:-}" "$detail" >>"$md"
+  done
+
+  echo "$success_count" >"$summary_dir/success_count.txt"
+  echo "[impl-race] summary: $md"
+  echo "[impl-race] summary TSV: $tsv"
+  return 0
 }
 
 terminate_workers() {
@@ -176,9 +268,15 @@ done
 if [[ "$stop_on_win" == "1" ]]; then
   while :; do
     if winner_dir="$(find_success)"; then
-      copy_winner "$winner_dir"
       terminate_workers
       for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+      write_summary
+      winner_status="$winner_dir/status.txt"
+      winner_attempt="$(status_value "$winner_status" ATTEMPT)"
+      winner_wns="$(status_value "$winner_status" POST_ROUTE_WNS)"
+      winner_whs="$(status_value "$winner_status" POST_ROUTE_WHS)"
+      echo "[impl-race] WINNER $winner_attempt WNS=$winner_wns WHS=$winner_whs"
+      echo "[impl-race] bitstream: $bitstream_dir/${tag}_${winner_attempt}.bit"
       exit 0
     fi
 
@@ -196,10 +294,17 @@ else
 fi
 
 if winner_dir="$(find_success)"; then
-  copy_winner "$winner_dir"
+  write_summary
+  winner_status="$winner_dir/status.txt"
+  winner_attempt="$(status_value "$winner_status" ATTEMPT)"
+  winner_wns="$(status_value "$winner_status" POST_ROUTE_WNS)"
+  winner_whs="$(status_value "$winner_status" POST_ROUTE_WHS)"
+  echo "[impl-race] WINNER $winner_attempt WNS=$winner_wns WHS=$winner_whs"
+  echo "[impl-race] bitstream: $bitstream_dir/${tag}_${winner_attempt}.bit"
   exit 0
 fi
 
+write_summary
 echo "[impl-race] no timing-clean winner"
 for dir in "${attempt_dirs[@]}"; do
   status_file="$dir/status.txt"
