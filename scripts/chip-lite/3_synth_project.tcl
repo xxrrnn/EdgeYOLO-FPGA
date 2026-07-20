@@ -155,7 +155,7 @@ set bestStrategy ""
 set timingMet 0
 
 for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_idx} {
-    set _strat [lindex $retryStrategies $_retry_idx]
+    set _strat     [lindex $retryStrategies $_retry_idx]
     set _placeDir  [lindex $_strat 0]
     set _physDir   [lindex $_strat 1]
     set _routeDir  [lindex $_strat 2]
@@ -177,9 +177,8 @@ for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_i
     # --- Place ---
     puts "\n---------- Place Design (attempt $_attempt) ----------"
     catch {set_param place.ILREnabled false}
-    set_param general.maxThreads 8
-    place_design -directive $_placeDir
     set_param general.maxThreads 32
+    place_design -directive $_placeDir
 
     set _placeDcp [file normalize "$ImplOutputDir/post_place_attempt${_attempt}.dcp"]
     write_checkpoint -force $_placeDcp

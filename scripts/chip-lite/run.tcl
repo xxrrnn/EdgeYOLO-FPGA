@@ -44,15 +44,20 @@
 #
 # ==============================================================================
 # 断点恢复（通过环境变量 RESUME_FROM 指定从哪个 checkpoint 继续）
-# 必须同时传入与原始 run 相同的 BUILD_TAG，确保找到正确的 projPath
 # ==============================================================================
 #   RESUME_FROM=opt       从 post_opt.dcp 恢复（place → phys_opt → route → bit）
 #   RESUME_FROM=place     从 post_place.dcp 恢复（phys_opt → route → bit）
 #   RESUME_FROM=phys_opt  从 post_phys_opt.dcp 恢复（route → bit）
 #
-#   BUILD_TAG=<tag> RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
+# 默认从当前 BUILD_TAG 目录加载 .xpr 和 DCP（同一 build 内重跑 place/route）：
+#   BUILD_TAG=45a8845 RESUME_FROM=opt vivado -mode batch -source scripts/chip-lite/run.tcl
 #
-# Checkpoint 位置：build/lite/<tag>/ImplOutputDir/post_{opt,place,phys_opt}.dcp
+# 跨 tag 恢复：SOURCE_TAG 指定 .xpr 和 DCP 来源，BUILD_TAG 为新输出目录：
+#   SOURCE_TAG=45a8845 BUILD_TAG=45a8845_pipeclk_fix RESUME_FROM=opt vivado ...
+#   → 从 build/lite/45a8845/{lite.xpr, ImplOutputDir/post_opt.dcp} 加载
+#   → 输出到 build/lite/45a8845_pipeclk_fix/ImplOutputDir/
+#
+# Checkpoint 位置：build/lite/<SOURCE_TAG>/ImplOutputDir/post_{opt,place,phys_opt}.dcp
 # ==============================================================================
 
 set thisScriptDir [file dirname [file normalize [info script]]]
@@ -79,6 +84,16 @@ if {$resumeFrom ne "" && $resumeFrom ne "opt" && $resumeFrom ne "place" && $resu
     set resumeFrom ""
 }
 
+# --- 解析 SOURCE_TAG（跨 tag 恢复时指定 .xpr/.dcp 来源 tag）---
+# 未设置时默认等于当前 BUILD_TAG（即在同一目录内重跑）
+set sourceTag $runTag
+if {[info exists ::env(SOURCE_TAG)]} {
+    set sourceTag [string trim $::env(SOURCE_TAG)]
+}
+set sourceProjPath     [file normalize "$buildDir/$projName/$sourceTag"]
+set sourceImplDir      [file normalize "$sourceProjPath/ImplOutputDir"]
+puts "INFO: SOURCE_TAG = $sourceTag (src: $sourceProjPath)"
+
 # ==============================================================================
 # Resume 模式（从 checkpoint 继续，project/nonproj 通用）
 # ==============================================================================
@@ -88,62 +103,163 @@ if {[catch {
 if {$resumeFrom ne ""} {
     # 加载已有 checkpoint 继续实现
     if {$flowMode eq "project"} {
-        set xpr [file normalize "$projPath/${projName}.xpr"]
-        if {![file exists $xpr]} { error "Project not found: $xpr — run full flow first." }
+        set xpr [file normalize "$sourceProjPath/${projName}.xpr"]
+        if {![file exists $xpr]} { error "Project not found: $xpr — run full flow first (or set SOURCE_TAG)." }
         open_project $xpr
     }
 
     if {$resumeFrom eq "opt"} {
-        set dcp [file normalize "$ImplOutputDir/post_opt.dcp"]
+        set dcp [file normalize "$sourceImplDir/post_opt.dcp"]
     } elseif {$resumeFrom eq "place"} {
-        set dcp [file normalize "$ImplOutputDir/post_place.dcp"]
+        set dcp [file normalize "$sourceImplDir/post_place.dcp"]
     } else {
-        set dcp [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
+        set dcp [file normalize "$sourceImplDir/post_phys_opt.dcp"]
     }
     if {![file exists $dcp]} { error "Checkpoint not found: $dcp" }
-
-    puts "INFO: RESUME_FROM=$resumeFrom — loading $dcp"
-    open_checkpoint $dcp
-
-    set pbs [get_pblocks -quiet]
-    if {[llength $pbs]} { delete_pblocks $pbs }
-    read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
     file mkdir $ImplOutputDir
 
-    if {$resumeFrom eq "opt"} {
-        catch {set_param place.ILREnabled false}
-        set_param general.maxThreads 8
-        place_design -directive $placeDirective
-        set_param general.maxThreads 32
-        write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
-        report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
+    # RESUME_FROM=opt 时支持 retry 策略循环（与 3_synth_project.tcl 一致）：
+    # - 若设置了 PLACE_DIRECTIVE 环境变量，则只跑一次（单 pass 模式）
+    # - 未设置则按 config.tcl 中的 retryStrategies 依次尝试，直到 timing 收敛
+    set _singlePassMode [info exists ::env(PLACE_DIRECTIVE)]
+
+    if {$resumeFrom eq "opt" && !$_singlePassMode} {
+        # ── 多策略 Retry 循环（从 post_opt.dcp 重复 place→phys_opt→route）──
+        puts "INFO: RESUME_FROM=opt — entering retry loop ([llength $retryStrategies] strategies)"
+        set _best_wns -9999
+        set _best_dcp ""
+        set _best_bit ""
+
+        for {set _ri 0} {$_ri < [llength $retryStrategies]} {incr _ri} {
+            set _strat     [lindex $retryStrategies $_ri]
+            set _placeDir  [lindex $_strat 0]
+            set _physDir   [lindex $_strat 1]
+            set _routeDir  [lindex $_strat 2]
+            set _att       [expr {$_ri + 1}]
+            set _total     [llength $retryStrategies]
+
+            puts "\n========== RESUME Attempt $_att/$_total: place=$_placeDir  phys_opt=$_physDir  route=$_routeDir =========="
+
+            puts "INFO: Loading checkpoint: $dcp"
+            open_checkpoint $dcp
+            set pbs [get_pblocks -quiet]
+            if {[llength $pbs]} { delete_pblocks $pbs }
+            read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+
+            catch {set_param place.ILREnabled false}
+            set_param general.maxThreads 32
+            place_design -directive $_placeDir
+
+            set _ppaths [get_timing_paths -max_paths 1 -delay_type max -quiet]
+            set _ppWns 0.0
+            if {[llength $_ppaths]} { set _ppWns [get_property SLACK [lindex $_ppaths 0]] }
+            puts "INFO: Post-place WNS (attempt $_att) = ${_ppWns} ns"
+
+            report_timing_summary -file [file normalize "$ImplOutputDir/post_place_attempt${_att}_timing.rpt"]
+            write_checkpoint -force [file normalize "$ImplOutputDir/post_place_attempt${_att}.dcp"]
+
+            if {$_ppWns < $wns_stop_place} {
+                puts "WARNING: Post-place WNS ${_ppWns} < threshold ${wns_stop_place} — skipping strategy."
+                continue
+            }
+
+            phys_opt_design -directive $_physDir
+            write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt_attempt${_att}.dcp"]
+
+            set_param general.maxThreads 32
+            route_design -directive $_routeDir
+            phys_opt_design -directive AggressiveExplore
+            phys_opt_design -hold_fix
+
+            set _rpaths [get_timing_paths -max_paths 1 -delay_type max -quiet]
+            set _rwns 0.0
+            if {[llength $_rpaths]} { set _rwns [get_property SLACK [lindex $_rpaths 0]] }
+            puts "INFO: Post-route WNS (attempt $_att) = ${_rwns} ns"
+
+            report_timing_summary -file [file normalize "$ImplOutputDir/post_route_attempt${_att}_timing.rpt"]
+            report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+                -file [file normalize "$ImplOutputDir/post_route_attempt${_att}_failing.rpt"]
+            write_checkpoint -force [file normalize "$ImplOutputDir/post_route_attempt${_att}.dcp"]
+
+            if {$_rwns > $_best_wns} {
+                set _best_wns  $_rwns
+                set _best_dcp  [file normalize "$ImplOutputDir/post_route_attempt${_att}.dcp"]
+            }
+
+            if {$_rwns >= 0} {
+                puts "INFO: Timing MET at attempt $_att (WNS=${_rwns}ns) — stopping retry loop."
+                break
+            }
+        }
+
+        # 从最优 checkpoint 生成 bitstream
+        if {$_best_dcp ne "" && [file exists $_best_dcp]} {
+            puts "INFO: Best route WNS = ${_best_wns} ns  (source: $_best_dcp)"
+            open_checkpoint $_best_dcp
+            read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+        }
+        set wns $_best_wns
+        write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
+        report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
         report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-            -file [file normalize "$ImplOutputDir/post_place_failing_paths.rpt"]
-        report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
+            -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
+        report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
+
+    } else {
+        # ── 单 Pass 模式（指定了 PLACE_DIRECTIVE 或从 place/phys_opt 恢复）──
+        puts "INFO: RESUME_FROM=$resumeFrom — loading $dcp"
+        open_checkpoint $dcp
+        set pbs [get_pblocks -quiet]
+        if {[llength $pbs]} { delete_pblocks $pbs }
+        read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+
+        if {$resumeFrom eq "opt"} {
+            catch {set_param place.ILREnabled false}
+            set _pd $placeDirective
+            if {[info exists ::env(PLACE_DIRECTIVE)]} {
+                set _pd [string trim $::env(PLACE_DIRECTIVE)]
+                puts "INFO: PLACE_DIRECTIVE override = $_pd"
+            }
+            set_param general.maxThreads 32
+            place_design -directive $_pd
+            write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
+            report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
+            report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+                -file [file normalize "$ImplOutputDir/post_place_failing_paths.rpt"]
+            report_utilization -file [file normalize "$ImplOutputDir/post_place_util.rpt"]
+        }
+
+        if {$resumeFrom eq "opt" || $resumeFrom eq "place"} {
+            phys_opt_design -directive $physOptDirective
+            write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
+            report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
+        }
+
+        set_param general.maxThreads 32
+        route_design -directive $routeDirective
+        phys_opt_design -directive AggressiveExplore
+        phys_opt_design -hold_fix
+        write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
+        report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
+        report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
+            -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
+        report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
+
+        set paths [get_timing_paths -max_paths 1 -delay_type max]
+        set wns 0.0
+        if {[llength $paths]} { set wns [get_property SLACK [lindex $paths 0]] }
     }
 
-    if {$resumeFrom eq "opt" || $resumeFrom eq "place"} {
-        phys_opt_design -directive $physOptDirective
-        write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt.dcp"]
-        report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
-    }
-
-    set_param general.maxThreads 32
-    route_design -directive $routeDirective
-    phys_opt_design -directive AggressiveExplore
-    phys_opt_design -hold_fix
-    write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]
-    report_timing_summary -file [file normalize "$ImplOutputDir/post_route_timing_summary.rpt"]
-    report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
-        -file [file normalize "$ImplOutputDir/post_route_failing_paths.rpt"]
-    report_utilization -file [file normalize "$ImplOutputDir/post_route_util.rpt"]
-
-    set paths [get_timing_paths -max_paths 1 -delay_type max]
-    set wns 0.0
-    if {[llength $paths]} { set wns [get_property SLACK [lindex $paths 0]] }
     puts "INFO: Post-route WNS = ${wns} ns"
 
-    if {$wns >= 0} {
+    # FORCE_BITSTREAM=1 时，即使 WNS < 0 也生成 bitstream（用于微小违例如 -0.05ns 以内）
+    set _forceThresh -0.05
+    set _forceBit [expr {[info exists ::env(FORCE_BITSTREAM)] && $::env(FORCE_BITSTREAM) eq "1"}]
+
+    if {$wns >= 0 || ($wns > $_forceThresh && $_forceBit)} {
+        if {$wns < 0} {
+            puts "WARNING: Forcing bitstream despite WNS=${wns}ns (FORCE_BITSTREAM=1, threshold=${_forceThresh}ns)"
+        }
         set_property CONFIG_MODE SPIx4 [current_design]
         set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
         write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]

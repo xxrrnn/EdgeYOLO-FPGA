@@ -80,17 +80,21 @@ set placeDirective      Default
 set physOptDirective    AggressiveExplore
 set routeDirective      AggressiveExplore
 
-# --- Timing Retry 策略集 ---
-# run.tcl 在 post-route timing 失败时，从 post_opt.dcp 重新尝试下一组 directive。
-# 每组策略跑 place → phys_opt → route 完整流程。
-# 策略名 | place | phys_opt | route
-# 注意：SSI_SpreadLogic 在 Vivado 2024.2 中已无效（Constraints 18-641），
-#       替换为 SSI_SpreadSLLs（专用于 SSI 跨 SLR SLL 分散）
+# --- Timing Retry 策略集（xcvu37p 实测有效 directive）---
+# place_design -directive 在 xcvu37p 上实测有效：
+#   Default | Explore | ExtraTimingOpt | RuntimeOptimized | Quick
+# 以下对 xcvu37p 无效（Constraints 18-641）：
+#   AggressiveExplore | AltSpreadLogic | SSI_SpreadSLLs
+#
+# 实测结果（fix4 attempt 1）：
+#   ExtraTimingOpt + NoTimingRelaxation → post-route WNS = -0.016ns（极接近收敛）
+#
+# 格式：{placeDirective physOptDirective routeDirective}
 set retryStrategies {
-    {Default         AggressiveExplore  AggressiveExplore}
     {ExtraTimingOpt  AggressiveExplore  NoTimingRelaxation}
-    {AltSpreadLogic  AggressiveExplore  AggressiveExplore}
-    {SSI_SpreadSLLs  AggressiveExplore  Explore}
+    {ExtraTimingOpt  AggressiveExplore  AggressiveExplore}
+    {Explore         AggressiveExplore  NoTimingRelaxation}
+    {Explore         AggressiveExplore  AggressiveExplore}
 }
 
 # --- DSP 用量说明 ---

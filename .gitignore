@@ -71,16 +71,6 @@ model/**/*.pb
 !xdc/**/*.xdc
 
 # ============================================
-# ??: Build ???? RPT ??
-# ============================================
-!build/
-!build/**/
-!build/**/ImplOutputDir/
-!build/**/ImplOutputDir/*.rpt
-!build/**/SynOutputDir/
-!build/**/SynOutputDir/*.rpt
-
-# ============================================
 # ??: ?? scripts ????? tcl
 # ============================================
 !scripts/
@@ -166,13 +156,7 @@ rtl/chip/build/
 # ============================================
 # ??: ????/???????????????
 # ============================================
-# ?? build ????? rpt??? memory_map ?????
 build/**
-!build/**/
-!build/**/ImplOutputDir/
-!build/**/ImplOutputDir/*.rpt
-!build/**/SynOutputDir/
-!build/**/SynOutputDir/*.rpt
 
 # XSim/VCS/Verdi ???????????
 rtl/**/xsim.dir/
@@ -221,12 +205,6 @@ model/**/*.npz
 model/**/*.pt
 model/**/*.pth
 model/**/*.pkl
-
-# ============================================
-# ????: FPGA Bitstream (chip.bit)
-# ============================================
-!chip.bit
-!*.bit
 
 # ============================================
 # ????: ??????????
