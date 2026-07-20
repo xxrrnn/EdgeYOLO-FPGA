@@ -147,7 +147,7 @@ if {$resumeFrom ne ""} {
             read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
 
             catch {set_param place.ILREnabled false}
-            set_param general.maxThreads 32
+            use_place_threads
             place_design -directive $_placeDir
 
             set _ppaths [get_timing_paths -max_paths 1 -delay_type max -quiet]
@@ -166,8 +166,9 @@ if {$resumeFrom ne ""} {
             phys_opt_design -directive $_physDir
             write_checkpoint -force [file normalize "$ImplOutputDir/post_phys_opt_attempt${_att}.dcp"]
 
-            set_param general.maxThreads 32
+            use_route_threads
             route_design -directive $_routeDir
+            use_vivado_threads
             phys_opt_design -directive AggressiveExplore
             phys_opt_design -hold_fix
 
@@ -220,7 +221,7 @@ if {$resumeFrom ne ""} {
                 set _pd [string trim $::env(PLACE_DIRECTIVE)]
                 puts "INFO: PLACE_DIRECTIVE override = $_pd"
             }
-            set_param general.maxThreads 32
+            use_place_threads
             place_design -directive $_pd
             write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
             report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
@@ -235,8 +236,9 @@ if {$resumeFrom ne ""} {
             report_timing_summary -file [file normalize "$ImplOutputDir/post_phys_opt_timing_summary.rpt"]
         }
 
-        set_param general.maxThreads 32
+        use_route_threads
         route_design -directive $routeDirective
+        use_vivado_threads
         phys_opt_design -directive AggressiveExplore
         phys_opt_design -hold_fix
         write_checkpoint -force [file normalize "$ImplOutputDir/post_route.dcp"]

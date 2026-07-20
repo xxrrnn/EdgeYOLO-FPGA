@@ -1,120 +1,98 @@
-# ============================================
-# ?????: ??????????????????
-# ============================================
+# ==============================================================================
+# EdgeYOLO-FPGA source whitelist
+# ==============================================================================
+# The repo generates many large files. Keep source files visible, keep generated
+# artifacts local unless they are explicitly force-added for a milestone.
 
-# ??????
 *
+!*/
 
-# ============================================
-# ??: ????
-# ============================================
-!*.tcl
+# Root project files
+!.gitignore
+!.gitattributes
+!Makefile
+!makefile
+!README.md
+!README*
+!*.md
 !*.py
 !*.sh
-!Makefile
+!*.tcl
+!*.f
+!*.ipynb
+!*.data
+!*.gtkw
 
-# ============================================
-# ??: tools/ ???chip_config.py ??????
-# ============================================
-!tools/
-!tools/*.py
-!tools/*.sh
-!tools/*.tcl
-!tools/Makefile
-
-# ============================================
-# ??: model/ ?????????? json????? npz?onnx?
-# ??: ?????/???? .onnx.bak/.tar.gz/.pb
-# ============================================
-!model/
-!model/**/
-!model/**/*.py
-!model/**/*.md
-!model/**/*.json
-!model/**/*.onnx
-model/**/*.onnx.bak
-model/**/*.tar.gz
-model/**/*.pb
-
-# ============================================
-# ??: RTL ???? rtl/ ????
-# ============================================
+# Source trees
 !rtl/
 !rtl/**/
 !rtl/**/*.v
 !rtl/**/*.sv
+!rtl/**/*.vh
 !rtl/**/*.vhd
 !rtl/**/*.cpp
 !rtl/**/*.h
-!rtl/**/*.vh
 !rtl/**/.gitignore
 
-# ============================================
-# ??: ?????
-# ============================================
-!*.md
-!README*
-!.gitignore
-!.gitattributes
-
-# ============================================
-# ??: Jupyter Notebook ?????
-# ============================================
-!*.ipynb
-!*.data
-
-# ============================================
-# ??: XDC ?????? xdc/ ????
-# ============================================
-!xdc/
-!xdc/**/
-!xdc/**/*.xdc
-
-# ============================================
-# ??: ?? scripts ????? tcl
-# ============================================
 !scripts/
 !scripts/**/
+!scripts/**/*.tcl
+!scripts/**/*.sh
+!scripts/**/*.py
 
-# ============================================
-# ??: filelist??????
-# ============================================
-!*.f
+!tools/
+!tools/**/
+!tools/**/*.py
+!tools/**/*.sh
+!tools/**/*.tcl
+!tools/Makefile
 
-# ============================================
-# ??: gtkw ????
-# ============================================
-!*.gtkw
-
-# ============================================
-# ??: Spyglass ????
-# ============================================
-rtl/**/spyglass/
-rtl/**/.project*
-rtl/**/.design*
-rtl/**/.CurrentSessionRunSummaryFiles
-
-# ============================================
-# ??: ??????
-# ============================================
 !tests/
 !tests/**/
 !tests/**/*.py
 !tests/**/*.ipynb
 !tests/**/*.sh
 
-# ============================================
-# ??: ?? bd ???????scripts/ip/bd/ ?? tcl ?????
-# ============================================
-/bd/
+!xdc/
+!xdc/**/
+!xdc/**/*.xdc
 
-# ============================================
-# ??: Vivado ????
-# ============================================
+# Model metadata and checked-in parsed weights used by current flows.
+!model/
+!model/**/
+!model/**/*.md
+!model/**/*.json
+!model/**/*.yaml
+!model/**/*.yml
+!model/yolov5n/parsed/weights/*.npz
+!model/yolov5n/parsed_int16_widened/weights/*.npz
+!model/resnet18/parsed_vai/weights/*.npz
+!model/resnet18/parsed_vai_int16_widened/weights/*.npz
+
+# Keep small top-level sample images if they already exist.
+!test_yolo.jpg
+!test_resnet*.jpg
+!test_resnet*.JPEG
+
+# ==============================================================================
+# Generated Vivado/build artifacts
+# ==============================================================================
+build/**
+logs/**
 .Xil/
 *.jou
 *.log
+*.str
 *.xpr
+*.dcp
+*.rpt
+*.pb
+*.bit
+*.bin
+*.ltx
+*.mcs
+*.prm
+*.mmi
 *.cache/
 *.gen/
 *.hw/
@@ -122,43 +100,58 @@ rtl/**/.CurrentSessionRunSummaryFiles
 *.sim/
 *.srcs/
 *.runs/
+bd/
+rtl/chip/build/
+scripts/chip-lite/tmp/
 
-# ============================================
-# ??: Python ??
-# ============================================
+# Local bitstream copies: keep only the manifest/README in git.
+!artifacts/
+!artifacts/bitstreams/
+artifacts/bitstreams/**
+!artifacts/bitstreams/README.md
+
+# ==============================================================================
+# Runtime outputs and temporary probes
+# ==============================================================================
+output/**
+!output/
+!output/final_inference/
+!output/final_inference/README.md
+!output/probe/
+!output/probe/README.md
+
+# Downloaded model packages and external algorithm repos
+weihgts/
+weights/
+model/**/*.onnx
+model/**/*.pt
+model/**/*.pth
+model/**/*.pkl
+model/**/*.pb
+model/**/*.tar.gz
+model/**/*.onnx.bak
+model/algorithm/Infrared-Object-Detection/
+model/algorithm/Resnet18-quantization/
+model/algorithm/quantized-yolov5/
+model/algorithm/quantized-yolov5_arcive/
+
+# ==============================================================================
+# Simulation and tool byproducts
+# ==============================================================================
 __pycache__/
 *.pyc
 .venv/
 venv/
-
-# ============================================
-# ??: Jupyter ???
-# ============================================
 .ipynb_checkpoints/
-
-# ============================================
-# ????: ???????????? !rtl/** ???
-# ============================================
-# ???? RTL ?????? .git?????
-rtl/ref/YOLOv11-RTL/
-# VCS / DPI ? csrc ??????????????
-rtl/**/csrc/rmapats.h
-rtl/**/csrc/rmar.h
-rtl/**/csrc/rmar0.h
-
-# ============================================
-# ??: Cursor IDE ??
-# ============================================
-.codex
+.codex/
 .cursor/
-rtl/chip/build/
 
-# ============================================
-# ??: ????/???????????????
-# ============================================
-build/**
-
-# XSim/VCS/Verdi ???????????
+rtl/ref/YOLOv11-RTL/
+rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
+rtl/**/spyglass/
+rtl/**/.project*
+rtl/**/.design*
+rtl/**/.CurrentSessionRunSummaryFiles
 rtl/**/xsim.dir/
 rtl/**/sim/build_*/
 rtl/**/simv*
@@ -176,39 +169,11 @@ rtl/**/xsim*.jou
 rtl/**/xsim*.log
 rtl/**/xsim*.pb
 
-# ????????
 rtl/vpu/tb/golden_*.hex
 rtl/vpu/tb/tb_im2col_*.hex
 rtl/vpu/tb/regression_l1/golden_*.hex
 rtl/vpu/tb/regression_l1/params.json
 rtl/vpu/tb/standalone/generated/
 
-# VCS ??????
 .cxl.vcs*.version
 synopsys_sim.setup
-rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
-rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
-
-# model/algorithm ??????? git ???????? submodule ????
-model/algorithm/Infrared-Object-Detection/
-model/algorithm/Resnet18-quantization/
-model/algorithm/quantized-yolov5/
-model/algorithm/quantized-yolov5_arcive/
-
-# Large binary model files - track only JSON metadata
-model/**/*.onnx
-model/**/*.npz
-!model/yolov5n/parsed/weights/*.npz
-!model/yolov5n/parsed_int16_widened/weights/*.npz
-!model/resnet18/parsed_vai/weights/*.npz
-!model/resnet18/parsed_vai_int16_widened/weights/*.npz
-model/**/*.pt
-model/**/*.pth
-model/**/*.pkl
-
-# ============================================
-# ????: ??????????
-# ============================================
-!test_yolo.jpg
-!test_resnet*.jpg
-!test_resnet*.JPEG

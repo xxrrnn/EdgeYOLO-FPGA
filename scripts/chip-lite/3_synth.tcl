@@ -176,9 +176,9 @@ puts "\n========== Step 3: Place Design =========="
 #   - ILR 关闭的影响：timing 结果略微变差（约 0.05~0.1ns WNS 劣化），
 #     对已有 -1.1ns 违例的设计影响可忽略。
 catch {set_param place.ILREnabled false}  ;# 关闭触发 crash 的 ILR（Vivado 2024.2 已移除此参数，catch 防止报错）
-set_param general.maxThreads 8     ;# place 用 8 线程（内存占用适中）
+use_place_threads
 place_design -directive $placeDirective
-set_param general.maxThreads 32   ;# 恢复最大线程供后续步骤使用
+use_vivado_threads
 
 write_checkpoint -force [file normalize "$ImplOutputDir/post_place.dcp"]
 report_timing_summary -file [file normalize "$ImplOutputDir/post_place_timing_summary.rpt"]
@@ -205,10 +205,10 @@ report_timing -max_paths $rptMaxPaths -slack_lesser_than 0.0 -delay_type max \
 # ==============================================================================
 puts "\n========== Step 5: Route Design =========="
 
-# route_design 开到服务器支持上限 32 线程
-set_param general.maxThreads 32
+# route_design 使用 ROUTE_THREADS，默认 32
+use_route_threads
 route_design -directive $routeDirective
-set_param general.maxThreads 32
+use_vivado_threads
 
 # post-route hold fix
 # 根因：DSP48E2_X14Y89 内部 D→AD pre-adder 路径，route delay=0，
