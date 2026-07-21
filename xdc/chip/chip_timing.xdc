@@ -48,24 +48,6 @@ if {[llength $_clk_hbm_axi]} {
     -group [get_clocks clk_out1_lite_hbm_axi_clk_wiz_0*]
 }
 
-# clk_main <-> pipe_clk: PCIe PIPE interface clock。
-# 两者都从同一 GT 产生但经过不同 BUFG_GT 路径，Vivado 无法推断公共节点。
-# phy_pipeline/per_lane_ff_chain 路径在 XDMA IP 内部已有 async/sync_rst 同步器，
-# Xilinx 官方 impl XDC 已注明 TIMING-7 SAFELYcanIGNORE。
-#
-# 策略：用 set_max_delay -datapath_only 8ns 代替 set_clock_groups -asynchronous。
-# 原因：set_clock_groups 把这些路径完全移出 timing 优化池，导致 placer 改变行为，
-#       主要 clk_main 路径的布局质量下降（实测 post-place WNS 从 +0.051ns → -0.206ns）。
-# 8ns 宽裕要求（2× clock period）让 placer 仍然考虑这些路径但不视为 critical，
-# 同时消除 TIMING-6/7 Critical Warning，PCIe phy_pipeline CDC 路径不会被 4ns 约束误优化。
-set _clk_pipe [get_clocks -quiet pipe_clk]
-if {[llength $_clk_pipe]} {
-  set_max_delay -datapath_only 8.0 \
-    -from [get_clocks clk_main] -to [get_clocks pipe_clk]
-  set_max_delay -datapath_only 8.0 \
-    -from [get_clocks pipe_clk] -to [get_clocks clk_main]
-}
-
 # ############################################################################
 # Section 2: 复位 false path
 # ############################################################################
