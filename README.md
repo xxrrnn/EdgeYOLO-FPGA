@@ -24,6 +24,128 @@
 
 ## 当前里程碑
 
+### 2026-07-22 Native W16A16 candidate on `eff` (pending synthesis and board validation)
+
+- 本候选只在 `eff` 开发，不合并到 `main`。已确认 `c1773f6` 到当前源码之间
+  没有 BD、XDMA IP 或 pin XDC 差异；新 bitstream 在运行 workload 之前就让
+  `xdma_info.exe` 卡顿时，不能归因于网络 compiler。此前 race 的 6 个候选虽
+  无 setup/hold failure，但 WNS 只有 `0.000--0.010 ns`、WHS 只有
+  `0.003--0.006 ns`，裕量过低，不能仅凭 `timing met` 判定为稳定。
+- 原生 INT16 的确定性功能错误是 RTL/compiler/golden 数据布局不一致：
+  `DCIM_Tile` 每 tile 输出 8 个 signed INT64 accumulator，即每个 128-bit word
+  只有 2 个结果、每 tile 4 words；旧 compiler 仍按 INT32 的 4 results/word、
+  每 tile 2 words 推进地址，导致像素输出重叠且 DQA 只读取一半 accumulator。
+- 当前候选统一了这份 contract：INT16 DCIM 输出 stride 为 4 words/tile，DQA
+  使用 native INT64 load/converter，numpy/module golden 保持 signed INT64，
+  compiler 在 native INT16 conv 上设置 `VPU_FLAG_INT16`。INT8 的 INT32 contract
+  不变。COCO YOLO true INT16 full compile 已完成 57/57 conv、0 warning；
+  infrared YOLO、COCO YOLO、ResNet 的 INT8/INT16 compile matrix 均通过。
+- RTL 经过 Verilator lint（0 error）且新增 native INT16 contract test。新 RTL
+  尚未完成综合和上板验证，因此本节不宣称 true W16A16 已通过。
+
+远程推荐一次生成 8 个实现候选：4 个从稳定版 `c1773f6` routed DCP 做
+incremental implementation，4 个 clean implementation。incremental 只复用
+placement/routing 参考，不复用旧逻辑网表；新的 post-opt netlist 仍来自当前
+`eff` 源码。
+
+```bash
+cd /data/home/rn_xu29/Projects/YOLO-On-FPGA/EdgeYOLO-FPGA-eff
+git checkout eff
+git pull --ff-only origin eff
+
+TAG=$(git rev-parse --short HEAD)
+make synth-to-opt TAG=$TAG SYNTH_JOBS=128 VIVADO_THREADS=32
+make impl-race TAG=$TAG IMPL_JOBS=8 \
+  RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 RACE_STOP_ON_WIN=0 \
+  RACE_INCREMENTAL_DCP=build/lite/c1773f6/ImplOutputDir/post_route.dcp \
+  RACE_INCREMENTAL_ATTEMPTS=4 RACE_MIN_WNS_NS=0.05 RACE_MIN_WHS_NS=0.02
+```
+
+只部署 `build/lite/$TAG/summary/impl_race_summary.tsv` 中标记为 `SUCCESS` 的
+候选；`LOW_MARGIN` 仅保留作诊断。上板后依次运行 `xdma_info.exe`、小块
+H2C/C2H、decoder status 和 progressive gate，基础通路通过后才运行 COCO
+true INT16：
+
+```powershell
+python run.py --one-shot --network yolo --yolo-precision int16 `
+  --one-shot-build-dir output\compile_yolo_coco50k_int16_full `
+  --one-shot-yolo-parsed-dir model\yolov5n_coco50k_qat\parsed_int16 `
+  --one-shot-yolo-expect-detections -1 `
+  --yolo-img model\yolov5n_coco50k_qat\template\000000000139.jpg `
+  --out-dir output\inference\yolov5n_coco50k_qat\int16_fpga `
+  --conf 0.25 --iou 0.45 --one-shot-poll-timeout-s 300
+```
+
+### 2026-07-22 Stable-bitstream recovery and INT16-widened deployment
+
+- 新生成的 true-INT16/INT64-accumulator bitstream 在网络启动前就出现
+  `xdma_info.exe` 极慢、H2C/C2H `Win32 error 1359`。这属于 PCIe/XDMA
+  基础通路失败，不能用 YOLO/ResNet 数值或 compiler 调度解释。
+- 最后一个已知稳定并完成四 workload one-shot 验证的 bitstream 是
+  `c1773f6`。本机回退副本：
+  `build/stable_bitstreams/c1773f6.bit`，SHA256
+  `314d65d3711d464d60f8f5d158d270275d9cc2203ddbaa3b41c7e6a64823764d`。
+  `build/stable_bitstreams/dd1ed80_260707.bit` 是更早的备用版本。
+- `c1773f6` 支持已验证的 INT16-widened 路径：量化值和 scale 与 INT8
+  完全相同，权重/激活只从 8-bit 容器扩成 16-bit 容器。它不等同于
+  使用 `[-32768,32767]` 大数值权重的 true W16A16。
+- COCO YOLO 新增 `parse_quant_export.py --mode int16_widened`。该模式必须
+  读取 INT8 export，且会拒绝任何超出 `[-128,127]` 的权重，避免误把
+  true INT16 artifact 部署到稳定旧 RTL。生成的 60 个 NPZ 已验证与 INT8
+  共 `1,861,888` 个权重值 bit-exact，full compile 为 57/57 conv、0 runtime
+  warning、单 program segment。卷积 DQA 保持 `c1773f6` 的 INT32 accumulator
+  读取语义，不依赖后来新增的 INT64 converter RTL。完整 numpy/compiler
+  golden + host detect head 结果为 3 个目标（2 chair、1 tv），与 COCO INT8
+  的类别和数量一致。
+- `c1773f6` 上板六项连续复测通过，soft reset 可在 workload 之间恢复
+  decoder，不需要整板 reset：
+  - infrared YOLO INT8: 1 person，runner `2.511s`，execute `2.115s`；
+  - infrared YOLO INT16-widened: 1 person，runner `3.081s`，execute `2.579s`；
+  - COCO YOLO INT8: 2 chair + 1 tv，runner `2.575s`，execute `2.120s`；
+  - COCO YOLO INT16-widened: 2 chair + 1 tv，runner `3.033s`，execute `2.571s`；
+  - ResNet INT8: Top-1 `goldfish(1)`，runner `2.757s`，execute `2.365s`；
+  - ResNet INT16-widened: Top-1 `goldfish(1)`，runner `6.942s`，execute `4.060s`。
+  六项 runner 合计 `20.899s`，满足 1 分钟目标。
+- 六项 data-level gate 全部通过：YOLO PAN 最大绝对误差不超过
+  `1.90735e-06`，ResNet INT8/INT16 最终 feature 均 `max_abs=0`。
+  COCO widened-INT16 的 golden 必须按 RTL QA 顺序执行
+  `FP32 * float32(1/act_scale)`；若写成除法，会在 model.18 的两个舍入
+  边界值产生假差异，并在后层放大到 3--4 LSB。
+
+刷入 `c1773f6.bit` 并重新枚举 XDMA 驱动后，先运行基础门禁：
+
+```powershell
+tests\bin\xdma_info.exe
+tests\bin\xdma_rw.exe c2h_0 read 0x0 -l 16
+python tests\chip\runtime\hw_runner_win.py --build-dir output\compile_yolo_int8_full_eff --status-only --quiet-xdma
+```
+
+三条命令都应在数秒内结束；如果回退 bitstream 后仍然极慢，则问题位于
+板卡 PCIe link、Windows XDMA driver 或主机枚举状态，而不是网络 RTL。
+
+稳定 bitstream 上的最终推理命令：
+
+```powershell
+# Infrared YOLO
+python run.py --one-shot --network yolo --yolo-precision int8 --one-shot-poll-timeout-s 300
+python run.py --one-shot --network yolo --yolo-precision int16 --one-shot-poll-timeout-s 300
+
+# ResNet18
+python run.py --one-shot --network resnet --resnet-precision vai --one-shot-poll-timeout-s 300
+python run.py --one-shot --network resnet --resnet-precision int16 --one-shot-poll-timeout-s 300
+
+# COCO/original YOLO
+python run.py --one-shot --network yolo --yolo-precision int8 --one-shot-build-dir output\compile_yolo_coco50k_int8_full --one-shot-yolo-parsed-dir model\yolov5n_coco50k_qat\parsed_int8 --one-shot-yolo-expect-detections -1 --yolo-img model\yolov5n_coco50k_qat\template\000000000139.jpg --out-dir output\inference\yolov5n_coco50k_qat\int8_fpga --conf 0.25 --iou 0.45 --one-shot-poll-timeout-s 300
+python run.py --one-shot --network yolo --yolo-precision int16 --one-shot-build-dir output\compile_yolo_coco50k_int16_widened_full --one-shot-yolo-parsed-dir model\yolov5n_coco50k_qat\parsed_int16_widened --one-shot-yolo-expect-detections -1 --yolo-img model\yolov5n_coco50k_qat\template\000000000139.jpg --out-dir output\inference\yolov5n_coco50k_qat\int16_widened_fpga --conf 0.25 --iou 0.45 --one-shot-poll-timeout-s 300
+```
+
+COCO widened artifact 的可复现生成命令：
+
+```powershell
+python model\yolov5n_coco50k_qat\parse_quant_export.py --quant-onnx model\yolov5n_coco50k_qat\int8\best.quant.onnx --onnx model\yolov5n_coco50k_qat\int8\best.onnx --out model\yolov5n_coco50k_qat\parsed_int16_widened --mode int16_widened
+python tests\chip\compiler\compile.py --network yolov5n --mode int16 --full --parsed model\yolov5n_coco50k_qat\parsed_int16_widened --out output\compile_yolo_coco50k_int16_widened_full
+```
+
 ### 2026-07-17 COCO/original YOLOv5n export separated from infrared YOLO
 
 - 原 infrared YOLO 继续使用默认目录和命令：
@@ -41,13 +163,15 @@
   - host detect head: 3 COCO detections at 320 input, `chair/chair/tv`
   - timing: total `2.629s`，execute `2.132s`
   - result image: `output/inference/yolov5n_coco50k_qat/int8_fpga/yolo/one_shot_int8/000000000139_yolo_int8_fpga_oneshot.jpg`
-- COCO true INT16 one-shot 目前未通过 data-level：
+- COCO true INT16 one-shot 在旧 contract 下未通过 data-level（已由上面的
+  native W16A16 candidate 取代，保留以下记录用于追溯）：
   - command: same as INT8 but using `--yolo-precision int16`, `output\compile_yolo_coco50k_int16_full`, and `parsed_int16`
   - FPGA executes and returns DONE, timing total `3.039s`，execute `2.546s`
   - compare still fails (`PAN max_abs` about `14-19`) and host head returns 0 detections
   - L1-only probe also fails (`max_abs` about `21.6`), so blocker is in base true-INT16 DCIM/DQA path, not in network scheduling.
-  - root cause narrowed to DQA reading only 16 bits from INT16 DCIM output while `DCIM_Tile` writes 32-bit accumulators. `rtl/vpu/dqa_relu_unit.sv` now treats non-`DQA_ACT` INT16 DCIM output as 32-bit accumulator; this RTL needs resynthesis before COCO true INT16 can be re-tested on FPGA.
-  - software alignment update: INT16 compiler `pack_layer_weights_int16()` now matches `golden_module_tb.pack_weight_tile_int16()` for all 57 COCO conv layers (`3,522,560` bytes, 0 mismatch). Module golden no longer models a fake `dqa_accum16` path; INT16 packed activation is represented only by `DQA_ACT`, while DCIM INT16 accumulator input remains INT32.
+  - 当时曾误判为 DQA 16/32-bit 读取问题；后续 RTL diff 和 layout contract
+    检查确认 true W16A16 的正确 accumulator 是 signed INT64，最终修复见本页
+    最上方 native W16A16 candidate。
 
 ### 2026-07-17 Full one-shot YOLO/ResNet INT8/INT16 PASS on new bitstream
 
@@ -762,7 +886,10 @@ git pull --ff-only origin eff
 
 TAG=$(git rev-parse --short HEAD)
 make synth-to-opt TAG=$TAG SYNTH_JOBS=128 VIVADO_THREADS=32
-make impl-race TAG=$TAG IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 RACE_STOP_ON_WIN=1
+make impl-race TAG=$TAG IMPL_JOBS=8 \
+  RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 RACE_STOP_ON_WIN=0 \
+  RACE_INCREMENTAL_DCP=build/lite/c1773f6/ImplOutputDir/post_route.dcp \
+  RACE_INCREMENTAL_ATTEMPTS=4 RACE_MIN_WNS_NS=0.05 RACE_MIN_WHS_NS=0.02
 ```
 
 所有结果都在 `build/lite/<tag>/` 下：
@@ -772,14 +899,18 @@ make impl-race TAG=$TAG IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 
 | `logs/` | Vivado batch log、journal、每个 race worker stdout |
 | `SynOutputDir/` | synthesis checkpoint/report |
 | `ImplOutputDir/` | opt/place/route checkpoint/report；`race/` 下是每个策略的独立实现目录 |
-| `bitstreams/` | 每个 timing-clean attempt 单独复制出的 `.bit/.bin` |
+| `bitstreams/` | 每个 timing-met attempt 单独复制出的 `.bit/.bin`；是否可部署仍以 summary 的 `SUCCESS` 为准 |
 | `summary/impl_race_summary.md` | 人读报告：每个 attempt/bitstream 的 WNS/TNS/WHS/THS/失败端点 |
 | `summary/impl_race_summary.tsv` | 机器可读总表，便于排序或归档 |
 
-如果希望比较全部 8 个策略而不是第一个成功就停：
+`SUCCESS` 表示同时满足 setup/hold 且达到指定裕量；`LOW_MARGIN` 表示报告没有
+违例、但裕量不足，只能用于诊断。若不提供 `RACE_INCREMENTAL_DCP`，全部 worker
+自动退化为 clean implementation。若只想最快找到第一个 margin-qualified
+候选，可改成：
 
 ```bash
-make impl-race TAG=$TAG IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 RACE_STOP_ON_WIN=0
+make impl-race TAG=$TAG IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16 \
+  RACE_STOP_ON_WIN=1 RACE_INCREMENTAL_DCP=build/lite/c1773f6/ImplOutputDir/post_route.dcp
 ```
 
 Vivado 2024.2.2 单进程 `general.maxThreads` 上限为 32。当前推荐是 8 个

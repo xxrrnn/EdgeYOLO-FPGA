@@ -9,6 +9,10 @@ vivado_bin="${VIVADO:-vivado}"
 impl_jobs="${IMPL_JOBS:-4}"
 poll_sec="${RACE_POLL_SEC:-60}"
 stop_on_win="${RACE_STOP_ON_WIN:-1}"
+min_wns="${RACE_MIN_WNS_NS:-0.05}"
+min_whs="${RACE_MIN_WHS_NS:-0.02}"
+incremental_dcp="${RACE_INCREMENTAL_DCP:-}"
+incremental_attempts="${RACE_INCREMENTAL_ATTEMPTS:-4}"
 
 place_threads="${PLACE_THREADS:-16}"
 route_threads="${ROUTE_THREADS:-16}"
@@ -54,8 +58,29 @@ if (( impl_jobs > ${#strategies[@]} )); then
   impl_jobs="${#strategies[@]}"
 fi
 
+if [[ ! "$incremental_attempts" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: RACE_INCREMENTAL_ATTEMPTS must be a non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$incremental_dcp" ]]; then
+  if [[ "$incremental_dcp" != /* ]]; then
+    incremental_dcp="$repo_root/$incremental_dcp"
+  fi
+  if [[ ! -f "$incremental_dcp" ]]; then
+    echo "ERROR: stable incremental checkpoint not found: $incremental_dcp" >&2
+    exit 1
+  fi
+  if (( incremental_attempts > impl_jobs )); then
+    incremental_attempts="$impl_jobs"
+  fi
+else
+  incremental_attempts=0
+fi
+
 echo "[impl-race] tag=$tag jobs=$impl_jobs place_threads=$place_threads route_threads=$route_threads"
 echo "[impl-race] source=$source_dcp"
+echo "[impl-race] acceptance WNS>=${min_wns}ns WHS>=${min_whs}ns"
+echo "[impl-race] incremental_attempts=$incremental_attempts reference=${incremental_dcp:-none}"
 
 pids=()
 attempt_dirs=()
@@ -67,7 +92,13 @@ launch_attempt() {
   local rest="${strategy#*|}"
   local phys="${rest%%|*}"
   local route="${rest#*|}"
-  local attempt="attempt${idx}_${place}_${phys}_${route}"
+  local mode="clean"
+  local reference=""
+  if (( idx < incremental_attempts )); then
+    mode="incremental"
+    reference="$incremental_dcp"
+  fi
+  local attempt="attempt${idx}_${mode}_${place}_${phys}_${route}"
   local attempt_dir="$race_root/$attempt"
   local stdout_log="$log_dir/${tag}_race_${idx}.stdout.log"
   local vivado_log="$log_dir/${tag}_race_${idx}.vivado.log"
@@ -81,6 +112,10 @@ launch_attempt() {
     "PLACE_DIRECTIVE=$place"
     "PHYS_OPT_DIRECTIVE=$phys"
     "ROUTE_DIRECTIVE=$route"
+    "IMPL_MODE=$mode"
+    "INCREMENTAL_DCP=$reference"
+    "RACE_MIN_WNS_NS=$min_wns"
+    "RACE_MIN_WHS_NS=$min_whs"
     "VIVADO_THREADS=$vivado_threads"
     "PLACE_THREADS=$place_threads"
     "ROUTE_THREADS=$route_threads"
@@ -147,12 +182,15 @@ timing_summary_value() {
   ' "$report" 2>/dev/null || true
 }
 
-copy_success_bitstreams() {
+copy_timing_met_bitstreams() {
   local dir status_file attempt bit bin out_base
   for dir in "${attempt_dirs[@]}"; do
     status_file="$dir/status.txt"
     [[ -f "$status_file" ]] || continue
-    [[ "$(status_value "$status_file" STATUS)" == "SUCCESS" ]] || continue
+    case "$(status_value "$status_file" STATUS)" in
+      SUCCESS|LOW_MARGIN) ;;
+      *) continue ;;
+    esac
 
     attempt="$(status_value "$status_file" ATTEMPT)"
     bit="$dir/top.bit"
@@ -170,13 +208,13 @@ copy_success_bitstreams() {
 write_summary() {
   local tsv="$summary_dir/impl_race_summary.tsv"
   local md="$summary_dir/impl_race_summary.md"
-  local dir status_file report attempt status detail place phys route
+  local dir status_file report attempt status detail place phys route mode
   local pp_wns wns tns setup_fail whs ths hold_fail bitstream rel_bitstream
   local success_count=0
 
-  copy_success_bitstreams
+  copy_timing_met_bitstreams
 
-  printf "attempt\tstatus\tplace\tphys_opt\troute\tpost_place_wns\tpost_route_wns\tpost_route_tns\tsetup_fail_endpoints\tpost_route_whs\tpost_route_ths\thold_fail_endpoints\tbitstream\tdetail\n" >"$tsv"
+  printf "attempt\tstatus\tmode\tplace\tphys_opt\troute\tpost_place_wns\tpost_route_wns\tpost_route_tns\tsetup_fail_endpoints\tpost_route_whs\tpost_route_ths\thold_fail_endpoints\tbitstream\tdetail\n" >"$tsv"
 
   {
     echo "# Impl Race Summary"
@@ -188,9 +226,13 @@ write_summary() {
     echo "- jobs: $impl_jobs"
     echo "- place_threads: $place_threads"
     echo "- route_threads: $route_threads"
+    echo "- min_wns_ns: $min_wns"
+    echo "- min_whs_ns: $min_whs"
+    echo "- incremental_attempts: $incremental_attempts"
+    echo "- incremental_reference: ${incremental_dcp:-none}"
     echo
-    echo "| Attempt | Status | Place | Phys Opt | Route | WNS | TNS | Setup Fail | WHS | THS | Hold Fail | Bitstream | Detail |"
-    echo "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+    echo "| Attempt | Status | Mode | Place | Phys Opt | Route | WNS | TNS | Setup Fail | WHS | THS | Hold Fail | Bitstream | Detail |"
+    echo "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
   } >"$md"
 
   for dir in "${attempt_dirs[@]}"; do
@@ -204,6 +246,7 @@ write_summary() {
       place="$(status_value "$status_file" PLACE)"
       phys="$(status_value "$status_file" PHYS_OPT)"
       route="$(status_value "$status_file" ROUTE)"
+      mode="$(status_value "$status_file" MODE)"
       pp_wns="$(status_value "$status_file" POST_PLACE_WNS)"
       wns="$(status_value "$status_file" POST_ROUTE_WNS)"
       whs="$(status_value "$status_file" POST_ROUTE_WHS)"
@@ -214,6 +257,7 @@ write_summary() {
       place=""
       phys=""
       route=""
+      mode=""
       pp_wns=""
       wns=""
       whs=""
@@ -226,22 +270,24 @@ write_summary() {
 
     bitstream=""
     rel_bitstream=""
-    if [[ "$status" == "SUCCESS" ]]; then
+    if [[ "$status" == "SUCCESS" || "$status" == "LOW_MARGIN" ]]; then
       rel_bitstream="bitstreams/${tag}_${attempt}.bit"
       if [[ -f "$build_dir/$rel_bitstream" ]]; then
         bitstream="$build_dir/$rel_bitstream"
       else
         rel_bitstream=""
       fi
-      ((success_count += 1))
+      if [[ "$status" == "SUCCESS" ]]; then
+        ((success_count += 1))
+      fi
     fi
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$attempt" "$status" "$place" "$phys" "$route" "$pp_wns" "$wns" "$tns" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$attempt" "$status" "$mode" "$place" "$phys" "$route" "$pp_wns" "$wns" "$tns" \
       "$setup_fail" "$whs" "$ths" "$hold_fail" "$bitstream" "$detail" >>"$tsv"
 
-    printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n" \
-      "$attempt" "$status" "$place" "$phys" "$route" "${wns:-NA}" "${tns:-NA}" \
+    printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n" \
+      "$attempt" "$status" "$mode" "$place" "$phys" "$route" "${wns:-NA}" "${tns:-NA}" \
       "${setup_fail:-NA}" "${whs:-NA}" "${ths:-NA}" "${hold_fail:-NA}" \
       "${rel_bitstream:-}" "$detail" >>"$md"
   done
@@ -305,7 +351,7 @@ if winner_dir="$(find_success)"; then
 fi
 
 write_summary
-echo "[impl-race] no timing-clean winner"
+echo "[impl-race] no margin-qualified winner (LOW_MARGIN bitstreams, if any, are preserved for diagnosis)"
 for dir in "${attempt_dirs[@]}"; do
   status_file="$dir/status.txt"
   if [[ -f "$status_file" ]]; then

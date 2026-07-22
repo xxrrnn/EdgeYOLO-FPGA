@@ -26,6 +26,10 @@ RACE_PLACE_THREADS ?= 16
 RACE_ROUTE_THREADS ?= 16
 RACE_STOP_ON_WIN ?= 1
 RACE_POLL_SEC  ?= 60
+RACE_MIN_WNS_NS ?= 0.05
+RACE_MIN_WHS_NS ?= 0.02
+RACE_INCREMENTAL_DCP ?=
+RACE_INCREMENTAL_ATTEMPTS ?= 4
 
 # TAG：命令行指定则用指定值；否则用当前 git short sha，便于把 bitstream 追溯到源码。
 TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%y%m%d_%H%M)
@@ -122,6 +126,8 @@ impl-race:
 	  VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(RACE_PLACE_THREADS) ROUTE_THREADS=$(RACE_ROUTE_THREADS) \
 	  SYNTH_JOBS=$(SYNTH_JOBS) IMPL_JOBS=$(IMPL_JOBS) \
 	  RACE_STOP_ON_WIN=$(RACE_STOP_ON_WIN) RACE_POLL_SEC=$(RACE_POLL_SEC) \
+	  RACE_MIN_WNS_NS=$(RACE_MIN_WNS_NS) RACE_MIN_WHS_NS=$(RACE_MIN_WHS_NS) \
+	  RACE_INCREMENTAL_DCP="$(RACE_INCREMENTAL_DCP)" RACE_INCREMENTAL_ATTEMPTS=$(RACE_INCREMENTAL_ATTEMPTS) \
 	  bash scripts/chip-lite/impl_race.sh
 
 # ------------------------------------------------------------------------------
@@ -141,8 +147,10 @@ help:
 	@echo "  make synth-np TAG=foo   Non-Project Mode（需已有同 TAG 的 bd 产物）"
 	@echo "  make bd    TAG=foo      只跑 BD（1_build + 2_bd，为 nonproj 做准备）"
 	@echo "  make resume TAG=foo FROM=place  从 checkpoint 续跑"
-	@echo "  make impl-race TAG=foo IMPL_JOBS=4 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16"
+	@echo "  make impl-race TAG=foo IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16"
 	@echo "      IMPL_JOBS is capped at 8; each worker may use up to 32 Vivado threads"
+	@echo "      Optional stable reference: RACE_INCREMENTAL_DCP=/path/to/stable/post_route.dcp"
+	@echo "      Acceptance defaults: RACE_MIN_WNS_NS=0.05 RACE_MIN_WHS_NS=0.02"
 	@echo "    FROM 可选: opt | place | phys_opt"
 	@echo "  make synth VIVADO_THREADS=32 PLACE_THREADS=8 ROUTE_THREADS=32 SYNTH_JOBS=128"
 	@echo "      Vivado 单进程线程上限通常为 32；SYNTH_JOBS 用于 OOC/IP 并行"
