@@ -148,13 +148,17 @@ module INST_Decoder #(
         S_CDMA_STRIDE_INIT       = 6'd54,
         S_CDMA_STRIDE_ISSUE      = 6'd55,
         S_CDMA_STRIDE_WAIT       = 6'd56,
-        S_CDMA_STRIDE_NEXT       = 6'd57
+        S_CDMA_STRIDE_DONE       = 6'd57,
+        S_CDMA_STRIDE_NEXT       = 6'd58
     } state_t;
 
     localparam int DCIM_NUM_TILES_L = `DCIM_NUM_TILES;
     localparam int DCIM_TILE_IDX_W   = (DCIM_NUM_TILES_L <= 1) ? 1 : $clog2(DCIM_NUM_TILES_L);
     localparam int DCIM_CFG_MAX_BODY_WORDS = 32;  // max 16 (addr,data) pairs per OP_DCIM_CFG
     localparam int DCIM_LAYER_BODY_WORDS = 8 + (2 * DCIM_NUM_TILES_L);
+    localparam [23:0] DCIM_LAYER_BODY_BYTES = 24'(DCIM_LAYER_BODY_WORDS * 4);
+    localparam int DCIM_CFG_BODY_IDX_W = (DCIM_CFG_MAX_BODY_WORDS <= 1) ? 1 : $clog2(DCIM_CFG_MAX_BODY_WORDS);
+    localparam int DCIM_LAYER_BODY_IDX_W = (DCIM_LAYER_BODY_WORDS <= 1) ? 1 : $clog2(DCIM_LAYER_BODY_WORDS);
     
     state_t state, next_state;
     
@@ -187,7 +191,9 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_out_stride;
 
     // OP_CDMA_STRIDE internal registers
+    reg [31:0] cstride_src_msb;
     reg [31:0] cstride_src_cur;
+    reg [31:0] cstride_dst_msb;
     reg [31:0] cstride_dst_cur;
     reg [31:0] cstride_copy_bytes;
     reg [31:0] cstride_src_stride;
@@ -200,7 +206,14 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_out_base [0:DCIM_NUM_TILES_L-1];
     reg [31:0] dcim_layer_out_current;
     reg [DCIM_TILE_IDX_W-1:0] dcim_layer_tile_idx;
+    wire [11:0] dcim_layer_tile_addr_off =
+        {{(10-DCIM_TILE_IDX_W){1'b0}}, dcim_layer_tile_idx, 2'b00};
     reg        dcim_layer_seen_busy;
+    reg [31:0] dcim_layer_wait_count;
+    reg        dcim_seen_busy;
+    reg [31:0] dcim_wait_count;
+    localparam [31:0] DCIM_LAYER_WAIT_TIMEOUT = 32'd250_000_000;
+    localparam [31:0] DCIM_WAIT_TIMEOUT = 32'd250_000_000;
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -209,6 +222,7 @@ module INST_Decoder #(
     // 启动边沿检测（修复：使用寄存器锁存pulse）
     reg decoder_start_d;
     reg decoder_start_pulse_reg;
+    wire decoder_soft_reset = decoder_start && !decoder_start_d && (inst_count == 32'd0);
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -218,8 +232,8 @@ module INST_Decoder #(
             decoder_start_d <= decoder_start;
             // 检测上升沿并锁存pulse，直到状态机离开IDLE状态
             if (decoder_start && !decoder_start_d) begin
-                decoder_start_pulse_reg <= 1'b1;
-            end else if (state != S_IDLE) begin
+                decoder_start_pulse_reg <= (inst_count != 32'd0);
+            end else if (state != S_IDLE || decoder_soft_reset) begin
                 decoder_start_pulse_reg <= 1'b0;
             end
         end
@@ -228,6 +242,8 @@ module INST_Decoder #(
     // 状态机：状态转移
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
+            state <= S_IDLE;
+        else if (decoder_soft_reset)
             state <= S_IDLE;
         else
             state <= next_state;
@@ -276,8 +292,8 @@ module INST_Decoder #(
                     OP_VPU_EXEC:  next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
                     OP_DCIM_EXEC: next_state = S_EXEC_DCIM;
                     OP_DCIM_CFG:  next_state = S_DCIM_CFG_INIT;
-                    OP_DCIM_LAYER: next_state = (inst_rd_data_pipe[23:0] == (DCIM_LAYER_BODY_WORDS << 2)) ? S_FETCH_BODY : S_ERROR;
-                    OP_CDMA_STRIDE: next_state = (inst_rd_data_pipe[23:0] > 0) ? S_FETCH_BODY : S_ERROR;
+                    OP_DCIM_LAYER: next_state = (inst_rd_data_pipe[23:0] == DCIM_LAYER_BODY_BYTES) ? S_FETCH_BODY : S_ERROR;
+                    OP_CDMA_STRIDE: next_state = (inst_rd_data_pipe[23:0] == 24'd32) ? S_FETCH_BODY : S_ERROR;
                     OP_WAIT_CDMA: next_state = S_EXEC_WAIT_CDMA;
                     OP_WAIT_VPU:  next_state = S_EXEC_WAIT_VPU;
                     OP_WAIT_DCIM: next_state = S_EXEC_WAIT_DCIM;
@@ -374,11 +390,13 @@ module INST_Decoder #(
             end
             
             S_EXEC_DCIM: begin
-                next_state = S_NEXT_INST;
+                next_state = S_WAIT_DCIM_DONE;
             end
             
             S_WAIT_DCIM_DONE: begin
-                if (dcim_ready)
+                if (dcim_wait_count >= DCIM_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (dcim_seen_busy && dcim_ready)
                     next_state = S_NEXT_INST;
             end
             
@@ -397,6 +415,11 @@ module INST_Decoder #(
             end
 
             S_CDMA_STRIDE_WAIT: begin
+                if (cdma_config_ready)
+                    next_state = S_CDMA_STRIDE_DONE;
+            end
+
+            S_CDMA_STRIDE_DONE: begin
                 if (cdma_config_ready)
                     next_state = S_CDMA_STRIDE_NEXT;
             end
@@ -458,7 +481,9 @@ module INST_Decoder #(
             end
 
             S_DCIM_LAYER_WAIT: begin
-                if (dcim_layer_seen_busy && dcim_ready)
+                if (dcim_layer_wait_count >= DCIM_LAYER_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (dcim_layer_seen_busy && dcim_ready)
                     next_state = S_DCIM_LAYER_NEXT;
             end
 
@@ -549,7 +574,9 @@ module INST_Decoder #(
             dcim_layer_act_base <= '0;
             dcim_layer_act_stride <= '0;
             dcim_layer_act_current <= '0;
+            cstride_src_msb <= '0;
             cstride_src_cur <= '0;
+            cstride_dst_msb <= '0;
             cstride_dst_cur <= '0;
             cstride_copy_bytes <= '0;
             cstride_src_stride <= '0;
@@ -560,7 +587,46 @@ module INST_Decoder #(
             dcim_layer_out_stride <= '0;
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
+            dcim_layer_wait_count <= '0;
+            dcim_seen_busy <= 1'b0;
+            dcim_wait_count <= '0;
                 
+        end else if (decoder_soft_reset) begin
+            decoder_busy <= 1'b0;
+            decoder_done <= 1'b0;
+            decoder_status <= STATUS_IDLE;
+            inst_rd_addr <= '0;
+            cdma_start <= 1'b0;
+            cdma_config_valid <= 1'b0;
+            vpu_start <= 1'b0;
+            dcim_cfg_wr_en <= 1'b0;
+            current_word_idx <= '0;
+            words_remaining <= '0;
+            current_opcode <= '0;
+            current_flags <= '0;
+            body_length <= '0;
+            inst_header <= '0;
+            body_word_count <= '0;
+            body_word_idx <= '0;
+            dcim_cfg_total_pairs <= '0;
+            dcim_cfg_pair_count <= '0;
+            dcim_cfg_load <= 1'b0;
+            dcim_layer_num_pixels <= '0;
+            dcim_layer_pixel_idx <= '0;
+            dcim_layer_tile_idx <= '0;
+            dcim_layer_seen_busy <= 1'b0;
+            dcim_layer_wait_count <= '0;
+            dcim_seen_busy <= 1'b0;
+            dcim_wait_count <= '0;
+            cstride_src_msb <= '0;
+            cstride_src_cur <= '0;
+            cstride_dst_msb <= '0;
+            cstride_dst_cur <= '0;
+            cstride_copy_bytes <= '0;
+            cstride_src_stride <= '0;
+            cstride_dst_stride <= '0;
+            cstride_count <= '0;
+            cstride_idx <= '0;
         end else begin
             // 默认清除脉冲信号
             decoder_done <= 1'b0;
@@ -611,7 +677,7 @@ module INST_Decoder #(
                     current_opcode <= inst_rd_data_pipe[31:28];
                     current_flags <= inst_rd_data_pipe[27:24];
                     body_length <= inst_rd_data_pipe[23:0];
-                    body_word_count <= (inst_rd_data_pipe[23:0] + 3) >> 2;  // 向上取整到字数
+                    body_word_count <= inst_rd_data_pipe[9:2] + {7'd0, |inst_rd_data_pipe[1:0]};  // 向上取整到字数
                     body_word_idx <= '0;
                     current_word_idx <= current_word_idx + 1;
                     words_remaining <= words_remaining - 1;
@@ -640,9 +706,9 @@ module INST_Decoder #(
                 
                 S_STORE_BODY: begin
                     if (dcim_cfg_load)
-                        dcim_cfg_body[body_word_idx] <= inst_rd_data_pipe;
+                        dcim_cfg_body[body_word_idx[DCIM_CFG_BODY_IDX_W-1:0]] <= inst_rd_data_pipe;
                     else
-                        body_buffer[body_word_idx] <= inst_rd_data_pipe;
+                        body_buffer[body_word_idx[DCIM_LAYER_BODY_IDX_W-1:0]] <= inst_rd_data_pipe;
                     body_word_idx <= body_word_idx + 1;
                     current_word_idx <= current_word_idx + 1;
                     words_remaining <= words_remaining - 1;
@@ -730,6 +796,8 @@ module INST_Decoder #(
                     dcim_cfg_wr_en <= 1'b1;
                     dcim_cfg_wr_addr <= 12'h000;
                     dcim_cfg_wr_data <= 32'h1;
+                    dcim_seen_busy <= 1'b0;
+                    dcim_wait_count <= '0;
 `ifdef SIMULATION
                     $display("[%0t] DCIM_EXEC start (pixel fired)", $time);
 `endif
@@ -737,8 +805,11 @@ module INST_Decoder #(
                 
                 S_WAIT_DCIM_DONE: begin
                     // 等待 DCIM 完成
+                    dcim_wait_count <= dcim_wait_count + 1'b1;
+                    if (!dcim_ready)
+                        dcim_seen_busy <= 1'b1;
 `ifdef SIMULATION
-                    if (dcim_ready)
+                    if (dcim_seen_busy && dcim_ready)
                         $display("[%0t] DCIM_WAIT_DONE: dcim_ready asserted → pixel done", $time);
 `endif
                 end
@@ -751,7 +822,7 @@ module INST_Decoder #(
                     dcim_cfg_load <= 1'b1;
                     dcim_cfg_total_pairs <= body_length[23:0];
                     dcim_cfg_pair_count <= '0;
-                    body_word_count <= body_length[23:0] << 1;
+                    body_word_count <= {body_length[6:0], 1'b0};
                     body_word_idx <= '0;
                 end
                 
@@ -811,7 +882,7 @@ module INST_Decoder #(
 
                 S_DCIM_LAYER_CFG_WEI: begin
                     dcim_cfg_wr_en <= 1'b1;
-                    dcim_cfg_wr_addr <= `DCIM_REG_WEI_BASE + {dcim_layer_tile_idx, 2'b00};
+                    dcim_cfg_wr_addr <= `DCIM_REG_WEI_BASE + dcim_layer_tile_addr_off;
                     dcim_cfg_wr_data <= dcim_layer_wei_base[dcim_layer_tile_idx];
                     dcim_layer_tile_idx <= dcim_layer_tile_idx + 1'b1;
                 end
@@ -826,7 +897,7 @@ module INST_Decoder #(
 
                 S_DCIM_LAYER_CFG_OUT: begin
                     dcim_cfg_wr_en <= 1'b1;
-                    dcim_cfg_wr_addr <= `DCIM_REG_OUT_BASE + {dcim_layer_tile_idx, 2'b00};
+                    dcim_cfg_wr_addr <= `DCIM_REG_OUT_BASE + dcim_layer_tile_addr_off;
                     dcim_cfg_wr_data <= dcim_layer_out_current;
                     dcim_layer_tile_idx <= dcim_layer_tile_idx + 1'b1;
                     if (dcim_layer_tile_idx < DCIM_NUM_TILES_L[DCIM_TILE_IDX_W-1:0] - 1'b1)
@@ -838,12 +909,14 @@ module INST_Decoder #(
                     dcim_cfg_wr_addr <= `DCIM_REG_CTRL;
                     dcim_cfg_wr_data <= 32'h1;
                     dcim_layer_seen_busy <= 1'b0;
+                    dcim_layer_wait_count <= '0;
 `ifdef PROBE_DCIM_LAYER
                     $display("[%0t] DCIM_LAYER start pixel=%0d/%0d", $time, dcim_layer_pixel_idx, dcim_layer_num_pixels);
 `endif
                 end
 
                 S_DCIM_LAYER_WAIT: begin
+                    dcim_layer_wait_count <= dcim_layer_wait_count + 1'b1;
                     if (!dcim_ready)
                         dcim_layer_seen_busy <= 1'b1;
 `ifdef PROBE_DCIM_LAYER
@@ -856,23 +929,26 @@ module INST_Decoder #(
                     dcim_layer_pixel_idx <= dcim_layer_pixel_idx + 1'b1;
                     dcim_layer_act_current <= dcim_layer_act_current + dcim_layer_act_stride;
                     dcim_layer_out_offset <= dcim_layer_out_offset + dcim_layer_out_stride;
+                    dcim_layer_wait_count <= '0;
                 end
 
                 // ---- OP_CDMA_STRIDE sequential logic ----
                 S_CDMA_STRIDE_INIT: begin
-                    cstride_src_cur    <= body_buffer[0];
-                    cstride_dst_cur    <= body_buffer[1];
-                    cstride_copy_bytes <= body_buffer[2];
-                    cstride_src_stride <= body_buffer[3];
-                    cstride_dst_stride <= body_buffer[4];
-                    cstride_count      <= body_buffer[5];
+                    cstride_src_msb    <= body_buffer[0];
+                    cstride_src_cur    <= body_buffer[1];
+                    cstride_dst_msb    <= body_buffer[2];
+                    cstride_dst_cur    <= body_buffer[3];
+                    cstride_copy_bytes <= body_buffer[4];
+                    cstride_src_stride <= body_buffer[5];
+                    cstride_dst_stride <= body_buffer[6];
+                    cstride_count      <= body_buffer[7];
                     cstride_idx        <= '0;
                 end
 
                 S_CDMA_STRIDE_ISSUE: begin
-                    cdma_src_addr_msb <= 32'h0;
+                    cdma_src_addr_msb <= cstride_src_msb;
                     cdma_src_addr_lsb <= cstride_src_cur;
-                    cdma_dst_addr_msb <= 32'h0;
+                    cdma_dst_addr_msb <= cstride_dst_msb;
                     cdma_dst_addr_lsb <= cstride_dst_cur;
                     cdma_length       <= cstride_copy_bytes;
                     cdma_config_valid <= 1'b1;

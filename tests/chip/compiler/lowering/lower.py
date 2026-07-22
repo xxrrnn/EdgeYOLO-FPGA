@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 from ..errors import OutOfBuffer, UnsupportedOp
 from ..ir_schema import (
     UNIT_AD, UNIT_DQA, UNIT_IM2COL, UNIT_MP, UNIT_NN, UNIT_QA, UNIT_US,
+    DCIM_REG_ACT_BASE, DCIM_REG_MODE, DCIM_REG_OUT_BASE,
+    DCIM_REG_TILE_MASK, DCIM_REG_TILE_MASK_HI, DCIM_REG_WEI_BASE,
     SCHEMA_VERSION, empty_plan,
 )
 from .memory_plan import MemoryPlanner
@@ -30,6 +32,8 @@ from chip_config import (  # noqa: E402
     DCIM_CYCLE,
     DCIM_INT8_OUT_CH_PER_TILE,
     DCIM_INT16_OUT_CH_PER_TILE,
+    DCIM_INT8_ACT_WORDS,
+    DCIM_INT16_ACT_WORDS,
     DCIM_INT8_OUT_WORDS_PER_TILE,
     DCIM_INT16_OUT_WORDS_PER_TILE,
     DCIM_NUM_TILES,
@@ -93,6 +97,12 @@ def emit_conv(
     mode: str,
     skip_qa: bool = False,
     act_ibuf_word_addr: int = 0,
+    use_dcim_layer: bool = False,
+    dcim_loop: str = "layer",
+    weight_tile_start: int = 0,
+    full_out_channels: int | None = None,
+    dqa_channel_off: int = 0,
+    qa_obuf_off: int | None = None,
 ) -> List[Dict[str, Any]]:
     """Emit the primitive sequence for one Conv layer.
 
@@ -106,6 +116,7 @@ def emit_conv(
     """
     cin = int(layer["in_channels"])
     cout = int(layer["out_channels"])
+    full_cout = int(full_out_channels) if full_out_channels is not None else cout
     kh = int(layer["kernel_h"])
     kw = int(layer["kernel_w"])
     stride_h, stride_w = layer["stride"][0], layer["stride"][1]
@@ -113,16 +124,18 @@ def emit_conv(
     pad_w = layer["padding"][1]
     oh = (in_h + layer["padding"][0] + layer["padding"][2] - kh) // stride_h + 1
     ow = (in_w + layer["padding"][1] + layer["padding"][3] - kw) // stride_w + 1
-    # acc_depth depends on data width: INT8 packs 16 per IBUF word; INT16 packs 8.
-    elems_per_word = (DCIM_CH_IN // 2) if mode == "int16" else DCIM_CH_IN
-    acc_depth = (kh * kw * cin + elems_per_word - 1) // elems_per_word
+    # acc_depth counts DCIM logical K groups. INT16 consumes more 128-bit
+    # activation words per group, but still covers DCIM_CH_IN logical inputs.
+    acc_depth = (kh * kw * cin + DCIM_CH_IN - 1) // DCIM_CH_IN
 
     # ---- WB sub-allocations (within wb_off) ----
     # qa_scale (1 fp32) | dqa_scale[cout] (cout fp32) | dqa_bias[cout] (cout fp32)
     qa_scale_wb_off = wb_off
-    dqa_scale_wb_off = wb_off + 16        # 16-byte aligned
-    dqa_bias_wb_off = dqa_scale_wb_off + _round_up(cout * 4, 16)
-    wb_section_bytes = (dqa_bias_wb_off - wb_off) + _round_up(cout * 4, 16)
+    dqa_scale_base_wb_off = wb_off + 16        # 16-byte aligned
+    dqa_bias_base_wb_off = dqa_scale_base_wb_off + _round_up(full_cout * 4, 16)
+    dqa_scale_wb_off = dqa_scale_base_wb_off + dqa_channel_off * 4
+    dqa_bias_wb_off = dqa_bias_base_wb_off + dqa_channel_off * 4
+    wb_section_bytes = 16 + _round_up(full_cout * 4, 16) + _round_up(full_cout * 4, 16)
 
     ops: List[Dict[str, Any]] = []
 
@@ -140,6 +153,8 @@ def emit_conv(
     # 1) QA (FP32 input → INT8).  Skip for first layer where host already wrote INT8 image
     #    bytes into OBUF; and skip when the previous DQA's output is already INT8.
     vpu_flags = (1 << 1) if mode == "int16" else 0  # VPU_FLAG_INT16
+    qa_dst_off = in_obuf_off if qa_obuf_off is None else int(qa_obuf_off)
+    conv_src_off = qa_dst_off if (not skip_qa or qa_obuf_off is not None) else in_obuf_off
     if not skip_qa:
         ops.append({
             "kind": "vpu_exec", "unit": "qa", "layer": layer["name"],
@@ -151,39 +166,11 @@ def emit_conv(
                 "src_c": cin, "src_h": in_h, "src_w": in_w,
                 "bias_addr": 0,
                 "scale_addr": qa_scale_wb_off,
-                "dst_addr": in_obuf_off,    # in-place quantize
+                "dst_addr": qa_dst_off,
                 "addr_break": 0, "addr_s": 0, "addr_t": 0,
             },
         })
         ops.append({"kind": "wait_vpu"})
-
-    # 2) im2col: OBUF[in] → OBUF[im2col scratch]
-    ops.append({
-        "kind": "vpu_exec", "unit": "im2col", "layer": layer["name"],
-        "args": {
-            "unit_choose": UNIT_IM2COL,
-            "src_addr": in_obuf_off,
-            "src2_addr": 0,
-            "src_c": cin, "src_h": in_h, "src_w": in_w,
-            "bias_addr": 0, "scale_addr": 0,
-            "dst_addr": im2col_obuf_off,
-            "addr_break": pack_addr_break(kh, kw, stride_h, stride_w, pad_h, pad_w),
-            "addr_s": oh, "addr_t": ow,
-        },
-    })
-    ops.append({"kind": "wait_vpu"})
-
-    # 3) CDMA OBUF[im2col] → IBUF[activation region]
-    ibuf_act_word_addr = act_ibuf_word_addr   # post-weights region
-    im2col_row_bytes = DCIM_CH_IN * (2 if mode == "int16" else 1)
-    im2col_bytes = oh * ow * acc_depth * im2col_row_bytes
-    ops.append({
-        "kind": "cdma_copy",
-        "src": ("obuf", im2col_obuf_off),
-        "dst": ("ibuf", ibuf_act_word_addr * 16),
-        "length": im2col_bytes,
-    })
-    ops.append({"kind": "wait_cdma"})
 
     out_ch_per_tile = DCIM_INT16_OUT_CH_PER_TILE if mode == "int16" else DCIM_INT8_OUT_CH_PER_TILE
     out_words_per_tile = DCIM_INT16_OUT_WORDS_PER_TILE if mode == "int16" else DCIM_INT8_OUT_WORDS_PER_TILE
@@ -193,50 +180,214 @@ def emit_conv(
             f"out_channels={cout} → {tiles_needed} tiles but hw has {DCIM_NUM_TILES} tiles only.  "
             f"Options: (a) split into multiple DCIM passes, (b) widen DCIM_NUM_TILES")
 
+    ibuf_act_word_addr = act_ibuf_word_addr   # post-weights region
+    im2col_row_bytes = DCIM_CH_IN * (2 if mode == "int16" else 1)
+    active_tiles = min(tiles_needed, DCIM_NUM_TILES)
+    ibuf_size = int(hw["address_map"].get("ibuf_size", 0x80000))
+
     if mode == "int16":
         from ..ir_schema import DCIM_MODE_INT16 as _mode_code
     else:
         from ..ir_schema import DCIM_MODE_INT8 as _mode_code
 
-    pairs: List[List[int]] = []
-    pairs.append([0x008, pack_dcim_mode(acc_depth, _mode_code)])
-    pairs.append([0x010, ibuf_act_word_addr])
-    # Per-tile weight base in IBUF (word address).  16 ch_out per tile × acc_depth
-    # entries × 1 word per entry  =>  acc_depth*16 words per tile.
-    # For tiles beyond `tiles_needed`, we still set a base (decoder won't fire
-    # them if num_tiles loop respects cout, but we keep simple here).
-    for t in range(DCIM_NUM_TILES):
-        pairs.append([0x040 + t * 4, wei_ibuf_word_addr + t * acc_depth * DCIM_CYCLE])
-    # Per-tile output base in OBUF (word address).  Outputs are INT32 per channel,
-    # so each output element is 4 bytes; one output row of cout/16 tiles ⊂ a tile
-    # has 16 ch_out per row.  Tile-major layout in OBUF starting at out_obuf_off.
-    out_obuf_word_addr = out_obuf_off // 16
-    per_tile_words = oh * ow * out_words_per_tile
-    for t in range(DCIM_NUM_TILES):
-        pairs.append([0x140 + t * 4, out_obuf_word_addr + t * per_tile_words])
+    if use_dcim_layer:
+        wei_base_words = [
+            wei_ibuf_word_addr
+            for t in range(DCIM_NUM_TILES)
+        ]
+        out_base_words = [0 for _ in range(DCIM_NUM_TILES)]
+        tile_obuf_size = int(hw["address_map"].get("tile_obuf_size", 0x40000))
+        act_bytes_per_oh = ow * acc_depth * im2col_row_bytes
+        tile_bytes_per_oh = ow * out_words_per_tile * BYTES_PER_WORD
+        act_room = max(1, ibuf_size - ibuf_act_word_addr * 16)
+        max_oh_by_act = max(1, act_room // max(1, act_bytes_per_oh))
+        max_oh_by_tile_obuf = max(1, tile_obuf_size // max(1, tile_bytes_per_oh))
+        oh_chunk = max(1, min(oh, max_oh_by_act, max_oh_by_tile_obuf))
 
-    ops.append({"kind": "dcim_cfg", "layer": layer["name"], "pairs": pairs})
-    ops.append({"kind": "dcim_exec"})
-    ops.append({"kind": "wait_dcim"})
+        relu_flag = (1 << 0) if bool(layer.get("has_activation", True)) else 0
+        # DCIM INT16 still writes dense INT32 accumulators to tile_obuf.  The
+        # DQA INT16 flag is only for 16-bit accumulator blobs; using it here
+        # makes DQA reinterpret each int32 word as two int16 channels.
+        dqa_flags = relu_flag
+        tile_ch = out_ch_per_tile
+        eff_ch = full_cout
 
-    # 5) DQA + ReLU + bias: OBUF[dcim INT32] → OBUF[fp32 quantized to INT8 in place]
-    dqa_flags = vpu_flags | (1 << 0)  # VPU_FLAG_RELU_EN + optional INT16
-    ops.append({
-        "kind": "vpu_exec", "unit": "dqa", "layer": layer["name"],
-        "flags": dqa_flags,
-        "args": {
-            "unit_choose": UNIT_DQA,
-            "src_addr": out_obuf_off,
-            "src2_addr": 0,
-            "src_c": cout, "src_h": oh, "src_w": ow,
-            "bias_addr": dqa_bias_wb_off,
-            "scale_addr": dqa_scale_wb_off,
-            "dst_addr": out_obuf_off,   # FP32 in-place
-            "addr_break": 0, "addr_s": 0, "addr_t": 0,
-        },
-    })
-    ops.append({"kind": "wait_vpu"})
+        for oh_start in range(0, oh, oh_chunk):
+            this_oh = min(oh_chunk, oh - oh_start)
+            in_y0 = max(oh_start * stride_h - pad_h, 0)
+            in_y1 = min((oh_start + this_oh - 1) * stride_h - pad_h + kh, in_h)
+            crop_h = max(1, in_y1 - in_y0)
+            tile_pad_h = pad_h + in_y0 - oh_start * stride_h
+            elem_bytes = 2 if mode == "int16" else 1
+            src_pixel_bytes = _round_up(cin * elem_bytes, 16)
+            src_addr = conv_src_off + in_y0 * in_w * src_pixel_bytes
 
+            ops.append({
+                "kind": "vpu_exec", "unit": "im2col", "layer": layer["name"],
+                "flags": vpu_flags,
+                "args": {
+                    "unit_choose": UNIT_IM2COL,
+                    "src_addr": src_addr,
+                    "src2_addr": 0,
+                    "src_c": cin, "src_h": crop_h, "src_w": in_w,
+                    "bias_addr": 0, "scale_addr": 0,
+                    "dst_addr": im2col_obuf_off,
+                    "addr_break": pack_addr_break(kh, kw, stride_h, stride_w, tile_pad_h, pad_w),
+                    "addr_s": this_oh, "addr_t": ow,
+                },
+            })
+            ops.append({"kind": "wait_vpu", "layer": layer["name"]})
+
+            im2col_bytes = this_oh * ow * acc_depth * im2col_row_bytes
+            for t in range(active_tiles):
+                ops.append({
+                    "kind": "cdma_copy", "layer": layer["name"],
+                    "comment": f"load activation tile{t} for {layer['name']} oh[{oh_start}:{oh_start + this_oh}]",
+                    "src": ("obuf", im2col_obuf_off),
+                    "dst": ("ibuf", t * ibuf_size + ibuf_act_word_addr * 16),
+                    "length": im2col_bytes,
+                })
+                ops.append({"kind": "wait_cdma", "layer": layer["name"]})
+
+            num_pixels = this_oh * ow
+            act_stride_words = acc_depth * (DCIM_INT16_ACT_WORDS if mode == "int16" else DCIM_INT8_ACT_WORDS)
+            out_stride_words = out_words_per_tile
+            tile_mask = (1 << active_tiles) - 1
+            if dcim_loop == "legacy":
+                cfg_pairs = [
+                    [DCIM_REG_MODE, pack_dcim_mode(acc_depth, _mode_code)],
+                    [DCIM_REG_TILE_MASK, tile_mask & 0xFFFFFFFF],
+                    [DCIM_REG_TILE_MASK_HI, (tile_mask >> 32) & 0xFFFFFFFF],
+                ]
+                for t in range(DCIM_NUM_TILES):
+                    cfg_pairs.append([DCIM_REG_WEI_BASE + t * 4, wei_base_words[t]])
+                ops.append({"kind": "dcim_cfg", "layer": layer["name"], "pairs": cfg_pairs})
+                for pixel_idx in range(num_pixels):
+                    pixel_pairs = [[DCIM_REG_ACT_BASE, ibuf_act_word_addr + pixel_idx * act_stride_words]]
+                    for t in range(active_tiles):
+                        pixel_pairs.append([
+                            DCIM_REG_OUT_BASE + t * 4,
+                            out_base_words[t] + pixel_idx * out_stride_words,
+                        ])
+                    ops.append({"kind": "dcim_cfg", "layer": layer["name"], "pairs": pixel_pairs})
+                    ops.append({"kind": "dcim_exec", "layer": layer["name"]})
+                    ops.append({"kind": "wait_dcim", "layer": layer["name"]})
+            else:
+                ops.append({
+                    "kind": "dcim_layer", "layer": layer["name"],
+                    "num_pixels": num_pixels,
+                    "mode_reg": pack_dcim_mode(acc_depth, _mode_code),
+                    "tile_mask": tile_mask,
+                    "act_base_word": ibuf_act_word_addr,
+                    "act_stride_words": act_stride_words,
+                    "out_stride_words": out_stride_words,
+                    "wei_base_words": wei_base_words,
+                    "out_base_words": out_base_words,
+                })
+                ops.append({"kind": "wait_dcim", "layer": layer["name"]})
+                ops.extend({"kind": "nop", "layer": layer["name"]} for _ in range(16))
+
+            per_tile_block_bytes = num_pixels * out_words_per_tile * BYTES_PER_WORD
+            dcim_collect_off = im2col_obuf_off
+            for t in range(active_tiles):
+                ops.append({
+                    "kind": "cdma_copy", "layer": layer["name"],
+                    "comment": f"collect tile_obuf tile{t} for {layer['name']} oh[{oh_start}:{oh_start + this_oh}]",
+                    "src": ("tile_obuf", t * tile_obuf_size),
+                    "dst": ("obuf", dcim_collect_off + t * per_tile_block_bytes),
+                    "length": per_tile_block_bytes,
+                })
+                ops.append({"kind": "wait_cdma", "layer": layer["name"]})
+
+            dst_row_off = out_obuf_off + oh_start * ow * eff_ch * 4
+            for t in range(active_tiles):
+                ops.append({
+                    "kind": "vpu_exec", "unit": "dqa", "layer": layer["name"],
+                    "flags": dqa_flags,
+                    "args": {
+                        "unit_choose": UNIT_DQA,
+                        "src_addr": dcim_collect_off + t * per_tile_block_bytes,
+                        "src2_addr": 0,
+                        "src_c": tile_ch, "src_h": this_oh, "src_w": ow,
+                        "bias_addr": dqa_bias_wb_off + t * tile_ch * 4,
+                        "scale_addr": dqa_scale_wb_off + t * tile_ch * 4,
+                        "dst_addr": dst_row_off + (dqa_channel_off + t * tile_ch) * 4,
+                        "addr_break": eff_ch, "addr_s": 0, "addr_t": 0,
+                    },
+                })
+                ops.append({"kind": "wait_vpu", "layer": layer["name"]})
+    else:
+        # 2) im2col: OBUF[in] → OBUF[im2col scratch]
+        ops.append({
+            "kind": "vpu_exec", "unit": "im2col", "layer": layer["name"],
+            "flags": vpu_flags,
+            "args": {
+                "unit_choose": UNIT_IM2COL,
+                "src_addr": conv_src_off,
+                "src2_addr": 0,
+                "src_c": cin, "src_h": in_h, "src_w": in_w,
+                "bias_addr": 0, "scale_addr": 0,
+                "dst_addr": im2col_obuf_off,
+                "addr_break": pack_addr_break(kh, kw, stride_h, stride_w, pad_h, pad_w),
+                "addr_s": oh, "addr_t": ow,
+            },
+        })
+        ops.append({"kind": "wait_vpu"})
+
+        im2col_bytes = oh * ow * acc_depth * im2col_row_bytes
+        ops.append({
+            "kind": "cdma_copy",
+            "src": ("obuf", im2col_obuf_off),
+            "dst": ("ibuf", ibuf_act_word_addr * 16),
+            "length": im2col_bytes,
+        })
+        ops.append({"kind": "wait_cdma"})
+
+        pairs: List[List[int]] = []
+        pairs.append([0x008, pack_dcim_mode(acc_depth, _mode_code)])
+        pairs.append([0x010, ibuf_act_word_addr])
+        # Per-tile weight base in IBUF (word address).  16 ch_out per tile × acc_depth
+        # entries × 1 word per entry  =>  acc_depth*16 words per tile.
+        # For tiles beyond `tiles_needed`, we still set a base (decoder won't fire
+        # them if num_tiles loop respects cout, but we keep simple here).
+        for t in range(DCIM_NUM_TILES):
+            pairs.append([0x040 + t * 4, wei_ibuf_word_addr + t * acc_depth * DCIM_CYCLE])
+        # Per-tile output base in OBUF (word address).  Outputs are INT32 per channel,
+        # so each output element is 4 bytes; one output row of cout/16 tiles ⊂ a tile
+        # has 16 ch_out per row.  Tile-major layout in OBUF starting at out_obuf_off.
+        out_obuf_word_addr = out_obuf_off // 16
+        per_tile_words = oh * ow * out_words_per_tile
+        for t in range(DCIM_NUM_TILES):
+            pairs.append([0x140 + t * 4, out_obuf_word_addr + t * per_tile_words])
+
+        ops.append({"kind": "dcim_cfg", "layer": layer["name"], "pairs": pairs})
+        ops.append({"kind": "dcim_exec"})
+        ops.append({"kind": "wait_dcim"})
+
+        # 5) DQA + ReLU + bias: OBUF[dcim INT32] → OBUF[fp32 quantized to INT8 in place]
+        relu_flag = (1 << 0) if bool(layer.get("has_activation", True)) else 0
+        # DCIM output is INT32 accumulators in both INT8 and INT16 conv modes.
+        dqa_flags = relu_flag
+        ops.append({
+            "kind": "vpu_exec", "unit": "dqa", "layer": layer["name"],
+            "flags": dqa_flags,
+            "args": {
+                "unit_choose": UNIT_DQA,
+                "src_addr": out_obuf_off,
+                "src2_addr": 0,
+                "src_c": cout, "src_h": oh, "src_w": ow,
+                "bias_addr": dqa_bias_wb_off,
+                "scale_addr": dqa_scale_wb_off,
+                "dst_addr": out_obuf_off,   # FP32 in-place
+                "addr_break": 0, "addr_s": 0, "addr_t": 0,
+            },
+        })
+        ops.append({"kind": "wait_vpu"})
+
+    for op in ops:
+        if op.get("layer") == layer["name"]:
+            op.setdefault("weight_tile_start", weight_tile_start)
+            op.setdefault("weight_tile_count", active_tiles)
     return ops, oh, ow, cout, wb_section_bytes
 
 
@@ -279,7 +430,7 @@ def lower(
     plan["host_io"] = {
         "input_obuf_off": 0x000000,
         "output_obuf_off": 0x180000,
-        "input_dtype": "uint8" if input_shape[1] == 3 else "int8",
+        "input_dtype": "int16" if mode == "int16" else ("uint8" if input_shape[1] == 3 else "int8"),
         "output_dtype": "float32",
     }
 
@@ -369,10 +520,11 @@ def lower(
         try:
             im2col_off = planner.alloc_im2col(im2col_bytes)
         except OutOfBuffer as e:
+            scratch_bytes = getattr(planner, "_half", 0)
             raise UnsupportedOp(
                 layer["name"], "Conv",
                 f"im2col output requires {im2col_bytes} bytes but OBUF im2col scratch is only "
-                f"{planner.obuf_im2col.hi - planner.obuf_im2col.lo} bytes.  "
+                f"{scratch_bytes} bytes.  "
                 f"Options: (a) tile by output-H (split OH into chunks), "
                 f"(b) enlarge OBUF im2col region in MemoryPlanner, "
                 f"(c) reduce input resolution.  Inner error: {e}"
@@ -385,13 +537,12 @@ def lower(
         planner.reset_ibuf()
         # IBUF layout: weights first (per-tile), then activation region.
         tiles_needed = (cout + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE
-        elems_per_word = (DCIM_CH_IN // 2) if mode == "int16" else DCIM_CH_IN
-        acc_depth_words = (kh * kw * cin + elems_per_word - 1) // elems_per_word
+        acc_depth_words = (kh * kw * cin + DCIM_CH_IN - 1) // DCIM_CH_IN
         weight_per_tile_words = acc_depth_words * DCIM_CYCLE
         weight_per_tile_bytes = weight_per_tile_words * BYTES_PER_WORD
         wei_byte_off = planner.alloc_ibuf(weight_per_tile_bytes * DCIM_NUM_TILES)
         wei_ibuf_word_addr = wei_byte_off // 16
-        # Activation region: each IBUF word holds elems_per_word INT8/INT16 act values.
+        # Activation region: INT16 uses more 128-bit words per acc_depth step.
         act_bytes = oh * ow * acc_depth_words * DCIM_CH_IN * (2 if mode == "int16" else 1)
         try:
             act_byte_off = planner.alloc_ibuf(act_bytes)
@@ -434,7 +585,7 @@ def lower(
             "input_c": cur_c, "output_c": cout,
             "kernel": [kh, kw], "stride": [sh, sw],
             "padding": [ph0, pw0, ph1, pw1],
-            "acc_depth": (kh * kw * cin + elems_per_word - 1) // elems_per_word,
+            "acc_depth": acc_depth_words,
             "tiles_needed": tiles_needed,
         })
         wb_records.append({

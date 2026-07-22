@@ -121,6 +121,8 @@ module im2col_unit #(
     localparam S_READ_TAIL_REQ      = 5'd11; // 输入数据跨读字边界时补读下一字
     localparam S_READ_TAIL_WAIT     = 5'd12;
     localparam S_READ_TAIL_LATCH    = 5'd13;
+    localparam S_ROW_TAIL_WRITE     = 5'd17; // 写零补齐 row_stride padding
+    localparam S_ADVANCE_PIXEL      = 5'd18; // 推进 ow/oh 到下一个输出像素
 
     reg [4:0] state;
 
@@ -132,6 +134,7 @@ module im2col_unit #(
     reg [15:0]        c_chunk_max;   // = ceil(CH_IN * ELEM_BYTES / 16)
     reg [31:0]        c_chunk_byte_offset_r;  // c_chunk * 16 byte，提前寄存以切断写数据路径
     reg [4:0]         write_chunk_nbyte_r;
+    reg [31:0]        tail_offset_r;  // 当前 output row 内需要清零的 byte offset
     reg               in_bound;      // 当前 (ih, iw) 是否在 feature 范围内
 
     // 读延迟：douta_valid 握手（lite DCIM_OBUF_NBPIPE=4 → 端到端 10 拍）
@@ -149,6 +152,10 @@ module im2col_unit #(
     // =========================================================================
     localparam C_CHUNK_BYTES = 16;
     localparam WORD_BYTES    = VB_BANDWIDTH / 8;  // OBUF 物理字宽（lite=16B, chip=32B）
+    localparam [5:0] C_CHUNK_BYTES_6 = C_CHUNK_BYTES;
+    localparam [5:0] WORD_BYTES_6    = WORD_BYTES;
+    localparam [VB_ADDR_WIDTH-1:0] VB_ADDR_ALIGN_MASK =
+        ~{{(VB_ADDR_WIDTH-4){1'b0}}, 4'hF};
     // ELEM_BYTES 运行时值（已锁存）
     wire [ADDR_WIDTH-1:0] elem_bytes_w = {{(ADDR_WIDTH-2){1'b0}}, elem_bytes_r};
     wire [31:0] c_chunk_byte_offset = c_chunk_byte_offset_r;
@@ -178,8 +185,9 @@ module im2col_unit #(
     // 输出地址：同样只加法
     reg [31:0] out_row_offset_r;  // = (oh*OW + ow) * row_stride
     reg [31:0] out_col_offset_r;  // = (kh*kW + kw) * CH_IN
-    wire [VB_ADDR_WIDTH-1:0] out_byte_addr =
+    wire [31:0] out_byte_addr_32 =
         dst_addr_r + out_row_offset_r + out_col_offset_r + c_chunk_byte_offset;
+    wire [VB_ADDR_WIDTH-1:0] out_byte_addr = out_byte_addr_32[VB_ADDR_WIDTH-1:0];
 
     // 写使能/数据：按字内偏移放置 CH_IN×ELEM_BYTES 字节
     //   LOOP_BITS：限制循环变量位宽，防止综合器静态展开时产生越界 part-select
@@ -188,8 +196,7 @@ module im2col_unit #(
     wire [4:0] write_chunk_nbyte = write_chunk_nbyte_r;
     // 必须用 6-bit 相加，避免 4-bit out_byte_in_word 截断导致 write_need_tail 恒为 0
     wire [5:0] write_end_pos = {2'b0, out_byte_in_word} + {1'b0, write_chunk_nbyte};
-    wire [5:0] write_split_at = (WORD_BYTES > C_CHUNK_BYTES) ? {2'b0, C_CHUNK_BYTES[4:0]}
-                                                             : {1'b0, WORD_BYTES[4:0]};
+    wire [5:0] write_split_at = (WORD_BYTES > C_CHUNK_BYTES) ? C_CHUNK_BYTES_6 : WORD_BYTES_6;
     wire [4:0] write_first_nbyte = (write_end_pos > write_split_at) ?
                                    (write_split_at[4:0] - out_byte_in_word) : write_chunk_nbyte;
     wire [4:0] write_tail_nbyte = (write_end_pos > write_split_at) ?
@@ -197,14 +204,14 @@ module im2col_unit #(
     wire       write_need_tail = (write_tail_nbyte != 5'd0);
     wire [5:0] rd_tail_span_end = {2'b0, in_byte_in_word_r} + {1'b0, write_first_nbyte}
                                 + {1'b0, write_tail_nbyte};
-    wire       need_rd_tail = write_need_tail && in_bound && (rd_tail_span_end > WORD_BYTES);
-    wire [VB_ADDR_WIDTH-1:0] write_byte_addr_aligned = out_byte_addr & ~32'd15;
-    wire [VB_ADDR_WIDTH-1:0] in_rd_word_base = in_pixel_byte_addr & ~32'd15;
+    wire       need_rd_tail = write_need_tail && in_bound && (rd_tail_span_end > WORD_BYTES_6);
+    wire [VB_ADDR_WIDTH-1:0] write_byte_addr_aligned = out_byte_addr & VB_ADDR_ALIGN_MASK;
+    wire [VB_ADDR_WIDTH-1:0] in_rd_word_base = in_pixel_byte_addr & VB_ADDR_ALIGN_MASK;
     wire                    write_is_tail = (state == S_WRITE_TAIL);
     reg [VB_BANDWIDTH/8-1:0] write_mask;
     reg [VB_BANDWIDTH-1:0] write_din_aligned;
     // 循环变量用 LOOP_BITS 位，防止综合器 integer(32-bit) 展开时产生越界 part-select
-    reg [LOOP_BITS-1:0] write_mask_i, write_byte_pos, rd_byte_idx;
+    reg [LOOP_BITS-1:0] write_mask_i, write_byte_pos, rd_byte_idx, rd_tail_byte_idx;
     always_comb begin
         write_mask = {VB_BANDWIDTH/8{1'b0}};
         write_din_aligned = {VB_BANDWIDTH{1'b0}};
@@ -212,29 +219,52 @@ module im2col_unit #(
             for (write_mask_i = 0; write_mask_i < write_first_nbyte; write_mask_i = write_mask_i + 1'b1) begin
                 write_byte_pos = out_byte_in_word + write_mask_i;
                 rd_byte_idx    = in_byte_in_word_r + write_mask_i;
-                if (write_byte_pos < WORD_BYTES) begin
-                    write_mask[write_byte_pos] = 1'b1;
-                    if (in_bound && (rd_byte_idx < WORD_BYTES))
-                        write_din_aligned[write_byte_pos*8 +: 8] =
-                            rd_data_reg[rd_byte_idx * 8 +: 8];
+                if (write_byte_pos < WORD_BYTES_6) begin
+                    write_mask[write_byte_pos[3:0]] = 1'b1;
+                    if (in_bound && (rd_byte_idx < WORD_BYTES_6))
+                        write_din_aligned[write_byte_pos[3:0]*8 +: 8] =
+                            rd_data_reg[rd_byte_idx[3:0] * 8 +: 8];
                 end
             end
         end else begin
             for (write_mask_i = 0; write_mask_i < write_tail_nbyte; write_mask_i = write_mask_i + 1'b1) begin
                 write_byte_pos = write_mask_i;
                 rd_byte_idx    = in_byte_in_word_r + write_first_nbyte + write_mask_i;
-                if (write_byte_pos < WORD_BYTES) begin
-                    write_mask[write_byte_pos] = 1'b1;
+                rd_tail_byte_idx = rd_byte_idx - WORD_BYTES[LOOP_BITS-1:0];
+                if (write_byte_pos < WORD_BYTES_6) begin
+                    write_mask[write_byte_pos[3:0]] = 1'b1;
                     if (in_bound) begin
-                        if (rd_byte_idx < WORD_BYTES)
-                            write_din_aligned[write_byte_pos*8 +: 8] =
-                                rd_data_reg[rd_byte_idx * 8 +: 8];
+                        if (rd_byte_idx < WORD_BYTES_6)
+                            write_din_aligned[write_byte_pos[3:0]*8 +: 8] =
+                                rd_data_reg[rd_byte_idx[3:0] * 8 +: 8];
                         else
-                            write_din_aligned[write_byte_pos*8 +: 8] =
-                                rd_tail_data_reg[(rd_byte_idx - WORD_BYTES[LOOP_BITS-1:0]) * 8 +: 8];
+                            write_din_aligned[write_byte_pos[3:0]*8 +: 8] =
+                                rd_tail_data_reg[rd_tail_byte_idx[3:0] * 8 +: 8];
                     end
                 end
             end
+        end
+    end
+
+    wire [31:0] row_tail_byte_addr_32 =
+        dst_addr_r + out_row_offset_r + tail_offset_r;
+    wire [VB_ADDR_WIDTH-1:0] row_tail_byte_addr = row_tail_byte_addr_32[VB_ADDR_WIDTH-1:0];
+    wire [3:0] row_tail_byte_in_word = row_tail_byte_addr[3:0];
+    wire [VB_ADDR_WIDTH-1:0] row_tail_addr_aligned = row_tail_byte_addr & VB_ADDR_ALIGN_MASK;
+    wire [31:0] row_tail_remaining = row_stride_r - tail_offset_r;
+    wire [5:0] row_tail_capacity =
+        WORD_BYTES_6 - {2'b0, row_tail_byte_in_word};
+    wire [4:0] row_tail_nbyte =
+        (row_tail_remaining > row_tail_capacity) ?
+        row_tail_capacity[4:0] : row_tail_remaining[4:0];
+    reg [VB_BANDWIDTH/8-1:0] row_tail_mask;
+    reg [LOOP_BITS-1:0] row_tail_i, row_tail_byte_pos;
+    always_comb begin
+        row_tail_mask = {VB_BANDWIDTH/8{1'b0}};
+        for (row_tail_i = 0; row_tail_i < row_tail_nbyte; row_tail_i = row_tail_i + 1'b1) begin
+            row_tail_byte_pos = row_tail_byte_in_word + row_tail_i;
+            if (row_tail_byte_pos < WORD_BYTES_6)
+                row_tail_mask[row_tail_byte_pos[3:0]] = 1'b1;
         end
     end
 
@@ -271,6 +301,7 @@ module im2col_unit #(
             c_chunk <= 0; c_chunk_max <= 0;
             c_chunk_byte_offset_r <= '0;
             write_chunk_nbyte_r <= '0;
+            tail_offset_r      <= '0;
             in_bound          <= 1'b0;
             rd_wait_cnt       <= 0;
             latch_stall_cnt   <= 0;
@@ -327,6 +358,7 @@ module im2col_unit #(
                     oh <= 0; ow <= 0; kh <= 0; kw <= 0; c_chunk <= 0;
                     c_chunk_byte_offset_r <= '0;
                     write_chunk_nbyte_r <= (elem_total_bytes_r > C_CHUNK_BYTES) ? 5'd16 : elem_total_bytes_r[4:0];
+                    tail_offset_r <= '0;
                     in_oh_acc_r <= 0; in_kh_acc_r <= 0;
                     in_ow_acc_r <= 0; in_kw_acc_r <= 0;
                     out_row_offset_r <= 0; out_col_offset_r <= 0;
@@ -521,19 +553,44 @@ module im2col_unit #(
                         in_kw_acc_r      <= in_kw_acc_r + in_col_stride_r;
                         out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
                         state <= S_BOUND_CHECK;
+                    end else begin
+                        kw <= 0;
+                        in_kw_acc_r <= 0;
+                        if (kh + 1 < $signed({1'b0, kH_r})) begin
+                            kh <= kh + 1;
+                            in_kh_acc_r <= in_kh_acc_r + w_times_c_r;
+                            // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 elem_total_bytes
+                            out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
+                            state <= S_BOUND_CHECK;
                         end else begin
-                            kw <= 0;
-                            in_kw_acc_r      <= 0;
-                            if (kh + 1 < $signed({1'b0, kH_r})) begin
-                                kh <= kh + 1;
-                                in_kh_acc_r      <= in_kh_acc_r + w_times_c_r;
-                                // kw 末尾切换到下一 kh 时，补加最后一步 kw 未加的 elem_total_bytes
-                                out_col_offset_r <= out_col_offset_r + elem_total_bytes_r;
-                                state <= S_BOUND_CHECK;
+                            kh <= 0;
+                            in_kh_acc_r <= 0;
+                            out_col_offset_r <= 0;
+                            if (kH_kw_c_r < row_stride_r) begin
+                                tail_offset_r <= kH_kw_c_r;
+                                state <= S_ROW_TAIL_WRITE;
                             end else begin
-                                kh <= 0;
-                                in_kh_acc_r      <= 0;
-                                out_col_offset_r <= 0;
+                                state <= S_ADVANCE_PIXEL;
+                            end
+                        end
+                    end
+                end
+
+                S_ROW_TAIL_WRITE: begin
+                    gb_addrb <= row_tail_addr_aligned;
+                    gb_enb   <= 1'b1;
+                    gb_web   <= row_tail_mask;
+                    gb_dinb  <= '0;
+                    if ((tail_offset_r + row_tail_nbyte) < row_stride_r) begin
+                        tail_offset_r <= tail_offset_r + row_tail_nbyte;
+                        state <= S_ROW_TAIL_WRITE;
+                    end else begin
+                        tail_offset_r <= '0;
+                        state <= S_ADVANCE_PIXEL;
+                    end
+                end
+
+                S_ADVANCE_PIXEL: begin
                             if (ow + 1 < $signed(ow_max_r)) begin
                                 ow <= ow + 1;
                                 in_ow_acc_r      <= in_ow_acc_r + stride_w_c_r;
@@ -551,8 +608,6 @@ module im2col_unit #(
                                     state <= S_DONE;
                                 end
                             end
-                        end
-                    end
                 end
 
                 S_DONE: begin

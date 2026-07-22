@@ -1,0 +1,45 @@
+{
+  "network": "yolov5n",
+  "image": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\model\\yolov5n_coco50k_qat\\template\\000000000139.jpg",
+  "num_detections": 3,
+  "detections": [
+    {
+      "bbox": [
+        296.1744689941406,
+        222.5826416015625,
+        362.2117004394531,
+        327.12750244140625
+      ],
+      "conf": 0.49779993295669556,
+      "class_score": 0.49779993295669556,
+      "class_id": 56,
+      "class_name": "chair"
+    },
+    {
+      "bbox": [
+        362.8238830566406,
+        211.59707641601562,
+        442.2964172363281,
+        320.9305725097656
+      ],
+      "conf": 0.37288567423820496,
+      "class_score": 0.37288567423820496,
+      "class_id": 56,
+      "class_name": "chair"
+    },
+    {
+      "bbox": [
+        9.193206787109375,
+        164.92904663085938,
+        162.3362274169922,
+        270.7391052246094
+      ],
+      "conf": 0.6267555952072144,
+      "class_score": 0.6267555952072144,
+      "class_id": 62,
+      "class_name": "tv"
+    }
+  ],
+  "expect_detections": 3,
+  "detections_match": true
+}

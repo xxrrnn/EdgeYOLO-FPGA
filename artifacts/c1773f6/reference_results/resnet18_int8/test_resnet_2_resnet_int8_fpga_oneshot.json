@@ -1,0 +1,33 @@
+{
+  "network": "resnet18",
+  "image": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\test_resnet_2.JPEG",
+  "topk": [
+    {
+      "class_id": 1,
+      "class_name": "goldfish",
+      "score": 24.52494239807129
+    },
+    {
+      "class_id": 0,
+      "class_name": "tench",
+      "score": 16.211715698242188
+    },
+    {
+      "class_id": 29,
+      "class_name": "axolotl",
+      "score": 14.511987686157227
+    },
+    {
+      "class_id": 397,
+      "class_name": "pufferfish",
+      "score": 13.816953659057617
+    },
+    {
+      "class_id": 392,
+      "class_name": "rock beauty",
+      "score": 12.197154998779297
+    }
+  ],
+  "expect_top1": 1,
+  "top1_match": true
+}

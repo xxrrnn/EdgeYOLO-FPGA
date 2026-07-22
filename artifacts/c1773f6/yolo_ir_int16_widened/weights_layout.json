@@ -1,0 +1,290 @@
+{
+  "model.0.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.1.conv": {
+    "bytes": 12288,
+    "ibuf_byte_off": 0
+  },
+  "model.2.cv1.conv": {
+    "bytes": 2048,
+    "ibuf_byte_off": 0
+  },
+  "model.2.m.0.cv1.conv": {
+    "bytes": 2048,
+    "ibuf_byte_off": 0
+  },
+  "model.2.m.0.cv2.conv": {
+    "bytes": 6144,
+    "ibuf_byte_off": 0
+  },
+  "model.2.cv2.conv": {
+    "bytes": 2048,
+    "ibuf_byte_off": 0
+  },
+  "model.2.cv3.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.3.conv": {
+    "bytes": 40960,
+    "ibuf_byte_off": 0
+  },
+  "model.4.cv1.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.4.m.0.cv1.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.4.m.0.cv2.conv": {
+    "bytes": 20480,
+    "ibuf_byte_off": 0
+  },
+  "model.4.m.1.cv1.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.4.m.1.cv2.conv": {
+    "bytes": 20480,
+    "ibuf_byte_off": 0
+  },
+  "model.4.cv2.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.4.cv3.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.5.conv": {
+    "bytes": 147456,
+    "ibuf_byte_off": 0
+  },
+  "model.6.cv1.conv": {
+    "bytes": 16384,
+    "ibuf_byte_off": 0
+  },
+  "model.6.m.0.cv1.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.6.m.0.cv2.conv": {
+    "bytes": 73728,
+    "ibuf_byte_off": 0
+  },
+  "model.6.m.1.cv1.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.6.m.1.cv2.conv": {
+    "bytes": 73728,
+    "ibuf_byte_off": 0
+  },
+  "model.6.m.2.cv1.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.6.m.2.cv2.conv": {
+    "bytes": 73728,
+    "ibuf_byte_off": 0
+  },
+  "model.6.cv2.conv": {
+    "bytes": 16384,
+    "ibuf_byte_off": 0
+  },
+  "model.6.cv3.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.7.conv": {
+    "bytes": 589824,
+    "ibuf_byte_off": 0
+  },
+  "model.8.cv1.conv": {
+    "bytes": 65536,
+    "ibuf_byte_off": 0
+  },
+  "model.8.m.0.cv1.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.8.m.0.cv2.conv": {
+    "bytes": 294912,
+    "ibuf_byte_off": 0
+  },
+  "model.8.cv2.conv": {
+    "bytes": 65536,
+    "ibuf_byte_off": 0
+  },
+  "model.8.cv3.conv": {
+    "bytes": 131072,
+    "ibuf_byte_off": 0
+  },
+  "model.9.cv1.conv": {
+    "bytes": 65536,
+    "ibuf_byte_off": 0
+  },
+  "model.9.cv2.conv": {
+    "bytes": 262144,
+    "ibuf_byte_off": 0
+  },
+  "model.10.conv": {
+    "bytes": 65536,
+    "ibuf_byte_off": 0
+  },
+  "model.13.cv1.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.13.m.0.cv1.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.13.m.0.cv2.conv": {
+    "bytes": 73728,
+    "ibuf_byte_off": 0
+  },
+  "model.13.cv2.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.13.cv3.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.14.conv": {
+    "bytes": 16384,
+    "ibuf_byte_off": 0
+  },
+  "model.17.cv1.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.17.m.0.cv1.conv": {
+    "bytes": 4096,
+    "ibuf_byte_off": 0
+  },
+  "model.17.m.0.cv2.conv": {
+    "bytes": 20480,
+    "ibuf_byte_off": 0
+  },
+  "model.17.cv2.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.17.cv3.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.18.conv": {
+    "bytes": 73728,
+    "ibuf_byte_off": 0
+  },
+  "model.20.cv1.conv": {
+    "bytes": 16384,
+    "ibuf_byte_off": 0
+  },
+  "model.20.m.0.cv1.conv": {
+    "bytes": 8192,
+    "ibuf_byte_off": 0
+  },
+  "model.20.m.0.cv2.conv": {
+    "bytes": 73728,
+    "ibuf_byte_off": 0
+  },
+  "model.20.cv2.conv": {
+    "bytes": 16384,
+    "ibuf_byte_off": 0
+  },
+  "model.20.cv3.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.21.conv": {
+    "bytes": 294912,
+    "ibuf_byte_off": 0
+  },
+  "model.23.cv1.conv": {
+    "bytes": 65536,
+    "ibuf_byte_off": 0
+  },
+  "model.23.m.0.cv1.conv": {
+    "bytes": 32768,
+    "ibuf_byte_off": 0
+  },
+  "model.23.m.0.cv2.conv": {
+    "bytes": 294912,
+    "ibuf_byte_off": 0
+  },
+  "model.23.cv2.conv": {
+    "bytes": 65536,
+    "ibuf_byte_off": 0
+  },
+  "model.23.cv3.conv": {
+    "bytes": 131072,
+    "ibuf_byte_off": 0
+  },
+  "__section_offsets": {
+    "model.0.conv": 0,
+    "model.1.conv": 4096,
+    "model.2.cv1.conv": 16384,
+    "model.2.m.0.cv1.conv": 18432,
+    "model.2.m.0.cv2.conv": 20480,
+    "model.2.cv2.conv": 26624,
+    "model.2.cv3.conv": 28672,
+    "model.3.conv": 32768,
+    "model.4.cv1.conv": 73728,
+    "model.4.m.0.cv1.conv": 77824,
+    "model.4.m.0.cv2.conv": 81920,
+    "model.4.m.1.cv1.conv": 102400,
+    "model.4.m.1.cv2.conv": 106496,
+    "model.4.cv2.conv": 126976,
+    "model.4.cv3.conv": 131072,
+    "model.5.conv": 139264,
+    "model.6.cv1.conv": 286720,
+    "model.6.m.0.cv1.conv": 303104,
+    "model.6.m.0.cv2.conv": 311296,
+    "model.6.m.1.cv1.conv": 385024,
+    "model.6.m.1.cv2.conv": 393216,
+    "model.6.m.2.cv1.conv": 466944,
+    "model.6.m.2.cv2.conv": 475136,
+    "model.6.cv2.conv": 548864,
+    "model.6.cv3.conv": 565248,
+    "model.7.conv": 598016,
+    "model.8.cv1.conv": 1187840,
+    "model.8.m.0.cv1.conv": 1253376,
+    "model.8.m.0.cv2.conv": 1286144,
+    "model.8.cv2.conv": 1581056,
+    "model.8.cv3.conv": 1646592,
+    "model.9.cv1.conv": 1777664,
+    "model.9.cv2.conv": 1843200,
+    "model.10.conv": 2105344,
+    "model.13.cv1.conv": 2170880,
+    "model.13.m.0.cv1.conv": 2203648,
+    "model.13.m.0.cv2.conv": 2211840,
+    "model.13.cv2.conv": 2285568,
+    "model.13.cv3.conv": 2318336,
+    "model.14.conv": 2351104,
+    "model.17.cv1.conv": 2367488,
+    "model.17.m.0.cv1.conv": 2375680,
+    "model.17.m.0.cv2.conv": 2379776,
+    "model.17.cv2.conv": 2400256,
+    "model.17.cv3.conv": 2408448,
+    "model.18.conv": 2416640,
+    "model.20.cv1.conv": 2490368,
+    "model.20.m.0.cv1.conv": 2506752,
+    "model.20.m.0.cv2.conv": 2514944,
+    "model.20.cv2.conv": 2588672,
+    "model.20.cv3.conv": 2605056,
+    "model.21.conv": 2637824,
+    "model.23.cv1.conv": 2932736,
+    "model.23.m.0.cv1.conv": 2998272,
+    "model.23.m.0.cv2.conv": 3031040,
+    "model.23.cv2.conv": 3325952,
+    "model.23.cv3.conv": 3391488
+  },
+  "__mode": "int16"
+}

@@ -112,6 +112,17 @@ if {[llength $_dcim_cfg_regs]} { set_property MAX_FANOUT 16 $_dcim_cfg_regs }
 set _dqa_gs [get_cells -quiet -hierarchical -filter {NAME =~ *dqa_inst/dqa_scale_bias_group_sel_reg*}]
 if {[llength $_dqa_gs]} { set_property MAX_FANOUT 64 $_dqa_gs }
 
+# pip_data_q_reg: Stage-2 broadcast register (mid_data_q → ppCache, fo=128 per bit)
+# RTL already carries (* MAX_FANOUT = 16 *); XDC reinforces placement replication.
+# Vivado places 8 copies (ceil(128/16)) near each cacheMem region,
+# breaking the long-distance mid_data_q→r_mem route (was 3.824ns in 3cef48c).
+# mid_data_q_reg now has fo=1 (only drives pip_data_q), no constraint needed there.
+set _pip_data_q [get_cells -quiet -hierarchical -filter {NAME =~ */u_memory/pip_data_q_reg*}]
+if {[llength $_pip_data_q]} {
+    set_property MAX_FANOUT 16 $_pip_data_q
+    puts "INFO: pip_data_q_reg MAX_FANOUT=16: [llength $_pip_data_q] cells"
+}
+
 # ############################################################################
 # Section 6: Pblock / SLR 分配
 # ############################################################################

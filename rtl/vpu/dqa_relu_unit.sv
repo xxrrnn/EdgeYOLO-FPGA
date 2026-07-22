@@ -20,6 +20,7 @@ module dqa_relu_unit #(
     output  wire                                dqa_unit_ready,
     input   wire                                dqa_relu_en,     // 1=ReLU（max(·,0)），0=线性直通
     input   wire                                dqa_int16_mode,  // 1=输入 INT16 accumulator，0=输入 INT32 accumulator
+    input   wire                                dqa_act_mode,    // 1=输入为 QA packed activation，0=DCIM accumulator
 
     input   wire[ADDR_WIDTH - 1:0]              dqa_src_addr,
     input   wire[ADDR_WIDTH - 1:0]              dqa_src_c,
@@ -131,7 +132,8 @@ module dqa_relu_unit #(
                                     DQA_SINGLE_COMPUTE_BLOCKS32 : DQA_SINGLE_COMPUTE_BLOCKS16;
     localparam DQA_LOAD_WORDS_BITS = (DQA_LOAD_WORDS_MAX <= 1) ? 1 : $clog2(DQA_LOAD_WORDS_MAX);
     localparam DQA_SAVE_WORDS_BITS = (DQA_SINGLE_COMPUTE_SAVE_BLOCKS <= 1) ? 1 : $clog2(DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
-    wire [ADDR_WIDTH - 1 : 0] dqa_single_compute_blocks_active = dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32;
+    wire [ADDR_WIDTH - 1 : 0] dqa_single_compute_blocks_active =
+        dqa_act_mode ? 1 : (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32);
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_load_stride;
@@ -296,16 +298,10 @@ module dqa_relu_unit #(
         else begin
             if(c_state == DQA_WAIT_SCALE) begin
                 dqa_scale_load_cnt <= dqa_scale_load_cnt + 1'b1;
-                if (MAX_CHANNEL_LENGTH > WB_BANDWIDTH)
-                    dqa_scale_reg <= {wb_doutb, dqa_scale_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
-                else
-                    dqa_scale_reg <= wb_doutb[MAX_CHANNEL_LENGTH - 1 : 0];
+                dqa_scale_reg <= {wb_doutb, dqa_scale_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
             end else if(c_state == DQA_WAIT_BIAS) begin
                 dqa_bias_load_cnt  <= dqa_bias_load_cnt  + 1'b1;
-                if (MAX_CHANNEL_LENGTH > WB_BANDWIDTH)
-                    dqa_bias_reg  <= {wb_doutb, dqa_bias_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
-                else
-                    dqa_bias_reg  <= wb_doutb[MAX_CHANNEL_LENGTH - 1 : 0];
+                dqa_bias_reg  <= {wb_doutb, dqa_bias_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
             end else if(c_state == IDLE) begin
                 dqa_scale_load_cnt <= '0;
                 dqa_bias_load_cnt  <= '0;
@@ -326,15 +322,23 @@ module dqa_relu_unit #(
             case (c_state)
                 DQA_WAIT_X: begin
                     if (gb_doutb_valid) begin
-                        if (dqa_int16_mode) begin
+                        if (dqa_act_mode && dqa_int16_mode) begin
+                            for (int dqa_act16_i = 0; dqa_act16_i < FP_CORE_NUM; dqa_act16_i++) begin
+                                dqa_int_in_reg[dqa_act16_i*C_INT_WIDTH_IN +: C_INT_WIDTH_IN]
+                                    <= {{(C_INT_WIDTH_IN-16){gb_doutb[dqa_x_load_addr_add[0]*64 + dqa_act16_i*16 + 15]}},
+                                        gb_doutb[dqa_x_load_addr_add[0]*64 + dqa_act16_i*16 +: 16]};
+                            end
+                        end else if (dqa_act_mode) begin
+                            for (int dqa_act8_i = 0; dqa_act8_i < FP_CORE_NUM; dqa_act8_i++) begin
+                                dqa_int_in_reg[dqa_act8_i*C_INT_WIDTH_IN +: C_INT_WIDTH_IN]
+                                    <= {{(C_INT_WIDTH_IN-8){gb_doutb[dqa_x_load_addr_add[1:0]*32 + dqa_act8_i*8 + 7]}},
+                                        gb_doutb[dqa_x_load_addr_add[1:0]*32 + dqa_act8_i*8 +: 8]};
+                            end
+                        end else if (dqa_int16_mode) begin
                             for (int dqa_i16_i = 0; dqa_i16_i < FP_CORE_NUM; dqa_i16_i++) begin
                                 dqa_int_in_reg[dqa_i16_i*C_INT_WIDTH_IN +: C_INT_WIDTH_IN]
                                     <= {{(C_INT_WIDTH_IN-16){gb_doutb[dqa_i16_i*16+15]}}, gb_doutb[dqa_i16_i*16 +: 16]};
                             end
-                        end else if (FP_CORE_NUM * C_INT_WIDTH_IN > VB_BANDWIDTH) begin
-                            // 宽于 GB：移位拼接（只在 C_INT_WIDTH_IN>32 或 chip 256-bit 路径有效）
-                            dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0]
-                                <= {gb_doutb, dqa_int_in_reg[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : VB_BANDWIDTH]};
                         end else begin
                             dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
                         end
@@ -374,7 +378,10 @@ module dqa_relu_unit #(
         gb_web   = '0;
         gb_dinb  = '0;
         if(c_state == DQA_LOAD_X) begin
-            gb_addrb = dqa_src_base_word_reg + dqa_x_load_addr_add;
+            gb_addrb = dqa_src_base_word_reg +
+                       (dqa_act_mode
+                        ? (dqa_int16_mode ? (dqa_x_load_addr_add >> 1) : (dqa_x_load_addr_add >> 2))
+                        : dqa_x_load_addr_add);
             gb_enb   = 1'b1;
             gb_web   = '0;
             gb_dinb  = '0;
@@ -523,7 +530,8 @@ module dqa_relu_unit #(
                                      (dqa_src_c   >> $clog2(FP_CORE_NUM)));
             dqa_src_base_word_reg <= dqa_src_addr >> BYTE_ADDR_SHIFT;
             dqa_dst_base_word_reg <= dqa_dst_addr >> BYTE_ADDR_SHIFT;
-            dqa_load_word_stride_reg <= dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32;
+            dqa_load_word_stride_reg <= dqa_act_mode ? 1 :
+                                        (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32);
         end
     end
 

@@ -1,0 +1,44 @@
+{
+  "build_dir": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\artifacts\\c1773f6\\yolo_coco_int16_widened",
+  "network": "yolov5n",
+  "mode": "int16",
+  "initial_decoder_status": 0,
+  "weights_bytes": 3522560,
+  "wb_bytes": 38928,
+  "input_bytes": 1638400,
+  "segments": [
+    {
+      "index": 0,
+      "path": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\artifacts\\c1773f6\\yolo_coco_int16_widened\\program.bin",
+      "bytes": 129044,
+      "words": 32261,
+      "upload_s": 0.02640369999971881,
+      "execute_s": 2.537657300000319
+    }
+  ],
+  "outputs": [
+    {
+      "name": "PAN_P5",
+      "bytes": 102400,
+      "read_s": 0.027500200000758923
+    },
+    {
+      "name": "PAN_P3",
+      "bytes": 409600,
+      "read_s": 0.1505405999996583
+    },
+    {
+      "name": "PAN_P4",
+      "bytes": 204800,
+      "read_s": 0.048117700000148034
+    }
+  ],
+  "zero_obuf_s": 0.0,
+  "upload_weights_s": 0.07352129999981116,
+  "upload_wb_s": 0.021511899999495654,
+  "upload_input_s": 0.03516250000029686,
+  "execute_s": 2.537657300000319,
+  "program_upload_s": 0.02640369999971881,
+  "read_outputs_s": 0.22615850000056525,
+  "total_s": 3.0240317999996478
+}

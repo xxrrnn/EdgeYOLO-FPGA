@@ -1,13 +1,15 @@
 """
 hw_runner.py - host-side driver that pushes a compiled plan to the FPGA via XDMA.
 
-Hardware-side address map (mirrors chip_defines.vh:94-99 and scripts/ip/bd/lite/address.tcl):
+Hardware-side address map (mirrors hw_caps.yaml / chip-v3 address.tcl):
 
-   0x1_0000_0000  IBUF      (2 MB)        DMA via /dev/xdma0_h2c_0 / c2h_0
-   0x1_0100_0000  OBUF      (16 MB)       DMA via /dev/xdma0_h2c_0 / c2h_0
-   0x1_0200_0000  WB        (32 KB)       DMA via /dev/xdma0_h2c_0
-   0x1_0300_0000  INST_BRAM (128 KB)      DMA via /dev/xdma0_h2c_0
-   0x1_0400_0000  VPU_AXI_Regs (4 KB)     same channel, AXI-Lite small writes
+   0x0_0000_0000  HBM       (weights blob staging)
+   0x1_0000_0000  IBUF      (512 KB)      DMA via /dev/xdma0_h2c_0 / c2h_0
+   0x1_0100_0000  TILE_OBUF (256 KB)      DCIM tile outputs
+   0x1_0200_0000  VPU_BUF   (8 MB)        activations / VPU scratch
+   0x1_0300_0000  WB        (32 KB)       VPU scales / biases
+   0x1_0400_0000  INST_BRAM (128 KB)      program image
+   0x1_0500_0000  VPU_AXI_Regs (4 KB)     decoder control
 
 All five segments hang off the XDMA M_AXI, so we DO NOT need /dev/xdma0_user
 mmap; all reads/writes go through /dev/xdma0_h2c_0 (writes) and
@@ -101,6 +103,45 @@ REG_INST_COUNT = 0x3C
 REG_DECODER_STATUS = 0x40
 
 
+def output_specs(plan: dict) -> list[dict]:
+    host = plan["host_io"]
+    outputs = host.get("outputs") or [{
+        "name": "output",
+        "obuf_off": host["output_obuf_off"],
+        "dtype": host.get("output_dtype", "float32"),
+        "hw": host["output_hw"],
+        "c": host["output_c"],
+    }]
+    return outputs
+
+
+def output_nbytes(spec: dict) -> int:
+    dtype = spec.get("dtype", "float32")
+    elem = 4 if dtype == "float32" else (2 if dtype == "int16" else 1)
+    h, w = [int(x) for x in spec["hw"]]
+    return h * w * int(spec["c"]) * elem
+
+
+def pad_nhwc_input(raw: bytes, plan: dict) -> bytes:
+    """Pad tight C<16 NHWC host input to im2col_unit's 16-byte pixel stride."""
+    shape = plan.get("input_shape") or []
+    if len(shape) != 4:
+        return raw
+    _n, c, h, w = [int(x) for x in shape]
+    mode = plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8"))
+    elem_bytes = 2 if mode == "int16" else 1
+    tight = h * w * c * elem_bytes
+    padded_c = (c * elem_bytes + 15) // 16 * (16 // elem_bytes)
+    padded = h * w * padded_c * elem_bytes
+    if c * elem_bytes >= 16 or len(raw) != tight or tight == padded:
+        return raw
+    dtype = np.int16 if elem_bytes == 2 else np.uint8
+    arr = np.frombuffer(raw, dtype=dtype).reshape(h, w, c)
+    out = np.zeros((h, w, padded_c), dtype=dtype)
+    out[:, :, :c] = arr
+    return out.tobytes()
+
+
 def main():
     ap = argparse.ArgumentParser(description="EdgeYOLO-FPGA-lite XDMA host runner")
     ap.add_argument("--build-dir", required=True,
@@ -109,6 +150,8 @@ def main():
                     help="raw input bytes (NHWC INT8/UINT8) to upload at OBUF[input_obuf_off]")
     ap.add_argument("--output", required=True,
                     help="path to write the OBUF[output_obuf_off..] tensor back to")
+    ap.add_argument("--output-dir", default=None,
+                    help="optional directory for all named host outputs")
     ap.add_argument("--device", default="/dev/xdma0",
                     help="XDMA device prefix (default /dev/xdma0)")
     ap.add_argument("--dry-run", action="store_true",
@@ -119,10 +162,18 @@ def main():
 
     bd = Path(args.build_dir)
     plan = json.loads((bd / "plan.json").read_text())
-    program = (bd / "program.bin").read_bytes()
+    manifest_path = bd / "program_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        programs = [
+            (seg["index"], bd / seg["bin"], (bd / seg["bin"]).read_bytes())
+            for seg in manifest["segments"]
+        ]
+    else:
+        programs = [(0, bd / "program.bin", (bd / "program.bin").read_bytes())]
     weights = (bd / "weights.bin").read_bytes() if (bd / "weights.bin").exists() else b""
     wb_blob = (bd / "wb.bin").read_bytes() if (bd / "wb.bin").exists() else b""
-    input_bytes = open(args.input, "rb").read()
+    input_bytes = pad_nhwc_input(open(args.input, "rb").read(), plan)
 
     am = plan["address_map"]
     ibuf_base = int(am["ibuf_base"])
@@ -134,67 +185,88 @@ def main():
     Xclass = DryXDMA if args.dry_run else XDMA
 
     with Xclass(args.device) as x:
-        # ---- 1. Upload program ----
-        print(f"[hw] upload program: {len(program)} bytes → INST_BRAM @ 0x{inst_base:x}")
-        x.write(inst_base, program)
-        n_words = len(program) // 4
-
-        # ---- 2. Upload weights ----
-        # For the MVP single-layer run, weights occupy IBUF from offset 0.  For
-        # multi-layer runs the host streams per-layer weights between layer
-        # ops (not in MVP scope).
+        # ---- 1. Upload weights once to HBM ----
+        # The one-shot program copies each layer's packed section into IBUF
+        # just before the corresponding DCIM execution.
         if weights:
-            print(f"[hw] upload weights: {len(weights)} bytes → IBUF @ 0x{ibuf_base:x}")
-            x.write(ibuf_base, weights)
+            weights_hbm_off = int(plan.get("host_io", {}).get("weights_hbm_off", 0x200000))
+            hbm_base = int(am.get("hbm_base", 0))
+            print(f"[hw] upload weights: {len(weights)} bytes -> HBM @ 0x{hbm_base + weights_hbm_off:x}")
+            x.write(hbm_base + weights_hbm_off, weights)
 
-        # ---- 3. Upload WB scratch (into OBUF wb-scratch region) ----
+        # ---- 3. Upload WB scratch into VPU_BUF scratch region ----
         if wb_blob:
-            scratch_lo = obuf_base + 0xFF0000
-            print(f"[hw] upload wb_scratch: {len(wb_blob)} bytes → OBUF wb_scratch @ 0x{scratch_lo:x}")
+            scratch_map = plan.get("wb_layout", {}).get("scratch_off_by_layer", {})
+            scratch_off = min(int(v) for v in scratch_map.values()) if scratch_map else 0x7C0000
+            scratch_lo = obuf_base + scratch_off
+            print(f"[hw] upload wb_scratch: {len(wb_blob)} bytes -> VPU_BUF @ 0x{scratch_lo:x}")
             x.write(scratch_lo, wb_blob)
 
         # ---- 4. Upload input feature ----
         in_off = plan["host_io"]["input_obuf_off"]
-        print(f"[hw] upload input: {len(input_bytes)} bytes → OBUF @ 0x{obuf_base + in_off:x}")
+        print(f"[hw] upload input: {len(input_bytes)} bytes -> VPU_BUF @ 0x{obuf_base + in_off:x}")
         x.write(obuf_base + in_off, input_bytes)
 
-        # ---- 5. Kick off decoder ----
-        print(f"[hw] write INST_COUNT = {n_words}")
-        x.write_u32(regs_base + REG_INST_COUNT, n_words)
-        print(f"[hw] write DECODER_CTRL = 1")
-        x.write_u32(regs_base + REG_DECODER_CTRL, 1)
-        # The decoder takes the edge; clear the level for cleanliness.
-        x.write_u32(regs_base + REG_DECODER_CTRL, 0)
+        # ---- 4. Run one or more INST_BRAM-sized program segments ----
+        for seg_i, program_path, program in programs:
+            print(
+                f"[hw] upload program segment {seg_i}: {len(program)} bytes "
+                f"({program_path.name}) -> INST_BRAM @ 0x{inst_base:x}"
+            )
+            x.write(inst_base, program)
+            n_words = len(program) // 4
 
-        # ---- 6. Poll DECODER_STATUS until done or error ----
-        deadline = time.time() + args.poll_timeout_s
-        last = None
-        while True:
-            st = x.read_u32(regs_base + REG_DECODER_STATUS)
-            if st != last:
-                print(f"[hw] DECODER_STATUS = 0x{st:08x}")
-                last = st
-            if st & 0x80000000:
-                raise RuntimeError(f"decoder error: status=0x{st:08x}")
-            if st & 0x2:
-                print(f"[hw] decoder DONE")
-                break
-            if time.time() > deadline:
-                raise TimeoutError(f"decoder still busy after {args.poll_timeout_s}s "
-                                   f"(status=0x{st:08x})")
-            time.sleep(0.001)
+            print(f"[hw] write INST_COUNT = {n_words}")
+            x.write_u32(regs_base + REG_INST_COUNT, n_words)
+            print("[hw] write DECODER_CTRL = 1")
+            x.write_u32(regs_base + REG_DECODER_CTRL, 1)
+            # The decoder takes the edge; clear the level for cleanliness.
+            x.write_u32(regs_base + REG_DECODER_CTRL, 0)
 
-        # ---- 7. Read back output tensor ----
-        out_off = plan["host_io"]["output_obuf_off"]
-        oh, ow = plan["host_io"]["output_hw"]
-        oc = plan["host_io"]["output_c"]
-        elem = 4 if plan["host_io"]["output_dtype"] == "float32" else 1
-        nbytes = oh * ow * oc * elem
-        print(f"[hw] read output: {nbytes} bytes from OBUF @ 0x{obuf_base + out_off:x}")
+            deadline = time.time() + args.poll_timeout_s
+            last = None
+            while True:
+                st = x.read_u32(regs_base + REG_DECODER_STATUS)
+                if st != last:
+                    print(f"[hw] segment {seg_i} DECODER_STATUS = 0x{st:08x}")
+                    last = st
+                if st & 0x80000000:
+                    raise RuntimeError(f"decoder error in segment {seg_i}: status=0x{st:08x}")
+                if st & 0x2:
+                    print(f"[hw] segment {seg_i} decoder DONE")
+                    break
+                if time.time() > deadline:
+                    raise TimeoutError(f"decoder segment {seg_i} still busy after "
+                                       f"{args.poll_timeout_s}s (status=0x{st:08x})")
+                time.sleep(0.001)
+
+        # ---- 5. Read back output tensor ----
+        outputs = output_specs(plan)
+        primary = outputs[-1]
+        out_off = int(primary["obuf_off"])
+        nbytes = output_nbytes(primary)
+        print(f"[hw] read output {primary['name']}: {nbytes} bytes from OBUF @ 0x{obuf_base + out_off:x}")
         data = x.read(obuf_base + out_off, nbytes)
 
     open(args.output, "wb").write(data)
     print(f"[hw] wrote {nbytes} bytes to {args.output}")
+
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with Xclass(args.device) as x:
+            for spec in output_specs(plan):
+                name = str(spec["name"]).replace("/", "_").replace("\\", "_")
+                path = out_dir / f"{name}.bin"
+                if spec == primary:
+                    blob = data
+                else:
+                    off = int(spec["obuf_off"])
+                    nb = output_nbytes(spec)
+                    print(f"[hw] read output {name}: {nb} bytes from OBUF @ 0x{obuf_base + off:x}")
+                    blob = x.read(obuf_base + off, nb)
+                path.write_bytes(blob)
+                print(f"[hw] wrote {path}")
 
 
 if __name__ == "__main__":

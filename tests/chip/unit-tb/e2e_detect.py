@@ -18,6 +18,7 @@ e2e_detect.py - YOLOv5n E2E 目标检测（FPGA 真实执行）
   python e2e_detect.py --images ../../../model/algorithm/Infrared-Object-Detection/datasets/infrared/images/val/ --max 8 --dry-run
 """
 from __future__ import annotations
+import os
 import sys, time, argparse
 from pathlib import Path
 import numpy as np
@@ -33,6 +34,14 @@ from run import (
 )
 from ops import FPGAOps, HostOps, C3Block, conv_meta, _net, set_network_json
 from detect_head import DetectHead
+
+
+def _can_reuse_cases(runs_base: str) -> bool:
+    root = Path(runs_base)
+    return root.exists() and any(
+        d.is_dir() and (d / "inst.hex").exists() and (d / "preload.txt").exists()
+        for d in root.iterdir()
+    )
 from golden_module_tb import out_hw as _out_hw
 
 REPO_ROOT = _THIS.parents[2]
@@ -201,9 +210,12 @@ def run_single_image(img_path: str, runner, dry_run: bool, conf_thres: float = 0
     # Always regenerate to ensure case files match the current weight config (INT8 vs INT16).
     weight_hbm_map = None
     if preload_weights and not dry_run and runner is not None:
-        print("[preload] Generating case files (dry-run)...", flush=True)
-        run_fpga_backbone_neck(quant_input, runner=None, dry_run=True,
-                               runs_base=_runs_base, verify=False)
+        if os.environ.get("EDGEYOLO_REUSE_CASES") == "1" and _can_reuse_cases(_runs_base):
+            print("[preload] Reusing existing case files", flush=True)
+        else:
+            print("[preload] Generating case files (dry-run)...", flush=True)
+            run_fpga_backbone_neck(quant_input, runner=None, dry_run=True,
+                                   runs_base=_runs_base, verify=False)
         # Phase 2: upload all weights to HBM pool
         print("[preload] Uploading all weights to HBM pool...", flush=True)
         t_pre = time.time()

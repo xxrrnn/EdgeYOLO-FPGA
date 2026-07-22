@@ -1,0 +1,230 @@
+{
+  "model.0.conv": {
+    "offset": 0,
+    "bytes": 144
+  },
+  "model.1.conv": {
+    "offset": 144,
+    "bytes": 272
+  },
+  "model.2.cv1.conv": {
+    "offset": 416,
+    "bytes": 144
+  },
+  "model.2.m.0.cv1.conv": {
+    "offset": 560,
+    "bytes": 144
+  },
+  "model.2.m.0.cv2.conv": {
+    "offset": 704,
+    "bytes": 144
+  },
+  "model.2.cv2.conv": {
+    "offset": 848,
+    "bytes": 144
+  },
+  "model.2.cv3.conv": {
+    "offset": 992,
+    "bytes": 272
+  },
+  "model.3.conv": {
+    "offset": 1264,
+    "bytes": 528
+  },
+  "model.4.cv1.conv": {
+    "offset": 1792,
+    "bytes": 272
+  },
+  "model.4.m.0.cv1.conv": {
+    "offset": 2064,
+    "bytes": 272
+  },
+  "model.4.m.0.cv2.conv": {
+    "offset": 2336,
+    "bytes": 272
+  },
+  "model.4.m.1.cv1.conv": {
+    "offset": 2608,
+    "bytes": 272
+  },
+  "model.4.m.1.cv2.conv": {
+    "offset": 2880,
+    "bytes": 272
+  },
+  "model.4.cv2.conv": {
+    "offset": 3152,
+    "bytes": 272
+  },
+  "model.4.cv3.conv": {
+    "offset": 3424,
+    "bytes": 528
+  },
+  "model.5.conv": {
+    "offset": 3952,
+    "bytes": 1040
+  },
+  "model.6.cv1.conv": {
+    "offset": 4992,
+    "bytes": 528
+  },
+  "model.6.m.0.cv1.conv": {
+    "offset": 5520,
+    "bytes": 528
+  },
+  "model.6.m.0.cv2.conv": {
+    "offset": 6048,
+    "bytes": 528
+  },
+  "model.6.m.1.cv1.conv": {
+    "offset": 6576,
+    "bytes": 528
+  },
+  "model.6.m.1.cv2.conv": {
+    "offset": 7104,
+    "bytes": 528
+  },
+  "model.6.m.2.cv1.conv": {
+    "offset": 7632,
+    "bytes": 528
+  },
+  "model.6.m.2.cv2.conv": {
+    "offset": 8160,
+    "bytes": 528
+  },
+  "model.6.cv2.conv": {
+    "offset": 8688,
+    "bytes": 528
+  },
+  "model.6.cv3.conv": {
+    "offset": 9216,
+    "bytes": 1040
+  },
+  "model.7.conv": {
+    "offset": 10256,
+    "bytes": 2064
+  },
+  "model.8.cv1.conv": {
+    "offset": 12320,
+    "bytes": 1040
+  },
+  "model.8.m.0.cv1.conv": {
+    "offset": 13360,
+    "bytes": 1040
+  },
+  "model.8.m.0.cv2.conv": {
+    "offset": 14400,
+    "bytes": 1040
+  },
+  "model.8.cv2.conv": {
+    "offset": 15440,
+    "bytes": 1040
+  },
+  "model.8.cv3.conv": {
+    "offset": 16480,
+    "bytes": 2064
+  },
+  "model.9.cv1.conv": {
+    "offset": 18544,
+    "bytes": 1040
+  },
+  "model.9.cv2.conv": {
+    "offset": 19584,
+    "bytes": 2064
+  },
+  "model.10.conv": {
+    "offset": 21648,
+    "bytes": 1040
+  },
+  "model.13.cv1.conv": {
+    "offset": 22688,
+    "bytes": 528
+  },
+  "model.13.m.0.cv1.conv": {
+    "offset": 23216,
+    "bytes": 528
+  },
+  "model.13.m.0.cv2.conv": {
+    "offset": 23744,
+    "bytes": 528
+  },
+  "model.13.cv2.conv": {
+    "offset": 24272,
+    "bytes": 528
+  },
+  "model.13.cv3.conv": {
+    "offset": 24800,
+    "bytes": 1040
+  },
+  "model.14.conv": {
+    "offset": 25840,
+    "bytes": 528
+  },
+  "model.17.cv1.conv": {
+    "offset": 26368,
+    "bytes": 272
+  },
+  "model.17.m.0.cv1.conv": {
+    "offset": 26640,
+    "bytes": 272
+  },
+  "model.17.m.0.cv2.conv": {
+    "offset": 26912,
+    "bytes": 272
+  },
+  "model.17.cv2.conv": {
+    "offset": 27184,
+    "bytes": 272
+  },
+  "model.17.cv3.conv": {
+    "offset": 27456,
+    "bytes": 528
+  },
+  "model.18.conv": {
+    "offset": 27984,
+    "bytes": 528
+  },
+  "model.20.cv1.conv": {
+    "offset": 28512,
+    "bytes": 528
+  },
+  "model.20.m.0.cv1.conv": {
+    "offset": 29040,
+    "bytes": 528
+  },
+  "model.20.m.0.cv2.conv": {
+    "offset": 29568,
+    "bytes": 528
+  },
+  "model.20.cv2.conv": {
+    "offset": 30096,
+    "bytes": 528
+  },
+  "model.20.cv3.conv": {
+    "offset": 30624,
+    "bytes": 1040
+  },
+  "model.21.conv": {
+    "offset": 31664,
+    "bytes": 1040
+  },
+  "model.23.cv1.conv": {
+    "offset": 32704,
+    "bytes": 1040
+  },
+  "model.23.m.0.cv1.conv": {
+    "offset": 33744,
+    "bytes": 1040
+  },
+  "model.23.m.0.cv2.conv": {
+    "offset": 34784,
+    "bytes": 1040
+  },
+  "model.23.cv2.conv": {
+    "offset": 35824,
+    "bytes": 1040
+  },
+  "model.23.cv3.conv": {
+    "offset": 36864,
+    "bytes": 2064
+  }
+}

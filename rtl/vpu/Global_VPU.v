@@ -83,6 +83,7 @@ module Global_VPU #(
   localparam UNIT_IM2COL = 32'd07;  // lite: im2col_unit
   localparam VPU_FLAG_RELU_EN = 0;
   localparam VPU_FLAG_INT16   = 1;
+  localparam VPU_FLAG_DQA_ACT = 2;
 
 
     wire   rst_n_local;
@@ -193,6 +194,7 @@ module Global_VPU #(
   wire [ADDR_WIDTH-1:0] active_addr_t      = addr_t_reg;
   wire [3:0]            active_vpu_flags   = vpu_flags_reg;
   wire                  active_int16_mode  = active_vpu_flags[VPU_FLAG_INT16];
+  wire                  active_dqa_act_mode = active_vpu_flags[VPU_FLAG_DQA_ACT];
 
 
     wire [VB_ADDR_WIDTH-1:0]    gb_addrb, dqa_gb_addrb, nn_gb_addrb, qa_gb_addrb, mp_gb_addrb, us_gb_addrb, ad_gb_addrb, im2col_gb_addrb;
@@ -420,6 +422,7 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
         .ad_src_h(active_src_h),
         .ad_src_w(active_src_w),
         .ad_dst_addr(active_dst_addr),
+        .ad_relu_en(active_addr_break[0]),
 
         .gb_addrb( ad_gb_addrb),
         .gb_dinb( ad_gb_dinb),
@@ -488,6 +491,7 @@ assign nn_fp_c_tdata      = {FP_CORE_NUM*FP_WIDTH{1'b0}};
         .dqa_unit_ready(dqa_unit_ready),
         .dqa_relu_en(active_vpu_flags[VPU_FLAG_RELU_EN]),
         .dqa_int16_mode(active_int16_mode),
+        .dqa_act_mode(active_dqa_act_mode),
         .dqa_src_addr(active_src_addr),
         .dqa_src_c(active_src_c),
         .dqa_src_h(active_src_h),

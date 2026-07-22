@@ -12,16 +12,20 @@ Schema (top-level keys):
       "input_shape":     [N, C, H, W],
       "output_shape":    [...],
       "mode":            "int8" | "int16",     # data path width
-      "address_map": {                          # mirrors chip_defines.vh:94-99
+      "address_map": {                          # mirrors chip-v3 Vivado BD
           "ibuf_base":   0x100000000,
-          "ibuf_size":   2097152,
-          "obuf_base":   0x101000000,
-          "obuf_size":   16777216,
-          "wb_base":     0x102000000,
+          "ibuf_size":   524288,
+          "tile_obuf_base": 0x101000000,
+          "tile_obuf_size": 262144,
+          "vpu_buf_base": 0x102000000,
+          "obuf_base":   0x102000000,
+          "obuf_size":   8388608,
+          "vpu_buf_size": 8388608,
+          "wb_base":     0x103000000,
           "wb_size":     32768,
-          "inst_base":   0x103000000,
+          "inst_base":   0x104000000,
           "inst_size":   131072,
-          "regs_base":   0x104000000,
+          "regs_base":   0x105000000,
           "regs_size":   4096
       },
       "memory_plan": {                          # OBUF byte ranges (16MB)
@@ -114,6 +118,8 @@ DCIM_REG_MODE = 0x008
 DCIM_REG_ACT_BASE = 0x010
 DCIM_REG_WEI_BASE = 0x040       # +4 per tile, 8 tiles
 DCIM_REG_OUT_BASE = 0x140       # +4 per tile, 8 tiles
+DCIM_REG_TILE_MASK = 0x240
+DCIM_REG_TILE_MASK_HI = 0x244
 
 # ---- DCIM mode field (chip_defines.vh:20-25) ----
 DCIM_MODE_INT4 = 0b100
@@ -126,6 +132,7 @@ DCIM_MODE_UINT16 = 0b011
 # ---- VPU flags (header[27:24]) ----
 VPU_FLAG_RELU_EN = 0   # bit 0: DQA relu enable
 VPU_FLAG_INT16 = 1     # bit 1: INT16 mode for QA/DQA
+VPU_FLAG_DQA_ACT = 2   # bit 2: DQA input is QA-packed activation
 
 
 def empty_plan(network: str, input_shape, output_shape, mode: str = "int8") -> Dict[str, Any]:

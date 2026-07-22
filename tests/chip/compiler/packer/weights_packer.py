@@ -34,6 +34,7 @@ from chip_config import (  # noqa: E402
     DCIM_CH_OUT,
     DCIM_CYCLE,
     DCIM_INT8_OUT_CH_PER_TILE,
+    DCIM_INT16_OUT_CH_PER_TILE,
     DCIM_NUM_TILES,
     require_consistent,
 )
@@ -42,6 +43,7 @@ require_consistent()
 CH_IN_PER_TILE = DCIM_CH_IN
 CH_OUT_PER_TILE = DCIM_CH_OUT
 INT8_OUT_CH_PER_TILE = DCIM_INT8_OUT_CH_PER_TILE
+INT16_OUT_CH_PER_TILE = DCIM_INT16_OUT_CH_PER_TILE
 TILES = DCIM_NUM_TILES
 
 
@@ -83,48 +85,52 @@ def pack_layer_weights_int16(
     expected_acc_depth: int,
     expected_tiles: int,
 ) -> bytes:
-    """W16A16 bit-extension layout: sign-extend INT8 weights to INT16 and emit
-    4× the entries (one per nibble).  The DCIM INT16 mode reads 4 nibbles per
-    activation/weight and merges them with shifts of 4/8/12.
+    """Pack W16A16 weights in the same nibble layout as the RTL golden.
 
-    NOTE: This packing is currently for the *bit-extension oracle*.  It is
-    bit-equivalent to INT8 with high byte = sign-extension of the INT8 value,
-    so the matmul output is identical.
+    Each INT16 logical output channel maps to four physical output lanes.  For
+    every acc step, DCIM reads `DCIM_CYCLE` 128-bit words that cover
+    `DCIM_CH_IN` logical input values across `DCIM_CH_OUT` physical lanes.
     """
     cout, cin, kh, kw = weight_int8.shape
-    # acc_depth in INT16 mode = ceil(kH*kW*Cin / 8) since each IBUF word holds
-    # only 8 INT16 weights instead of 16 INT8.
-    acc_depth_int16 = (kh * kw * cin + 8 - 1) // 8
-
-    if expected_acc_depth != acc_depth_int16:
-        # caller still uses INT8 acc_depth; we double it here for the wider mode.
-        pass
-
+    acc_depth = (kh * kw * cin + CH_IN_PER_TILE - 1) // CH_IN_PER_TILE
+    tiles_needed = (cout + INT16_OUT_CH_PER_TILE - 1) // INT16_OUT_CH_PER_TILE
+    if expected_acc_depth != acc_depth:
+        raise ValueError(
+            f"INT16 acc_depth mismatch: layer says {acc_depth}, plan says {expected_acc_depth}"
+        )
+    if expected_tiles < tiles_needed:
+        raise ValueError(
+            f"INT16 tile mismatch: weights need {tiles_needed} tiles, plan says {expected_tiles}"
+        )
     w = weight_int8.reshape(cout, kh * kw * cin).astype(np.int16)
-    # Sign-extend (already int16).  Pad CH_IN dim to acc_depth*8.
-    pad_cols = acc_depth_int16 * 8 - w.shape[1]
+    pad_cols = acc_depth * CH_IN_PER_TILE - w.shape[1]
     if pad_cols > 0:
         w = np.pad(w, ((0, 0), (0, pad_cols)))
 
     out = bytearray()
-    # 8 tiles × acc_depth_int16 × 16 ch_out per acc_word, 4 nibbles per entry.
-    for tile in range(TILES):
-        ch_out_start = tile * (CH_OUT_PER_TILE // 4)
-        for acc_w in range(acc_depth_int16):
-            col_lo = acc_w * 8
-            for ch_out_local in range(CH_OUT_PER_TILE):
-                ch_out_global = ch_out_start + (ch_out_local // 4)
+    for tile in range(expected_tiles):
+        ch_out_start = tile * INT16_OUT_CH_PER_TILE
+        for acc_w in range(acc_depth):
+            nibble = np.zeros((CH_IN_PER_TILE, CH_OUT_PER_TILE), dtype=np.uint8)
+            col_lo = acc_w * CH_IN_PER_TILE
+            for log_oc in range(INT16_OUT_CH_PER_TILE):
+                ch_out_global = ch_out_start + log_oc
                 if ch_out_global < cout:
-                    row = w[ch_out_global, col_lo:col_lo + 8]
+                    row = w[ch_out_global, col_lo:col_lo + CH_IN_PER_TILE]
                 else:
-                    row = np.zeros(8, dtype=np.int16)
-                # Re-extend with leading zeros (or sign-extend?) for the 16-byte
-                # entry, which now holds 8 INT16 = 16 bytes.
-                # In the simplest "bit-equivalent INT16" packing we put each
-                # int16 in 2 bytes little-endian.
-                out += row.astype("<i2").tobytes()
+                    row = np.zeros(CH_IN_PER_TILE, dtype=np.int16)
+                for lane in range(4):
+                    nibble[:, log_oc * 4 + lane] = ((row.astype(np.int32) >> (lane * 4)) & 0xF).astype(np.uint8)
+            for word_idx in range(DCIM_CYCLE):
+                flat_start = word_idx * BYTES_PER_WORD * 2
+                word_nibbles = np.zeros(BYTES_PER_WORD * 2, dtype=np.uint8)
+                for i, flat_idx in enumerate(range(flat_start, flat_start + BYTES_PER_WORD * 2)):
+                    phys_out = flat_idx // CH_IN_PER_TILE
+                    in_ch = flat_idx % CH_IN_PER_TILE
+                    word_nibbles[i] = nibble[in_ch, phys_out]
+                out += _pack_128b_nibbles(word_nibbles)
 
-    expected_bytes = TILES * acc_depth_int16 * CH_OUT_PER_TILE * BYTES_PER_WORD
+    expected_bytes = expected_tiles * acc_depth * DCIM_CYCLE * BYTES_PER_WORD
     assert len(out) == expected_bytes, (len(out), expected_bytes)
     return bytes(out)
 
@@ -142,9 +148,14 @@ def pack_layer_weights_int8(
     """
     cout, cin, kh, kw = weight_int8.shape
     acc_depth = (kh * kw * cin + CH_IN_PER_TILE - 1) // CH_IN_PER_TILE
+    tiles_needed = (cout + INT8_OUT_CH_PER_TILE - 1) // INT8_OUT_CH_PER_TILE
 
     if acc_depth != expected_acc_depth:
         raise ValueError(f"acc_depth mismatch: layer says {acc_depth}, plan says {expected_acc_depth}")
+    if expected_tiles < tiles_needed:
+        raise ValueError(
+            f"INT8 tile mismatch: weights need {tiles_needed} tiles, plan says {expected_tiles}"
+        )
 
     # Flatten weight to [Cout, kH*kW*Cin].  Pad CH_IN dim to acc_depth*16.
     w = weight_int8.reshape(cout, kh * kw * cin).astype(np.int8)
@@ -154,7 +165,7 @@ def pack_layer_weights_int8(
 
     out = bytearray()
     nibbles_per_word = BYTES_PER_WORD * 2
-    for tile in range(TILES):
+    for tile in range(expected_tiles):
         ch_out_start = tile * INT8_OUT_CH_PER_TILE
         for acc_w in range(acc_depth):
             col_lo = acc_w * CH_IN_PER_TILE
@@ -175,7 +186,7 @@ def pack_layer_weights_int8(
             for word_idx in range(0, len(nibble_stream), nibbles_per_word):
                 out += _pack_128b_nibbles(nibble_stream[word_idx:word_idx + nibbles_per_word])
 
-    expected_bytes = TILES * acc_depth * CH_OUT_PER_TILE * CH_IN_PER_TILE // 2
+    expected_bytes = expected_tiles * acc_depth * CH_OUT_PER_TILE * CH_IN_PER_TILE // 2
     assert len(out) == expected_bytes, (len(out), expected_bytes)
     return bytes(out)
 
@@ -206,19 +217,19 @@ def pack_all_layers(
         z = np.load(npz_path)
         if weight_key not in z.files:
             raise KeyError(f"layer {name}: npz has no {weight_key!r} (keys: {z.files})")
-        wi8 = z[weight_key].astype(np.int8)
+        weights = z[weight_key]
 
         expected_acc_depth = rec["per_tile_bytes"] // (DCIM_CYCLE * BYTES_PER_WORD)
 
         if mode == "int16":
             blob = pack_layer_weights_int16(
-                wi8,
+                weights.astype(np.int16),
                 expected_acc_depth=expected_acc_depth,
                 expected_tiles=rec["tiles_needed"],
             )
         else:
             blob = pack_layer_weights_int8(
-                wi8,
+                weights.astype(np.int8),
                 expected_acc_depth=expected_acc_depth,
                 expected_tiles=rec["tiles_needed"],
             )

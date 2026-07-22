@@ -1,0 +1,42 @@
+{
+  "build_dir": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\artifacts\\c1773f6\\resnet18_int16_widened",
+  "network": "resnet18",
+  "mode": "int16",
+  "initial_decoder_status": 0,
+  "weights_bytes": 22339584,
+  "wb_bytes": 93472,
+  "input_bytes": 802816,
+  "segments": [
+    {
+      "index": 0,
+      "path": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\artifacts\\c1773f6\\resnet18_int16_widened\\program_segments\\segment_000.bin",
+      "bytes": 131072,
+      "words": 32768,
+      "upload_s": 0.021330800000214367,
+      "execute_s": 3.2443010000006325
+    },
+    {
+      "index": 1,
+      "path": "G:\\PKU\\Task\\Yolo_on_FPGA\\EdgeYOLO-FPGA-main-milestone\\artifacts\\c1773f6\\resnet18_int16_widened\\program_segments\\segment_001.bin",
+      "bytes": 81708,
+      "words": 20427,
+      "upload_s": 0.021853500000361237,
+      "execute_s": 0.8100389999999607
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "bytes": 50176,
+      "read_s": 0.013631400000122085
+    }
+  ],
+  "zero_obuf_s": 0.0,
+  "upload_weights_s": 0.33110519999991084,
+  "upload_wb_s": 0.021963299999697483,
+  "upload_input_s": 0.021182400000725465,
+  "execute_s": 4.054340000000593,
+  "program_upload_s": 0.043184300000575604,
+  "read_outputs_s": 0.013631400000122085,
+  "total_s": 6.8964310000001205
+}

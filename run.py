@@ -88,7 +88,7 @@
       YOLO NMS IoU 阈值，默认 0.45。
 
   --out-dir PATH
-      输出目录根路径，默认 ./output/。
+      输出目录根路径；one-shot 默认 ./output/inference/，legacy E2E/dry-run 默认 ./output/。
       YOLO 结果存 {out-dir}/yolo/，ResNet 结果存 {out-dir}/resnet/。
 
   --no-verify
@@ -199,6 +199,8 @@ import argparse
 import importlib.util
 import importlib
 import json
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -208,9 +210,52 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent
 UNIT_TB = REPO_ROOT / "tests" / "chip" / "unit-tb"
 OUT_DIR = REPO_ROOT / "output"
+INFERENCE_OUT_DIR = OUT_DIR / "inference"
+WORK_DIR_ENV = "EDGEYOLO_RUNS_BASE"
 
 DEFAULT_YOLO_IMG = REPO_ROOT / "test_yolo.jpg"
 DEFAULT_RESNET_IMG = REPO_ROOT / "test_resnet_2.JPEG"
+MILESTONE_DIR = REPO_ROOT / "artifacts" / "c1773f6"
+COCO_YOLO_DIR = REPO_ROOT / "model" / "yolov5n_coco50k_qat"
+
+ONE_SHOT_DEFAULT_BUILDS = {
+    ("resnet", "vai"): MILESTONE_DIR / "resnet18_int8",
+    ("resnet", "int16"): MILESTONE_DIR / "resnet18_int16_widened",
+}
+
+ONE_SHOT_COMPILE_PARSED = {
+    ("resnet", "vai"): REPO_ROOT / "model" / "resnet18" / "parsed_vai",
+    ("resnet", "int16"): REPO_ROOT / "model" / "resnet18" / "parsed_vai_int16_widened",
+}
+
+YOLO_ONE_SHOT_PROFILES = {
+    "infrared": {
+        "image": DEFAULT_YOLO_IMG,
+        "parsed": {
+            "int8": REPO_ROOT / "model" / "yolov5n" / "parsed",
+            "int16": REPO_ROOT / "model" / "yolov5n" / "parsed_int16_widened",
+        },
+        "builds": {
+            "int8": MILESTONE_DIR / "yolo_ir_int8",
+            "int16": MILESTONE_DIR / "yolo_ir_int16_widened",
+        },
+        "expect_detections": 1,
+        "output_group": "yolo_infrared",
+    },
+    "coco": {
+        "image": COCO_YOLO_DIR / "template" / "000000000139.jpg",
+        "parsed": {
+            "int8": COCO_YOLO_DIR / "parsed_int8",
+            "int16": COCO_YOLO_DIR / "parsed_int16_widened",
+        },
+        "builds": {
+            "int8": MILESTONE_DIR / "yolo_coco_int8",
+            "int16": MILESTONE_DIR / "yolo_coco_int16_widened",
+        },
+        "expect_detections": 3,
+        "output_group": "yolo_coco",
+    },
+}
 
 
 def _install_unit_tb_run_module() -> None:
@@ -242,6 +287,235 @@ def save_image(img: np.ndarray, path: Path) -> None:
     from PIL import Image
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(img).save(str(path), quality=90)
+
+
+def _display_path(path: Path) -> Path:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT)
+    except ValueError:
+        return resolved
+
+
+def _run_checked(cmd: list[str], *, cwd: Path = REPO_ROOT) -> subprocess.CompletedProcess:
+    print("  $ " + " ".join(cmd), flush=True)
+    return subprocess.run(cmd, cwd=str(cwd), check=True)
+
+
+def _draw_yolo_detections(image_path: Path, detections: list[dict], out_img: Path) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    names = {0: "person", 1: "car", 2: "bicycle"}
+    img = Image.open(str(image_path)).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 16)
+    except OSError:
+        font = ImageFont.load_default()
+
+    for det in detections:
+        x1, y1, x2, y2 = [float(v) for v in det["bbox"]]
+        cls = int(det.get("class_id", det.get("class", 0)))
+        conf = float(det.get("conf", det.get("confidence", 0.0)))
+        label = f"{det.get('class_name', names.get(cls, f'class_{cls}'))} {conf:.3f}"
+        draw.rectangle([x1, y1, x2, y2], outline=(255, 64, 32), width=3)
+        left, top, right, bottom = draw.textbbox((x1, y1), label, font=font)
+        label_h = bottom - top + 6
+        label_w = right - left + 8
+        y_label = max(0, y1 - label_h)
+        draw.rectangle([x1, y_label, x1 + label_w, y_label + label_h], fill=(255, 64, 32))
+        draw.text((x1 + 4, y_label + 3), label, fill=(255, 255, 255), font=font)
+
+    out_img.parent.mkdir(parents=True, exist_ok=True)
+    img.save(str(out_img), quality=95)
+
+
+def _draw_resnet_classification(image_path: Path, topk: list[dict], out_img: Path) -> None:
+    resnet_e2e = importlib.import_module("resnet_e2e")
+    img_rgb = resnet_e2e.load_image(str(image_path))
+    top = [(int(row["class_id"]), float(row["score"])) for row in topk]
+    canvas = resnet_e2e.draw_classification(img_rgb, top, "ResNet18 FPGA One-Shot")
+    save_image(canvas, out_img)
+
+
+def _one_shot_tag(network: str, precision: str) -> str:
+    return "int8" if network == "resnet" and precision == "vai" else precision
+
+
+def _compile_one_shot_artifact(network: str, precision: str, build_dir: Path,
+                               parsed_override: Path | None = None) -> None:
+    compile_network = "yolov5n" if network == "yolo" else "resnet18"
+    mode = _one_shot_tag(network, precision)
+    cmd = [
+        sys.executable, "tests/chip/compiler/compile.py",
+        "--network", compile_network,
+        "--mode", mode,
+        "--full",
+        "--out", str(build_dir),
+    ]
+    parsed = parsed_override or ONE_SHOT_COMPILE_PARSED.get((network, precision))
+    if parsed is not None:
+        cmd.extend(["--parsed", str(parsed)])
+    _run_checked(cmd)
+
+
+def run_one_shot_fpga(
+    network: str,
+    precision: str,
+    img_path: Path,
+    out_root: Path,
+    *,
+    build_dir: Path,
+    conf: float,
+    iou: float,
+    poll_timeout_s: float,
+    read_chunk_bytes: int,
+    quiet_xdma: bool,
+    soft_reset: bool,
+    recompile: bool,
+    yolo_parsed_dir: Path | None = None,
+    yolo_expect_detections: int | None = 1,
+    result_group: str | None = None,
+) -> Path:
+    """Run a full one-shot FPGA workload, compare features, and run the host boundary."""
+    runtime = REPO_ROOT / "tests" / "chip" / "runtime"
+    tag = _one_shot_tag(network, precision)
+    net_dir = "yolo" if network == "yolo" else "resnet"
+    output_group = result_group or net_dir
+    label = f"{'YOLO' if network == 'yolo' else 'ResNet'} {tag.upper()}"
+    out_dir = out_root / output_group / f"one_shot_{tag}"
+    feat_dir = out_dir / "features"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if recompile or not (build_dir / "plan.json").exists():
+        reason = "requested" if recompile else f"missing {build_dir / 'plan.json'}"
+        print(f"  [compile] {reason}, compiling {label} full one-shot", flush=True)
+        _compile_one_shot_artifact(network, precision, build_dir, yolo_parsed_dir if network == "yolo" else None)
+
+    stem = img_path.stem
+    file_prefix = f"{stem}_{net_dir}_{tag}_fpga_oneshot"
+    primary = out_dir / f"{file_prefix}.bin"
+    timing_json = out_dir / f"{file_prefix}_timing.json"
+    head_json = out_dir / f"{file_prefix}.json"
+    result_img = out_dir / f"{file_prefix}.jpg"
+
+    plan = json.loads((build_dir / "plan.json").read_text())
+    named_outputs = bool(plan.get("host_io", {}).get("outputs"))
+    if named_outputs:
+        feat_dir.mkdir(parents=True, exist_ok=True)
+
+    run_cmd = [
+        sys.executable, str(runtime / "hw_runner_win.py"),
+        "--build-dir", str(build_dir),
+        "--output", str(primary),
+        "--poll-timeout-s", str(poll_timeout_s),
+        "--read-chunk-bytes", str(read_chunk_bytes),
+        "--timing-json", str(timing_json),
+    ]
+    run_cmd.extend(["--yolo-image" if network == "yolo" else "--resnet-image", str(img_path)])
+    if named_outputs:
+        run_cmd.extend(["--output-dir", str(feat_dir)])
+    if network == "yolo" and yolo_parsed_dir is not None:
+        run_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
+    if quiet_xdma:
+        run_cmd.append("--quiet-xdma")
+    if soft_reset:
+        run_cmd.append("--soft-reset-decoder")
+    _run_checked(run_cmd)
+
+    compare_cmd = [
+        sys.executable, str(runtime / "compare_one_shot.py"),
+        "--build-dir", str(build_dir),
+        "--image", str(img_path),
+        "--output", str(primary),
+        "--atol", "1e-3",
+    ]
+    if named_outputs:
+        compare_cmd.extend(["--output-dir", str(feat_dir)])
+    if network == "yolo" and yolo_parsed_dir is not None:
+        compare_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
+    _run_checked(compare_cmd)
+
+    head_cmd = [
+        sys.executable, str(runtime / "one_shot_host_head.py"),
+        "--build-dir", str(build_dir),
+        "--image", str(img_path),
+        "--output", str(primary),
+        "--json-out", str(head_json),
+    ]
+    if network == "yolo":
+        head_cmd.extend([
+            "--output-dir", str(feat_dir),
+            "--conf", str(conf),
+            "--iou", str(iou),
+        ])
+        if yolo_expect_detections is not None:
+            head_cmd.extend(["--expect-detections", str(yolo_expect_detections)])
+        if yolo_parsed_dir is not None:
+            head_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
+    else:
+        head_cmd.extend(["--expect-top1", "1"])
+    _run_checked(head_cmd)
+
+    result = json.loads(head_json.read_text())
+    detections = list(result.get("detections", []))
+    if network == "yolo":
+        _draw_yolo_detections(img_path, detections, result_img)
+    else:
+        _draw_resnet_classification(img_path, list(result.get("topk", [])), result_img)
+
+    timing = json.loads(timing_json.read_text())
+    summary = f"{len(detections)} det" if network == "yolo" else result["topk"][0]["class_name"]
+    print(f"  [fpga   ] {label} one-shot: {summary}")
+    print(
+        "            timing: "
+        f"total={float(timing.get('total_s', 0.0)):.3f}s, "
+        f"execute={float(timing.get('execute_s', 0.0)):.3f}s, "
+        f"weights={float(timing.get('upload_weights_s', 0.0)):.3f}s, "
+        f"read={float(timing.get('read_outputs_s', 0.0)):.3f}s"
+    )
+    if network == "yolo":
+        for det in detections:
+            bbox = ", ".join(f"{v:.1f}" for v in det["bbox"])
+            print(f"            bbox=[{bbox}], conf={float(det['conf']):.4f}, class={int(det['class_id'])}")
+        print(f"            image -> {_display_path(result_img)}")
+    else:
+        top = result["topk"][0]
+        print(f"            top1={top['class_name']}({int(top['class_id'])}), score={float(top['score']):.4f}")
+        print(f"            image -> {_display_path(result_img)}")
+    print(f"            json  -> {_display_path(head_json)}")
+    print(f"            time  -> {_display_path(timing_json)}")
+    return result_img
+
+
+def run_yolo_int8_one_shot_fpga(
+    img_path: Path,
+    out_root: Path,
+    *,
+    build_dir: Path,
+    conf: float,
+    iou: float,
+    poll_timeout_s: float,
+    quiet_xdma: bool,
+    soft_reset: bool,
+    recompile: bool,
+    yolo_parsed_dir: Path | None = None,
+    yolo_expect_detections: int | None = 1,
+) -> Path:
+    """Compatibility wrapper for the old YOLO INT8-only one-shot CLI."""
+    return run_one_shot_fpga(
+        "yolo", "int8", img_path, out_root,
+        build_dir=build_dir,
+        conf=conf,
+        iou=iou,
+        poll_timeout_s=poll_timeout_s,
+        read_chunk_bytes=65536,
+        quiet_xdma=quiet_xdma,
+        soft_reset=soft_reset,
+        recompile=recompile,
+        yolo_parsed_dir=yolo_parsed_dir,
+        yolo_expect_detections=yolo_expect_detections,
+    )
 
 
 # ─── YOLO ────────────────────────────────────────────────────────────────────
@@ -277,7 +551,7 @@ def run_yolo(img_path: Path, precision: str, runner, mode: str,
     n = len(dets)
     confs = ", ".join(f"{d['confidence']:.2f}" for d in det_list[:5]) or "none"
     print(f"  [{mode:7s}] YOLO {precision.upper():5s}: {n} det [{confs}]")
-    print(f"            -> {out_img.relative_to(REPO_ROOT)}")
+    print(f"            -> {_display_path(out_img)}")
     return out_img
 
 
@@ -288,7 +562,8 @@ def run_resnet(img_path: Path, precision: str, runner, mode: str,
     resnet_e2e = importlib.import_module("resnet_e2e")
     dry_run = mode in ("dry-run", "onnx")
 
-    runs_base = UNIT_TB / "runs" / "e2e" / f"resnet18_{precision}"
+    runs_root = Path(os.environ.get(WORK_DIR_ENV, str(OUT_DIR / "work" / "e2e")))
+    runs_base = runs_root / f"resnet18_{precision}"
     img_out, top5, logits = resnet_e2e.run_single_image(
         str(img_path), runner, dry_run, precision=precision,
         runs_base=runs_base, verify=verify, preload_weights=preload_weights,
@@ -314,7 +589,7 @@ def run_resnet(img_path: Path, precision: str, runner, mode: str,
 
     top_str = ", ".join(f"{t['name']}({t['class']}):{t['score']:.3f}" for t in result["top5"][:3])
     print(f"  [{mode:7s}] ResNet18 {precision.upper():5s}: [{top_str}]")
-    print(f"            -> {out_img.relative_to(REPO_ROOT)}")
+    print(f"            -> {_display_path(out_img)}")
     return out_img
 
 
@@ -365,7 +640,7 @@ def run_resnet_onnx(img_path: Path, out_dir: Path) -> Path:
 
     top_str = ", ".join(f"{t['name']}({t['class']}):{t['score']:.3f}" for t in result["top5"][:3])
     print(f"  [onnx   ] ResNet18 {model_tag:12s}: [{top_str}]")
-    print(f"            -> {out_json.relative_to(REPO_ROOT)}")
+    print(f"            -> {_display_path(out_json)}")
     return out_json
 
 
@@ -387,15 +662,41 @@ def parse_args() -> argparse.Namespace:
                     help="(deprecated) 同时设置 YOLO 和 ResNet 精度；建议用 --yolo-precision / --resnet-precision")
     ap.add_argument("--dry-run", action="store_true", help="numpy golden (no FPGA)")
     ap.add_argument("--onnx", action="store_true", help="also run ONNX baseline (ResNet)")
-    ap.add_argument("--yolo-img", default=str(DEFAULT_YOLO_IMG))
+    ap.add_argument("--yolo-model", choices=["infrared", "coco"], default="infrared",
+                    help="YOLO milestone profile: infrared (3-class) or coco (80-class)")
+    ap.add_argument("--yolo-img", default=None,
+                    help="override the selected YOLO profile's bundled test image")
     ap.add_argument("--resnet-img", default=str(DEFAULT_RESNET_IMG))
     ap.add_argument("--conf", type=float, default=0.15)
     ap.add_argument("--iou", type=float, default=0.45)
-    ap.add_argument("--out-dir", default=str(OUT_DIR))
+    ap.add_argument("--out-dir", default=None,
+                    help="output root; default is output/inference for --one-shot, output for legacy E2E/dry-run")
     ap.add_argument("--no-verify", action="store_true",
                     help="skip per-layer expected.hex comparison (faster inference, no FAIL reports)")
     ap.add_argument("--no-preload", action="store_true",
                     help="disable batch weight preload to HBM (use per-layer upload with content-hash cache)")
+    ap.add_argument("--reuse-cases", action="store_true",
+                    help="reuse existing output/work/e2e case files and skip online dry-run case generation")
+    ap.add_argument("--one-shot", action="store_true",
+                    help="run full one-shot FPGA path for selected networks/precisions, then compare and run host heads")
+    ap.add_argument("--one-shot-yolo-int8", action="store_true",
+                    help="legacy alias for --one-shot --network yolo --yolo-precision int8")
+    ap.add_argument("--one-shot-build-dir", default=None,
+                    help="override compiler artifact directory for a single selected one-shot workload")
+    ap.add_argument("--one-shot-poll-timeout-s", type=float, default=240.0,
+                    help="decoder timeout for one-shot FPGA execution")
+    ap.add_argument("--one-shot-read-chunk-bytes", type=int, default=65536,
+                    help="C2H readback chunk size for one-shot named outputs; lower this if XDMA C2H is unstable")
+    ap.add_argument("--one-shot-no-soft-reset", action="store_true",
+                    help="do not issue decoder soft reset before one-shot execution")
+    ap.add_argument("--one-shot-recompile", action="store_true",
+                    help="recompile selected full one-shot artifacts before running FPGA")
+    ap.add_argument("--one-shot-yolo-parsed-dir", default=None,
+                    help="override YOLO parsed dir for one-shot compile/input/host head")
+    ap.add_argument("--one-shot-yolo-expect-detections", type=int, default=None,
+                    help="override the profile detection-count gate; use -1 to disable")
+    ap.add_argument("--verbose-xdma", action="store_true",
+                    help="show verbose xdma_rw.exe commands in one-shot mode")
     return ap.parse_args()
 
 
@@ -423,23 +724,113 @@ def main() -> int:
     yolo_precisions = _expand(yolo_raw, ["int8", "int16"])
     resnet_precisions = _expand(resnet_raw, ["vai", "int16"])
 
+    if args.one_shot_yolo_int8:
+        args.one_shot = True
+        networks = ["yolo"]
+        yolo_precisions = ["int8"]
+        resnet_precisions = []
+
+    if args.one_shot:
+        if args.dry_run:
+            print("  [ERROR] --one-shot requires FPGA; remove --dry-run")
+            return 1
+        yolo_profile = YOLO_ONE_SHOT_PROFILES[args.yolo_model]
+        yolo_img = Path(args.yolo_img) if args.yolo_img else Path(yolo_profile["image"])
+        resnet_img = Path(args.resnet_img)
+        workloads: list[tuple[str, str, Path]] = []
+        if "yolo" in networks:
+            if not yolo_img.exists():
+                print(f"  [ERROR] image not found: {yolo_img}")
+                return 1
+            workloads.extend(("yolo", p, yolo_img) for p in yolo_precisions)
+        if "resnet" in networks:
+            if not resnet_img.exists():
+                print(f"  [ERROR] image not found: {resnet_img}")
+                return 1
+            workloads.extend(("resnet", p, resnet_img) for p in resnet_precisions)
+        if args.one_shot_build_dir and len(workloads) != 1:
+            print("  [ERROR] --one-shot-build-dir can only be used with a single selected workload")
+            return 1
+        if args.one_shot_recompile and not args.one_shot_build_dir:
+            print("  [ERROR] --one-shot-recompile requires --one-shot-build-dir so frozen milestone artifacts stay unchanged")
+            return 1
+        yolo_parsed_override = Path(args.one_shot_yolo_parsed_dir) if args.one_shot_yolo_parsed_dir else None
+
+        print("=" * 60)
+        print("EdgeYOLO-FPGA Full One-Shot Inference")
+        print(f"  Workloads     : {', '.join(f'{n}:{_one_shot_tag(n, p)}' for n, p, _ in workloads)}")
+        if "yolo" in networks:
+            print(f"  YOLO profile  : {args.yolo_model}")
+        one_shot_out_root = Path(args.out_dir) if args.out_dir else INFERENCE_OUT_DIR
+        print(f"  Output        : {one_shot_out_root.resolve()}")
+        print("=" * 60)
+        t0 = time.time()
+        total_timing = 0.0
+        for network, precision, image in workloads:
+            if network == "yolo":
+                default_build = Path(yolo_profile["builds"][precision])
+                yolo_parsed_dir = yolo_parsed_override or Path(yolo_profile["parsed"][precision])
+                profile_expect = int(yolo_profile["expect_detections"])
+                requested_expect = args.one_shot_yolo_expect_detections
+                yolo_expect = profile_expect if requested_expect is None else requested_expect
+                yolo_expect = None if yolo_expect < 0 else yolo_expect
+                result_group = str(yolo_profile["output_group"])
+            else:
+                default_build = ONE_SHOT_DEFAULT_BUILDS[(network, precision)]
+                yolo_parsed_dir = None
+                yolo_expect = None
+                result_group = "resnet"
+            build_dir = Path(args.one_shot_build_dir) if args.one_shot_build_dir else default_build
+            print(f"\n--- {network.upper()} {_one_shot_tag(network, precision).upper()} One-Shot [{image.name}] ---")
+            run_one_shot_fpga(
+                network, precision, image, one_shot_out_root,
+                build_dir=build_dir,
+                conf=args.conf,
+                iou=args.iou,
+                poll_timeout_s=args.one_shot_poll_timeout_s,
+                read_chunk_bytes=args.one_shot_read_chunk_bytes,
+                quiet_xdma=not args.verbose_xdma,
+                soft_reset=not args.one_shot_no_soft_reset,
+                recompile=args.one_shot_recompile,
+                yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+                yolo_expect_detections=yolo_expect if network == "yolo" else None,
+                result_group=result_group,
+            )
+            tag = _one_shot_tag(network, precision)
+            timing_path = one_shot_out_root / result_group / f"one_shot_{tag}" / f"{image.stem}_{network}_{tag}_fpga_oneshot_timing.json"
+            if timing_path.exists():
+                total_timing += float(json.loads(timing_path.read_text()).get("total_s", 0.0))
+        print(f"\nDone in {time.time() - t0:.1f}s")
+        if total_timing:
+            print(f"FPGA runner total across workloads: {total_timing:.3f}s")
+        return 0
+
     mode = "dry-run" if args.dry_run else "fpga"
     verify = not args.no_verify
     preload_weights = not getattr(args, 'no_preload', False)
     runner = make_runner(args.dry_run)
 
-    yolo_img = Path(args.yolo_img)
+    if args.yolo_model != "infrared":
+        print("  [ERROR] --yolo-model coco is supported by the full FPGA --one-shot path only")
+        return 1
+    yolo_img = Path(args.yolo_img) if args.yolo_img else DEFAULT_YOLO_IMG
     resnet_img = Path(args.resnet_img)
-    out_root = Path(args.out_dir)
+    out_root = Path(args.out_dir) if args.out_dir else OUT_DIR
     yolo_out = out_root / "yolo"
     resnet_out = out_root / "resnet"
+    work_root = out_root / "work" / "e2e"
 
-    # Clear output directory before generating new results
+    # Clear result directories before generating new outputs, but keep
+    # output/work/e2e so generated case files can be reused across runs.
     import shutil
-    if out_root.exists():
-        shutil.rmtree(out_root)
+    for result_dir in (yolo_out, resnet_out):
+        if result_dir.exists():
+            shutil.rmtree(result_dir)
     yolo_out.mkdir(parents=True, exist_ok=True)
     resnet_out.mkdir(parents=True, exist_ok=True)
+    work_root.mkdir(parents=True, exist_ok=True)
+    os.environ[WORK_DIR_ENV] = str(work_root)
+    os.environ["EDGEYOLO_REUSE_CASES"] = "1" if args.reuse_cases else "0"
 
     print("=" * 60)
     print("EdgeYOLO-FPGA E2E Inference")
