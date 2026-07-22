@@ -19,6 +19,7 @@ IR_PARSED = REPO / "model" / "yolov5n" / "parsed"
 INPUT_ACT_SCALE_INT8 = 1.0 / 127.0
 INPUT_ACT_SCALE_INT16 = 1.0 / 32767.0
 HARD_QUANT_SCALE = 1.0 / 127.0
+INT16_WIDENED_MODE = "int16_widened"
 
 
 def _const_map(model: onnx.ModelProto) -> dict[str, np.ndarray]:
@@ -118,13 +119,21 @@ def parse_export(quant_onnx: Path, fp_onnx: Path, out_dir: Path, *, mode: str) -
 
     template = json.loads((IR_PARSED / "network.json").read_text())
     net = json.loads(json.dumps(template))
-    net["model"] = f"yolov5n-coco50k-qat-{mode}"
+    widened_int16 = mode == INT16_WIDENED_MODE
+    int16_storage = mode in {"int16", INT16_WIDENED_MODE}
+    net["model"] = f"yolov5n-coco50k-qat-{mode.replace('_', '-')}"
     net["dataset"] = "coco"
     net["num_classes"] = 80
     net["class_names"] = "coco"
+    # Widened INT16 deliberately keeps the INT8 quantization grid. Only the
+    # transport/compute dtype changes, matching the known-good FPGA path.
     input_act_scale = INPUT_ACT_SCALE_INT16 if mode == "int16" else INPUT_ACT_SCALE_INT8
     net["input_act_scale"] = input_act_scale
     net["hard_quant_scale"] = HARD_QUANT_SCALE
+    net["hardware_mode"] = "int16" if int16_storage else "int8"
+    net["quantization_semantics"] = (
+        "int8_values_widened_to_int16" if widened_int16 else mode
+    )
     net["source_quant_onnx"] = str(quant_onnx)
     net["source_onnx"] = str(fp_onnx)
 
@@ -141,6 +150,11 @@ def parse_export(quant_onnx: Path, fp_onnx: Path, out_dir: Path, *, mode: str) -
             missing.append(name)
             continue
         w = consts[spec["weight"]]
+        if widened_int16 and (np.min(w) < -128 or np.max(w) > 127):
+            raise ValueError(
+                f"{name}: int16_widened requires an INT8 quantized export; "
+                f"weight range is [{int(np.min(w))}, {int(np.max(w))}]"
+            )
         w_scale = consts[spec["scale"]].astype(np.float32).reshape(-1)
         w_zp = consts[spec["zero_point"]].astype(np.float32).reshape(-1)
         if w.ndim != 4:
@@ -165,7 +179,7 @@ def parse_export(quant_onnx: Path, fp_onnx: Path, out_dir: Path, *, mode: str) -
         w_ohwi = w.transpose(0, 2, 3, 1)
         np.savez(
             out_w / f"{_safe(name)}.npz",
-            weight_int8=w_ohwi.astype(np.int16 if mode == "int16" else np.int8),
+            weight_int8=w_ohwi.astype(np.int16 if int16_storage else np.int8),
             weight_scale=w_scale.astype(np.float32),
             weight_zero_point=w_zp.astype(np.float32),
             dqa_scale=dqa_scale.astype(np.float32),
@@ -191,7 +205,7 @@ def parse_export(quant_onnx: Path, fp_onnx: Path, out_dir: Path, *, mode: str) -
             weight_fp32=weight_fp32.astype(np.float16),
             bias=np.zeros((w.shape[0],), dtype=np.float32),
             act_scale=np.array(HARD_QUANT_SCALE, dtype=np.float32),
-            weight_int8=w.astype(np.int16 if mode == "int16" else np.int8),
+            weight_int8=w.astype(np.int16 if int16_storage else np.int8),
             dqa_scale=np.zeros((w.shape[0],), dtype=np.float32),
             dqa_bias=np.zeros((w.shape[0],), dtype=np.float32),
             num_classes=np.array(80, dtype=np.int32),
@@ -211,7 +225,15 @@ def main() -> None:
     ap.add_argument("--quant-onnx", required=True)
     ap.add_argument("--onnx", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--mode", choices=["int8", "int16"], required=True)
+    ap.add_argument(
+        "--mode",
+        choices=["int8", "int16", INT16_WIDENED_MODE],
+        required=True,
+        help=(
+            "int16 uses true INT16 quantized tensors; int16_widened reads the "
+            "INT8 export and only widens values/storage for the stable FPGA path"
+        ),
+    )
     args = ap.parse_args()
     parse_export(Path(args.quant_onnx), Path(args.onnx), Path(args.out), mode=args.mode)
 

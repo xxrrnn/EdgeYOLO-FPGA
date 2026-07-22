@@ -43,10 +43,24 @@ def _load_unit_tb_run():
     return mod
 
 
-def _quantize_fp32(x: np.ndarray, act_scale: float, mode: str) -> np.ndarray:
+def _quantize_fp32(
+    x: np.ndarray,
+    act_scale: float,
+    mode: str,
+    *,
+    reciprocal_multiply: bool = False,
+) -> np.ndarray:
+    if reciprocal_multiply:
+        # This mode mirrors QA exactly: WB stores float32(1 / act_scale), then
+        # the FPGA FP32 multiplier feeds the float-to-integer converter.
+        qscale = np.float32(1.0 / float(act_scale))
+        scaled = np.asarray(x, dtype=np.float32) * qscale
+    else:
+        # Preserve the established legacy oracle for existing parsed models.
+        scaled = x / act_scale
     if mode == "int16":
-        return np.clip(np.round(x / act_scale), -32768, 32767).astype(np.int16)
-    return np.clip(np.round(x / act_scale), -128, 127).astype(np.int8)
+        return np.clip(np.round(scaled), -32768, 32767).astype(np.int16)
+    return np.clip(np.round(scaled), -128, 127).astype(np.int8)
 
 
 def _safe_name(name: str) -> str:
@@ -87,6 +101,9 @@ def run_yolo_compiler_golden(image_path: Path, mode: str, max_layers: int | None
     parsed_dir = Path(parsed_override) if parsed_override else REPO / "model" / "yolov5n" / ("parsed_int16_widened" if mode == "int16" else "parsed")
     network_json = parsed_dir / "network.json"
     parsed = json.loads(network_json.read_text())
+    qa_reciprocal_multiply = (
+        parsed.get("quantization_semantics") == "int8_values_widened_to_int16"
+    )
     unit_run.ACT_SCALE = float(parsed.get("input_act_scale", unit_run.ACT_SCALE))
     img = unit_run.load_image(str(image_path))
     if mode == "int16":
@@ -113,7 +130,12 @@ def run_yolo_compiler_golden(image_path: Path, mode: str, max_layers: int | None
             meta = conv_meta(net, layer_name)
             npz = np.load(parsed_dir / "weights" / f"{_safe_name(layer_name)}.npz")
             if np.issubdtype(cur.dtype, np.floating):
-                cur_q = _quantize_fp32(cur, float(npz["act_scale"]), mode)
+                cur_q = _quantize_fp32(
+                    cur,
+                    float(npz["act_scale"]),
+                    mode,
+                    reciprocal_multiply=qa_reciprocal_multiply,
+                )
             else:
                 cur_q = cur
             cur = _conv_dqa_fp32(
