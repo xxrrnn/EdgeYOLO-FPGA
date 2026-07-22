@@ -20,9 +20,14 @@ REPO_ROOT = _THIS_DIR.parent.parent.parent
 
 
 def _resolve_xdma_rw_exe() -> Path:
+    env_path = os.environ.get("XDMA_RW_EXE")
+    if env_path:
+        return Path(env_path).expanduser()
     for candidate in (
         REPO_ROOT / "tests" / "xdma_exe" / "xdma_rw.exe",
         REPO_ROOT / "tests" / "xdma_exe" / "xdma_rw",
+        REPO_ROOT / "tests" / "bin" / "xdma_rw.exe",
+        REPO_ROOT / "tests" / "bin" / "xdma_rw",
     ):
         if candidate.exists():
             return candidate
@@ -108,7 +113,10 @@ class XDMAWin:
         self.verbose = verbose
         self.xdma_timeout_s = xdma_timeout_s
         if not Path(self.exe).exists():
-            raise FileNotFoundError(f"xdma_rw.exe not found: {self.exe}")
+            raise FileNotFoundError(
+                f"xdma_rw.exe not found: {self.exe}. "
+                "Set XDMA_RW_EXE, or extract tests/bin.zip so tests/bin/xdma_rw.exe exists."
+            )
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
         cmd = [self.exe] + args

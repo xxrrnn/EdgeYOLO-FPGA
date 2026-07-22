@@ -12,15 +12,18 @@ from typing import Optional
 import numpy as np
 
 
-# Hardware address map (chip_defines.vh / hw_caps.yaml)
+# Hardware address map (chip-v3 Vivado BD / hw_caps.yaml)
 IBUF_BASE = 0x1_0000_0000
-OBUF_BASE = 0x1_0100_0000
-WB_BASE = 0x1_0200_0000
-INST_BASE = 0x1_0300_0000
-REGS_BASE = 0x1_0400_0000
+TILE_OBUF_BASE = 0x1_0100_0000
+VPU_BUF_BASE = 0x1_0200_0000
+OBUF_BASE = VPU_BUF_BASE
+WB_BASE = 0x1_0300_0000
+INST_BASE = 0x1_0400_0000
+REGS_BASE = 0x1_0500_0000
 
-IBUF_SIZE = 0x200000      # 2MB
-OBUF_SIZE = 0x1000000     # 16MB
+IBUF_SIZE = 0x80000       # 512KB per tile
+TILE_OBUF_SIZE = 0x40000  # 256KB per tile
+OBUF_SIZE = 0x800000      # 8MB VPU buffer
 WB_SIZE = 0x8000          # 32KB
 INST_SIZE = 0x20000       # 128KB
 REGS_SIZE = 0x1000        # 4KB

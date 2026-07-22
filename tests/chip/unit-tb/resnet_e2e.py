@@ -7,6 +7,7 @@ The runner keeps ResNet-specific graph wiring out of the repository-level
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ PARSED_VAI = RESNET_DIR / "parsed_vai"                   # Vitis AI quantized (I
 PARSED_VAI_INT16 = RESNET_DIR / "parsed_vai_int16_widened"  # VAI weights widened to int16 dtype
 ONNX_VAI = (REPO_ROOT / "model" / "algorithm" / "Resnet18-quantization"
             / "resnet18" / "quantize_result" / "ResNet_int.onnx")
+ONNX_QDQ = RESNET_DIR / "resnet18_w8a8.onnx"
 IMG_SIZE = 224
 CLASS_NAMES = [f"class_{i}" for i in range(1000)]
 
@@ -43,6 +45,13 @@ def _load_class_names() -> list[str]:
 _load_class_names()
 _ADD_SCALE_CACHE: dict[str, float] | None = None
 _OP_SCALE_CACHE: dict[str, dict[str, float]] = {}
+
+
+def _can_reuse_cases(runs_base: Path) -> bool:
+    return runs_base.exists() and any(
+        d.is_dir() and (d / "inst.hex").exists() and (d / "preload.txt").exists()
+        for d in runs_base.iterdir()
+    )
 
 
 def _safe_name(name: str) -> str:
@@ -515,9 +524,12 @@ def run_single_image(img_path: str, runner, dry_run: bool, precision: str = "int
     # Always regenerate to ensure case files match current weight config (vai/int8/int16).
     weight_hbm_map = None
     if preload_weights and not dry_run and runner is not None:
-        print("[preload] Generating case files (dry-run)...", flush=True)
-        run_backbone(parsed, q_input, runner=None, dry_run=True, runs_base=rb,
-                     verify=False)
+        if os.environ.get("EDGEYOLO_REUSE_CASES") == "1" and _can_reuse_cases(rb):
+            print("[preload] Reusing existing case files", flush=True)
+        else:
+            print("[preload] Generating case files (dry-run)...", flush=True)
+            run_backbone(parsed, q_input, runner=None, dry_run=True, runs_base=rb,
+                         verify=False)
         if rb.exists():
             run_dirs = [d for d in sorted(rb.iterdir())
                         if d.is_dir() and (d / "preload.txt").exists()]

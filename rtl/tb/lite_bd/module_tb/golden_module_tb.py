@@ -212,9 +212,9 @@ MODULE_CASES = {
         {'name': 'dqa_nrelu_c24_in64',  'layer': 'model.24.m.0',         'hwc': (4, 4, 24),  'relu_en': False},  # head, no-relu, in_ch=64
         {'name': 'dqa_nrelu_c24_in128', 'layer': 'model.24.m.1',         'hwc': (3, 3, 24),  'relu_en': False},  # head, no-relu, in_ch=128
         {'name': 'dqa_nrelu_c24_in256', 'layer': 'model.24.m.2',         'hwc': (2, 2, 24),  'relu_en': False},  # head, no-relu, in_ch=256
-        # INT16 accumulator 输入（DCIM INT16 模式下 accum16→fp32，降低 DCIM 输出带宽）
-        {'name': 'dqa_accum16_c32',     'layer': 'model.2.m.0.cv1.conv', 'hwc': (3, 5, 32),  'relu_en': True,  'int16': True},
-        {'name': 'dqa_accum16_c64',     'layer': 'model.3.conv',         'hwc': (3, 5, 64),  'relu_en': True,  'int16': True},
+        # DQA activation 输入：QA packed INT16/INT8 → FP32。DCIM INT16 仍输出 INT32 accumulator。
+        {'name': 'dqa_act16_c32',       'layer': 'model.2.m.0.cv1.conv', 'hwc': (3, 5, 32),  'relu_en': True,  'int16': True, 'act_mode': True},
+        {'name': 'dqa_act16_c64',       'layer': 'model.3.conv',         'hwc': (3, 5, 64),  'relu_en': True,  'int16': True, 'act_mode': True},
     ],
     'qa': [
         {'name': 'qa_c16_signed', 'layer': 'model.0.conv', 'hwc': (4, 4, 16)},
@@ -936,7 +936,9 @@ def resnet_maxpool_hw(h: int, w: int) -> Tuple[int, int]:
 
 def propagate_conv_im2col_shapes(network: dict) -> Dict[str, ConvIm2colShape]:
     """Walk conv layers in network.json order; derive im2col matmul (M,K,N) per layer."""
-    input_shape = network['model_info']['input_shape']
+    input_shape = network.get('model_info', {}).get('input_shape', network.get('input_shape'))
+    if input_shape is None:
+        raise KeyError('network.json must contain input_shape or model_info.input_shape')
     cur_h, cur_w = int(input_shape[2]), int(input_shape[3])
     net = {ly['name']: ly for ly in network['layers'] if ly.get('type') == 'conv'}
     shapes: Dict[str, ConvIm2colShape] = {}
@@ -2226,14 +2228,22 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
     h, w, c = spec['hwc']
     relu_en: bool = spec.get('relu_en', True)
     use_int16: bool = spec.get('int16', False)
+    act_mode: bool = spec.get('act_mode', False)
     npz = load_layer_npz_checked(meta, net, require_activation=relu_en)
     scale = np.resize(npz['dqa_scale'].astype(np.float32), c)
     bias = np.resize(npz['dqa_bias'].astype(np.float32), c)
-    if use_int16:
-        # INT16 accumulator: DQA 读 INT16 word 并 sign-extend → INT32 → FP32
-        x_int16 = rng.integers(-8192, 8192, size=(h * w, c), dtype=np.int32).astype(np.int16)
-        x = x_int16.astype(np.int32)
-        src_words = int16_accum_to_words(x_int16, c)
+    if act_mode and use_int16:
+        # DQA_ACT + INT16: read QA-packed INT16 activation and sign-extend to INT32.
+        x_q = rng.integers(-8192, 8192, size=(h, w, c), dtype=np.int32).astype(np.int16)
+        x = x_q.reshape(h * w, c).astype(np.int32)
+        src_words = int16_hwc_words(x_q)
+    elif act_mode:
+        # DQA_ACT + INT8: read QA-packed INT8 activation and sign-extend to INT32.
+        x_q = random_int8(rng, (h, w, c))
+        x = x_q.reshape(h * w, c).astype(np.int32)
+        src_words = int8_hwc_words_packed(x_q)
+    elif use_int16:
+        raise AssertionError('DQA int16 mode is only valid with act_mode=True; DCIM INT16 accumulators are int32')
     else:
         x = rng.integers(-5000, 5001, size=(h * w, c), dtype=np.int32)
         src_words = int32_to_words(x)
@@ -2243,7 +2253,8 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
     write_hex(os.path.join(out_dir, 'src0.hex'), src_words)
     relu_flag = 0x1 if relu_en else 0x0
     int16_flag = 0x2 if use_int16 else 0x0
-    flags = relu_flag | int16_flag
+    act_flag = 0x4 if act_mode else 0x0
+    flags = relu_flag | int16_flag | act_flag
     # 动态地址：src → dst
     src_bytes = len(src_words) * OBUF_WORD_ALIGN
     dst_bytes = len(fp32_to_words(y)) * OBUF_WORD_ALIGN
@@ -2255,7 +2266,7 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
     return {'module': 'dqa', 'name': spec['name'], 'layer': meta.name, 'dst': dst_off,
             'words': len(fp32_to_words(y)), 'fast_inst': fast_inst,
             'hbm': hbm_blob([(HBM_OFF_INPUT0, words_to_blob(src_words))]),
-            'wb': wb, 'shape': f'hwc={h}x{w}x{c} relu_en={relu_en} int16={use_int16}',
+            'wb': wb, 'shape': f'hwc={h}x{w}x{c} relu_en={relu_en} int16={use_int16} act_mode={act_mode}',
             'relu_en': relu_en}
 
 
@@ -2827,7 +2838,7 @@ def case_native_int16(spec: dict) -> bool:
     if spec.get('int16', False):
         return True
     name = spec.get('name', '')
-    return 'accum16' in name or 'int16' in name
+    return 'act16' in name or 'int16' in name
 
 
 def quant_compatible(module: str, spec: dict, quant: str) -> bool:
@@ -2990,7 +3001,7 @@ def main() -> int:
     p.add_argument('--network-json', default=NETWORK_JSON)
     p.add_argument('--out-dir', default=os.path.join(os.path.dirname(__file__), 'build'))
     p.add_argument('--quant', choices=['int8', 'int16'], default='int8',
-                   help='筛选精度：int8=INT32 累加器等；int16=accum16/int16 命名或 spec 用例；不匹配则写 skipped.txt')
+                   help='筛选精度：int8=INT32 accumulator/DQA 等；int16=act16/int16 命名或 spec 用例；不匹配则写 skipped.txt')
     p.add_argument('--dim', default='',
                    help='维度覆盖，格式：C=N 或 H=N,W=N,C=N 或 HW=HxW,C=N；不指定则用 case 默认值')
     args = p.parse_args()

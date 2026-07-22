@@ -67,6 +67,33 @@ def pack_all_layers(plan: dict, weights_npz_dir: str) -> Tuple[bytes, Dict[str, 
 
     for rec in plan["wb_layout"]["layers"]:
         name = rec["name"]
+        if rec.get("kind") == "qa_only":
+            section = bytearray(np.float32(float(rec["qa_scale"])).tobytes())
+            while len(section) < 16:
+                section += b"\x00"
+            section = bytes(section)
+            if len(section) != rec["section_bytes"]:
+                raise ValueError(
+                    f"layer {name}: WB section size {len(section)} != reserved {rec['section_bytes']}"
+                )
+            info[name] = {"offset": cur, "bytes": len(section)}
+            out += section
+            cur += len(section)
+            continue
+        if rec.get("kind") == "qdq":
+            channels = int(rec["channels"])
+            dqa_scale = np.full((channels,), float(rec["dqa_scale"]), dtype=np.float32)
+            dqa_bias = np.zeros((channels,), dtype=np.float32)
+            section = pack_layer_wb(float(rec["qa_scale"]), dqa_scale, dqa_bias)
+            if len(section) != rec["section_bytes"]:
+                raise ValueError(
+                    f"layer {name}: WB section size {len(section)} != reserved {rec['section_bytes']}"
+                )
+            info[name] = {"offset": cur, "bytes": len(section)}
+            out += section
+            cur += len(section)
+            continue
+
         safe = name.replace(".", "_").replace("/", "_")
         npz_path = os.path.join(weights_npz_dir, f"{safe}.npz")
         if not os.path.exists(npz_path):
@@ -75,8 +102,10 @@ def pack_all_layers(plan: dict, weights_npz_dir: str) -> Tuple[bytes, Dict[str, 
 
         dqa_scale = z["dqa_scale"].astype(np.float32)
         dqa_bias = z["dqa_bias"].astype(np.float32)
-        if "act_scale" in z.files:
-            qa_scale = float(z["act_scale"])
+        if rec.get("qa_scale") is not None:
+            qa_scale = float(rec["qa_scale"])
+        elif "act_scale" in z.files:
+            qa_scale = 1.0 / float(z["act_scale"])
         else:
             qa_scale = 1.0      # FP32 path: QA is a no-op multiply by 1
 

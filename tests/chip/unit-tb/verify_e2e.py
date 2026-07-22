@@ -23,7 +23,7 @@
 """
 from __future__ import annotations
 
-import sys, argparse, time, json
+import sys, argparse, time, json, os
 from pathlib import Path
 from glob import glob
 from typing import List, Tuple
@@ -72,7 +72,8 @@ def run_image(img_path: str, runner, dry_run: bool, precision: str,
             runner.x.write(TILE_IBUF_BASE, b'\x00' * (NTILES * TILE_IBUF_SIZE))
 
     # INT8 和 INT16 各用独立的 runs_base，避免 case 文件互相覆盖
-    runs_base = str(RUNS_BASE / f"yolov5n_{precision}")
+    runs_root = Path(os.environ.get("EDGEYOLO_RUNS_BASE", str(RUNS_BASE)))
+    runs_base = str(runs_root / f"yolov5n_{precision}")
 
     img_out, dets = _e2e.run_single_image(
         img_path, runner, dry_run,

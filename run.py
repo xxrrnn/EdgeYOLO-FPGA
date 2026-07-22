@@ -340,6 +340,7 @@ def run_one_shot_fpga(
     conf: float,
     iou: float,
     poll_timeout_s: float,
+    read_chunk_bytes: int,
     quiet_xdma: bool,
     soft_reset: bool,
     recompile: bool,
@@ -377,7 +378,7 @@ def run_one_shot_fpga(
         "--build-dir", str(build_dir),
         "--output", str(primary),
         "--poll-timeout-s", str(poll_timeout_s),
-        "--read-chunk-bytes", "65536",
+        "--read-chunk-bytes", str(read_chunk_bytes),
         "--timing-json", str(timing_json),
     ]
     run_cmd.extend(["--yolo-image" if network == "yolo" else "--resnet-image", str(img_path)])
@@ -649,6 +650,8 @@ def parse_args() -> argparse.Namespace:
                     help="override compiler artifact directory for a single selected one-shot workload")
     ap.add_argument("--one-shot-poll-timeout-s", type=float, default=240.0,
                     help="decoder timeout for one-shot FPGA execution")
+    ap.add_argument("--one-shot-read-chunk-bytes", type=int, default=65536,
+                    help="C2H readback chunk size for one-shot named outputs; lower this if XDMA C2H is unstable")
     ap.add_argument("--one-shot-no-soft-reset", action="store_true",
                     help="do not issue decoder soft reset before one-shot execution")
     ap.add_argument("--one-shot-recompile", action="store_true",
@@ -732,6 +735,7 @@ def main() -> int:
                 conf=args.conf,
                 iou=args.iou,
                 poll_timeout_s=args.one_shot_poll_timeout_s,
+                read_chunk_bytes=args.one_shot_read_chunk_bytes,
                 quiet_xdma=not args.verbose_xdma,
                 soft_reset=not args.one_shot_no_soft_reset,
                 recompile=args.one_shot_recompile,

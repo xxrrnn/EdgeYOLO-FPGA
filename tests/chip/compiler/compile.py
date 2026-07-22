@@ -154,13 +154,14 @@ def insert_weight_load_ops(plan: dict, weights_info: dict, *, hbm_off: int = 0x2
     for op in plan.get("ops", []):
         layer = op.get("layer")
         tile_start = int(op.get("weight_tile_start", 0))
+        tile_count_hint = int(op.get("weight_tile_count", 8))
         load_key = (layer, tile_start)
         if layer in sections and load_key not in loaded:
             rec = rec_by_name[layer]
             nbytes = int(weights_info[layer]["bytes"])
             per_tile = int(rec.get("per_tile_bytes", nbytes))
             tiles_total = int(rec.get("tiles_needed", 1))
-            tile_count = min(max(tiles_total - tile_start, 0), 8)
+            tile_count = min(max(tiles_total - tile_start, 0), max(1, tile_count_hint))
             for tile in range(tile_count):
                 src = hbm_off + int(sections[layer]) + (tile_start + tile) * per_tile
                 dst = tile * ibuf_size + int(rec.get("ibuf_byte_off", 0))
@@ -317,6 +318,7 @@ def main():
         sys.exit(1)
 
     network = json.loads(network_json.read_text())
+    network["_parsed_dir"] = str(parsed_dir)
     model_info = network.setdefault("model_info", {})
     model_info.setdefault("name", network.get("model", args.network))
     if "input_shape" in network and "input_shape" not in model_info:
