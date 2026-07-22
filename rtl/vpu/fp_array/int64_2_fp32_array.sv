@@ -31,6 +31,16 @@ module int64_2_fp32_array #(
         end
     endgenerate
 
-    assign m_axis_result_tvalid = |core_out_valid;
+    // All converter instances have the same fixed latency. Lane 0 is the
+    // transaction valid; reducing the vector with OR could expose stale data
+    // if a lane ever became misconfigured or desynchronized.
+    assign m_axis_result_tvalid = core_out_valid[0];
+
+`ifdef SIMULATION
+    always @(posedge clk) begin
+        if ((|core_out_valid) && (core_out_valid != {FP_TRAN_NUM{core_out_valid[0]}}))
+            $error("int64_2_fp32_array converter valid lanes are not synchronized: %b", core_out_valid);
+    end
+`endif
 
 endmodule

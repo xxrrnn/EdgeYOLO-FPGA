@@ -93,7 +93,7 @@ BATCH_SUITE_dcim_extreme    := extreme_int8_1x1_c512_to512 extreme_int8_3x3_c128
 
 # --- unit：VPU 量化 / 反量化（批量建议 QUANT=all）---
 BATCH_SUITE_qa_all          := qa_c16_signed qa_c64_clip qa_c128_dense qa_int16_c32_signed
-BATCH_SUITE_dqa_all         := dqa_c16_small dqa_c32_mid dqa_c64_mid dqa_c128_sppf dqa_c256_head dqa_nrelu_c24_in64 dqa_nrelu_c24_in128 dqa_nrelu_c24_in256 dqa_accum16_c32 dqa_accum16_c64
+BATCH_SUITE_dqa_all         := dqa_c16_small dqa_c32_mid dqa_c64_mid dqa_c128_sppf dqa_c256_head dqa_nrelu_c24_in64 dqa_nrelu_c24_in128 dqa_nrelu_c24_in256 dqa_acc64_c32 dqa_acc64_c64
 
 # --- unit：im2col / MP / US / ADD / concat（QUANT 不影响，保持 int8 即可）---
 BATCH_SUITE_im2col_all      := im2col_6x6_s2_c3 im2col_3x3_s2_c32 im2col_3x3_s1_c128 im2col_1x1_c512
@@ -118,7 +118,7 @@ BATCH_SUITE_mini_network_all := mini_2conv_c16 mini_3conv_residual_c32
 #   cdma_memtest: OBUF→IBUF→OBUF roundtrip（验 ibuf/obuf controller 延迟配置，无 VPU/DCIM 参与）
 BATCH_SUITE_dcim_smoke      := dcim_tiny_1x1 conv3_s2_c32_to64 int16_tiny_1x1
 BATCH_SUITE_qa_smoke        := qa_c16_signed
-BATCH_SUITE_dqa_smoke       := dqa_c32_mid dqa_accum16_c32
+BATCH_SUITE_dqa_smoke       := dqa_c32_mid dqa_acc64_c32
 BATCH_SUITE_im2col_smoke    := im2col_6x6_s2_c3 im2col_3x3_s1_c128
 BATCH_SUITE_mp_smoke        := mp_resnet_stem
 BATCH_SUITE_us_smoke        := us_128_10_to20
@@ -131,7 +131,7 @@ BATCH_SUITE_mini_network_smoke := mini_2conv_c16 mini_3conv_residual_c32
 # 目标：≤2 h，覆盖所有正式路径的数值准确性；extreme / mini 延至 sim-unit / sim-all
 BATCH_SUITE_dcim_tb      := $(BATCH_SUITE_dcim_all)       # INT8+INT16，共 8 case
 BATCH_SUITE_qa_tb        := $(BATCH_SUITE_qa_all)         # qa_c16_signed / qa_c64_clip / qa_c128_dense + INT16
-BATCH_SUITE_dqa_tb       := $(BATCH_SUITE_dqa_all)        # relu/nrelu 全系 + accum16 INT8+INT16
+BATCH_SUITE_dqa_tb       := $(BATCH_SUITE_dqa_all)        # relu/nrelu 全系 + native INT64 accumulator
 BATCH_SUITE_im2col_tb    := $(BATCH_SUITE_im2col_all)     # 1×1/3×3/6×6 全覆盖
 BATCH_SUITE_mp_tb        := $(BATCH_SUITE_mp_all)         # SPPF / ResNet stem / GAP
 BATCH_SUITE_us_tb        := $(BATCH_SUITE_us_all)         # 2 case
@@ -195,7 +195,7 @@ sim-unit-tb: check-export
 	$(MAKE) sim-batch MODULE_CASE=dcim_matmul BATCH_SUITE=dcim_tb STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "========== [unit-tb] QA  fp32→int8/int16 =========="
 	$(MAKE) sim-batch MODULE_CASE=qa BATCH_SUITE=qa_tb QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
-	@echo "========== [unit-tb] DQA accum→fp32（relu/nrelu/accum16，INT8+INT16）=========="
+	@echo "========== [unit-tb] DQA accum→fp32（relu/nrelu/native INT64，INT8+INT16）=========="
 	$(MAKE) sim-batch MODULE_CASE=dqa BATCH_SUITE=dqa_tb QUANT=all STOP_ON_FAIL=$(STOP_ON_FAIL)
 	@echo "========== [unit-tb] im2col（1×1/3×3/6×6，全 4 case）=========="
 	$(MAKE) sim-batch MODULE_CASE=im2col BATCH_SUITE=im2col_tb QUANT=int8 STOP_ON_FAIL=$(STOP_ON_FAIL)

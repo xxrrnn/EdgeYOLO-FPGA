@@ -212,9 +212,12 @@ MODULE_CASES = {
         {'name': 'dqa_nrelu_c24_in64',  'layer': 'model.24.m.0',         'hwc': (4, 4, 24),  'relu_en': False},  # head, no-relu, in_ch=64
         {'name': 'dqa_nrelu_c24_in128', 'layer': 'model.24.m.1',         'hwc': (3, 3, 24),  'relu_en': False},  # head, no-relu, in_ch=128
         {'name': 'dqa_nrelu_c24_in256', 'layer': 'model.24.m.2',         'hwc': (2, 2, 24),  'relu_en': False},  # head, no-relu, in_ch=256
-        # DQA activation 输入：QA packed INT16/INT8 → FP32。DCIM INT16 仍输出 INT32 accumulator。
+        # DQA activation 输入：QA packed INT16/INT8 → FP32。
         {'name': 'dqa_act16_c32',       'layer': 'model.2.m.0.cv1.conv', 'hwc': (3, 5, 32),  'relu_en': True,  'int16': True, 'act_mode': True},
         {'name': 'dqa_act16_c64',       'layer': 'model.3.conv',         'hwc': (3, 5, 64),  'relu_en': True,  'int16': True, 'act_mode': True},
+        # Native W16A16 DCIM accumulator input: packed signed INT64 -> FP32.
+        {'name': 'dqa_acc64_c32',       'layer': 'model.2.m.0.cv1.conv', 'hwc': (3, 5, 32),  'relu_en': True,  'int16': True},
+        {'name': 'dqa_acc64_c64',       'layer': 'model.3.conv',         'hwc': (3, 5, 64),  'relu_en': True,  'int16': True},
     ],
     'qa': [
         {'name': 'qa_c16_signed', 'layer': 'model.0.conv', 'hwc': (4, 4, 16)},
@@ -1301,18 +1304,17 @@ def dcim_accum_words(accum: np.ndarray, num_tiles: int) -> List[str]:
 
 
 def dcim_accum_words_int16(accum: np.ndarray, num_tiles: int) -> List[str]:
-    """INT16 模式：固定按 NUM_TILES(4) 个 tile 输出，不足的 tile 补零。
-    accum shape: (M, num_tiles * DCIM_LOGICAL_OUT_PER_TILE)，每 tile 4 个逻辑输出通道。"""
+    """Native INT16 mode: pack two signed INT64 accumulators per 128-bit word."""
     lines = []
     for px in range(accum.shape[0]):
         for tile in range(NUM_TILES):
-            base = tile * DCIM_LOGICAL_OUT_PER_TILE   # 每 tile 4 个逻辑 oc
+            base = tile * DCIM_LOGICAL_OUT_PER_TILE
             for word_idx in range(DCIM_INT16_OUT_WORDS_PER_TILE):
                 blob = b''
-                for c in range(4):
-                    oc = base + word_idx * 4 + c
+                for c in range(2):
+                    oc = base + word_idx * 2 + c
                     v = int(accum[px, oc]) if (tile < num_tiles and oc < accum.shape[1]) else 0
-                    blob += struct.pack('<i', v)
+                    blob += struct.pack('<q', v)
                 lines.append(''.join(f'{b:02x}' for b in reversed(blob)))
     return lines
 
@@ -1702,17 +1704,16 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         cols16 = im2col_int16(feat, meta)   # shape (M, acc*8), dtype int16
         assert cols16.shape == (matmul_m, acc * DCIM_CH_IN), \
             f"cols16 shape {cols16.shape} != ({matmul_m}, {acc * DCIM_CH_IN})"
-        # 逻辑输出通道数 = num_tiles × 4（INT16 每 tile 4 个逻辑 ch）
+        # 逻辑输出通道数 = num_tiles × 8（默认 CH_OUT=32）。
         num_logical_oc = meta.num_tiles * DCIM_LOGICAL_OUT_PER_TILE
         K = acc * DCIM_CH_IN  # = acc_depth_int16 * 16
 
         # 生成随机 INT16 权重（不用网络真实权重，因为 INT16 模式 4 nibble = 1 INT16 weight）
-        # 范围限制在 -2048..2047（12-bit），避免 INT32 累加溢出（256 k_dim × 32767² 不溢出）
+        # 12-bit test weights still exercise signed native INT64 accumulation.
         w16 = rng.integers(-2048, 2048, size=(num_logical_oc, K), dtype=np.int32).astype(np.int16)
 
-        # golden matmul: int16 act × int16 weight → int32（截取低 32 bit）
-        # accum[px, oc_logical] = sum_k cols16[px, k] * w16[oc_logical, k]  (INT32 trunc)
-        accum = (cols16.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
+        # golden matmul: int16 act × int16 weight -> signed int64 accumulator.
+        accum = cols16.astype(np.int64) @ w16.astype(np.int64).T
         assert accum.shape == (matmul_m, num_logical_oc)
 
         # INT16 act IBUF 打包：每 word 8 个 int16（little-endian）
@@ -1887,8 +1888,8 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         K = acc * DCIM_CH_IN
         num_logical_oc = meta.num_tiles * DCIM_LOGICAL_OUT_PER_TILE
         w16 = rng.integers(-2048, 2048, size=(num_logical_oc, K), dtype=np.int32).astype(np.int16)
-        # Golden: int16 act × int16 weight → int32 → DQA(fp32) → QA(int16)
-        accum16 = (cols16.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
+        # Golden: int16 act × int16 weight -> int64 -> DQA(fp32) -> QA(int16)
+        accum16 = cols16.astype(np.int64) @ w16.astype(np.int64).T
         dqa_raw = accum16.astype(np.float32) * scale[:num_logical_oc][None, :] + bias[:num_logical_oc][None, :]
         dqa = np.maximum(dqa_raw, 0.0) if relu_en else dqa_raw
         qa = np.clip(np.round(dqa * qscale), -32768, 32767).astype(np.int16).reshape(oh, ow, num_logical_oc)
@@ -1960,7 +1961,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         n_tiles_i16 = meta_used.num_tiles_int16  # INT16 每 tile 8 ch
         num_logical_oc = n_tiles_i16 * DCIM_LOGICAL_OUT_PER_TILE
 
-        # Golden: INT16 act × INT16 weight → int32 → DQA → QA(int16)
+        # Golden: INT16 act × INT16 weight -> int64 -> DQA -> QA(int16)
         cols16 = im2col_int16(feat_used, meta_used)  # (M, K)
         wflat16 = weights.reshape(meta_used.out_ch, -1).astype(np.int64)
         if wflat16.shape[1] < K:
@@ -1968,7 +1969,7 @@ def make_conv_pipeline_case(out_dir: str, net: Dict[str, dict], spec: dict,
         # Pad output channels to num_logical_oc
         if wflat16.shape[0] < num_logical_oc:
             wflat16 = np.pad(wflat16, ((0, num_logical_oc - wflat16.shape[0]), (0, 0)), constant_values=0)
-        accum = (cols16.astype(np.int64) @ wflat16.T).astype(np.int32)  # (M, num_logical_oc)
+        accum = cols16.astype(np.int64) @ wflat16.T  # (M, num_logical_oc)
         scale_ext = np.zeros(num_logical_oc, dtype=np.float32)
         bias_ext  = np.zeros(num_logical_oc, dtype=np.float32)
         scale_ext[:len(scale)] = scale
@@ -2243,7 +2244,8 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
         x = x_q.reshape(h * w, c).astype(np.int32)
         src_words = int8_hwc_words_packed(x_q)
     elif use_int16:
-        raise AssertionError('DQA int16 mode is only valid with act_mode=True; DCIM INT16 accumulators are int32')
+        x = rng.integers(-(1 << 40), 1 << 40, size=(h * w, c), dtype=np.int64)
+        src_words = int64_accum_to_words(x, c)
     else:
         x = rng.integers(-5000, 5001, size=(h * w, c), dtype=np.int32)
         src_words = int32_to_words(x)
@@ -2270,27 +2272,19 @@ def make_dqa_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.random
             'relu_en': relu_en}
 
 
-def int16_accum_to_words(arr_int16: np.ndarray, c: int) -> List[str]:
-    """INT16 accumulator → OBUF words for dqa_relu_unit int16_mode.
-
-    RTL (FP_CORE_NUM=4) loads one 128b word per channel-quad and takes four INT16 lanes
-    from gb_doutb[i*16 +: 16] (i=0..3).  Upper 64b of the word are unused.
-    Address stride is c/4 words per pixel — NOT 8×int16 per word like QA output packing.
-    arr_int16: shape (h*w, c), dtype int16
-    """
-    n, cols = arr_int16.shape
+def int64_accum_to_words(arr_int64: np.ndarray, c: int) -> List[str]:
+    """Pack native W16A16 accumulators as two signed INT64 values per word."""
+    n, cols = arr_int64.shape
     assert cols == c
-    lanes = 4  # matches FP_CORE_NUM / dqa_relu_unit int16 lane map
+    lanes = 4  # one DQA channel group; represented by two 128-bit words
     align_c = ((c + lanes - 1) // lanes) * lanes
-    padded = np.zeros((n, align_c), dtype=np.int16)
-    padded[:, :c] = arr_int16
+    padded = np.zeros((n, align_c), dtype=np.int64)
+    padded[:, :c] = arr_int64
     blob = bytearray()
     for row in range(n):
         for ch_base in range(0, align_c, lanes):
-            word = bytearray(OBUF_WORD_BYTES)
             for i in range(lanes):
-                struct.pack_into('<h', word, i * 2, int(padded[row, ch_base + i]))
-            blob.extend(word)
+                blob.extend(struct.pack('<q', int(padded[row, ch_base + i])))
     return bytes_to_128_words(bytes(blob))
 
 
@@ -2513,7 +2507,7 @@ def make_mini_network_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: 
             w16 = rng.integers(-2048, 2048, size=(num_logical_oc, K_eff), dtype=np.int32).astype(np.int16)
             scale_ext = np.resize(scale, num_logical_oc)
             bias_ext = np.resize(bias, num_logical_oc)
-            accum = (cols.astype(np.int64) @ w16.astype(np.int64).T).astype(np.int32)
+            accum = cols.astype(np.int64) @ w16.astype(np.int64).T
         else:
             # im2col_in_ch may exceed meta.in_ch when prev layer DCIM eff_ch pads OBUF (e.g. 16→32).
             feat_i = current_int8.reshape(cur_h, cur_w, im2col_in_ch).astype(np.int8)

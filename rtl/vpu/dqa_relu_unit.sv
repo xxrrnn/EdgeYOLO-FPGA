@@ -136,8 +136,14 @@ module dqa_relu_unit #(
                                     DQA_SINGLE_COMPUTE_BLOCKS64 : DQA_LOAD_WORDS_MAX_0;
     localparam DQA_LOAD_WORDS_BITS = (DQA_LOAD_WORDS_MAX <= 1) ? 1 : $clog2(DQA_LOAD_WORDS_MAX);
     localparam DQA_SAVE_WORDS_BITS = (DQA_SINGLE_COMPUTE_SAVE_BLOCKS <= 1) ? 1 : $clog2(DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
-    wire [ADDR_WIDTH - 1 : 0] dqa_single_compute_blocks_active =
-        dqa_act_mode ? 1 : (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS64 : DQA_SINGLE_COMPUTE_BLOCKS32);
+    localparam INT64_LANES_PER_WORD = VB_BANDWIDTH / 64;
+
+    initial begin
+        if (VB_BANDWIDTH % 64 != 0)
+            $error("dqa_relu_unit requires VB_BANDWIDTH divisible by 64 for native INT16 accumulators");
+        if (FP_CORE_NUM % INT64_LANES_PER_WORD != 0)
+            $error("dqa_relu_unit requires complete INT64 channel groups in each load transaction");
+    end
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_load_stride;
@@ -342,8 +348,8 @@ module dqa_relu_unit #(
                         end else begin
                             dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
                             if (dqa_int16_mode) begin
-                                for (int dqa_acc64_i = 0; dqa_acc64_i < (VB_BANDWIDTH/64); dqa_acc64_i++) begin
-                                    dqa_int64_in_reg[(dqa_x_load_block_cnt[0] * (VB_BANDWIDTH/64) + dqa_acc64_i) * 64 +: 64]
+                                for (int dqa_acc64_i = 0; dqa_acc64_i < INT64_LANES_PER_WORD; dqa_acc64_i++) begin
+                                    dqa_int64_in_reg[(dqa_x_load_block_cnt[DQA_LOAD_WORDS_BITS-1:0] * INT64_LANES_PER_WORD + dqa_acc64_i) * 64 +: 64]
                                         <= gb_doutb[dqa_acc64_i*64 +: 64];
                                 end
                             end
