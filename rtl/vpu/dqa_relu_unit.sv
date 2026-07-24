@@ -138,6 +138,15 @@ module dqa_relu_unit #(
     localparam DQA_SAVE_WORDS_BITS = (DQA_SINGLE_COMPUTE_SAVE_BLOCKS <= 1) ? 1 : $clog2(DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
     localparam INT64_LANES_PER_WORD = VB_BANDWIDTH / 64;
 
+    wire [ADDR_WIDTH-1:0] dqa_start_src_c_groups =
+        dqa_src_c >> $clog2(FP_CORE_NUM);
+    wire [ADDR_WIDTH-1:0] dqa_start_save_c_groups =
+        (dqa_total_c != '0) ? (dqa_total_c >> $clog2(FP_CORE_NUM)) :
+                              (dqa_src_c   >> $clog2(FP_CORE_NUM));
+    wire [ADDR_WIDTH-1:0] dqa_start_save_c_wrap_step =
+        dqa_start_save_c_groups -
+        ((dqa_start_src_c_groups - 1'b1) * DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
+
     initial begin
         if (VB_BANDWIDTH % 64 != 0)
             $error("dqa_relu_unit requires VB_BANDWIDTH divisible by 64 for native INT16 accumulators");
@@ -157,6 +166,8 @@ module dqa_relu_unit #(
     reg [ADDR_WIDTH - 1 : 0] dqa_src_base_word_reg;
     reg [ADDR_WIDTH - 1 : 0] dqa_dst_base_word_reg;
     reg [ADDR_WIDTH - 1 : 0] dqa_load_word_stride_reg;
+    reg [ADDR_WIDTH - 1 : 0] dqa_save_addr_add;
+    reg [ADDR_WIDTH - 1 : 0] dqa_save_c_wrap_step_reg;
 
     assign dqa_w_load_stride = dqa_w_load_stride_reg;
     assign dqa_w_save_stride = dqa_w_save_stride_reg;
@@ -248,18 +259,27 @@ module dqa_relu_unit #(
             dqa_x_load_h_cnt        <= '0;
             dqa_x_load_c_cnt        <= '0;
             dqa_x_load_addr_add     <= '0;
+            dqa_save_addr_add       <= '0;
         end else if (c_state == DQA_UPDATE) begin
             dqa_x_load_block_cnt    <= n_dqa_x_load_block_cnt;
             dqa_x_load_c_cnt        <= n_dqa_x_load_c_cnt;
             dqa_x_load_w_cnt        <= n_dqa_x_load_w_cnt;
             dqa_x_load_h_cnt        <= n_dqa_x_load_h_cnt;
-            dqa_x_load_addr_add         <= n_dqa_x_load_addr_add;
+            dqa_x_load_addr_add     <= n_dqa_x_load_addr_add;
+            if (dqa_done) begin
+                dqa_save_addr_add <= '0;
+            end else if (dqa_x_load_block_done) begin
+                dqa_save_addr_add <= dqa_save_addr_add +
+                                     (dqa_x_load_c_done ? dqa_save_c_wrap_step_reg :
+                                                          DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
+            end
         end else if(c_state == IDLE) begin
             dqa_x_load_block_cnt    <= '0;
             dqa_x_load_w_cnt        <= '0;
             dqa_x_load_h_cnt        <= '0;
             dqa_x_load_c_cnt        <= '0;
             dqa_x_load_addr_add     <= '0;
+            dqa_save_addr_add       <= '0;
         end
     end
     
@@ -359,21 +379,15 @@ module dqa_relu_unit #(
                 DQA_SAVE: begin
                     dqa_save_cnt <= dqa_save_cnt + 1'b1;
                 end
-                // save addr 独立于 load addr 计算，使用 save stride（支持 tile-sequential total_c != src_c）
-                // SAVE_ADDR_1: base = dst_base + c_cnt * DQA_SINGLE_COMPUTE_SAVE_BLOCKS；同时清零 save_cnt
-                // SAVE_ADDR_2: += w_cnt * w_save_stride
-                // SAVE_ADDR_3: += h_cnt * h_save_stride
-                // DQA_SAVE   : 写地址 = save_addr + save_cnt（save_cnt 从 0 递增）
+                // Save address is maintained incrementally in dqa_save_addr_add.
+                // Keep the three address states to preserve the original FSM cadence.
                 DQA_SAVE_ADDR_1: begin
                     dqa_save_cnt  <= '0;
-                    dqa_save_addr <= dqa_dst_base_word_reg +
-                                     dqa_x_load_c_cnt * DQA_SINGLE_COMPUTE_SAVE_BLOCKS;
+                    dqa_save_addr <= dqa_dst_base_word_reg + dqa_save_addr_add;
                 end
                 DQA_SAVE_ADDR_2: begin
-                    dqa_save_addr <= dqa_save_addr + dqa_x_load_w_cnt * dqa_w_save_stride_reg;
                 end
                 DQA_SAVE_ADDR_3: begin
-                    dqa_save_addr <= dqa_save_addr + dqa_x_load_h_cnt * dqa_h_save_stride_reg;
                 end
                 IDLE: begin
                     dqa_save_cnt <= '0;
@@ -543,6 +557,7 @@ module dqa_relu_unit #(
             dqa_src_base_word_reg <= '0;
             dqa_dst_base_word_reg <= '0;
             dqa_load_word_stride_reg <= '0;
+            dqa_save_c_wrap_step_reg <= '0;
         end else if (dqa_unit_start && dqa_unit_ready) begin
             dqa_src_addr_reg   <= dqa_src_addr;
             dqa_dst_addr_reg   <= dqa_dst_addr;
@@ -570,6 +585,7 @@ module dqa_relu_unit #(
             dqa_load_word_stride_reg <= dqa_act_mode ? 1 :
                                         (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS64 :
                                                           DQA_SINGLE_COMPUTE_BLOCKS32);
+            dqa_save_c_wrap_step_reg <= dqa_start_save_c_wrap_step;
         end
     end
 

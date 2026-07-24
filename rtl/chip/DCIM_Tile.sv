@@ -107,6 +107,7 @@ module DCIM_Tile #(
         ST_SWAP_PPCACHE,
         ST_LOAD_ACT_REQ,
         ST_LOAD_ACT_RESP,
+        ST_LOAD_ACT_LATCH,
         ST_COMPUTE,
         ST_WAIT_RESULT,
         ST_DONE
@@ -270,7 +271,8 @@ module DCIM_Tile #(
             ST_LOAD_PPCACHE:  if (ppcache_finished) next_state = ST_SWAP_PPCACHE;
             ST_SWAP_PPCACHE:  next_state = ST_LOAD_ACT_REQ;
             ST_LOAD_ACT_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_ACT_RESP;
-            ST_LOAD_ACT_RESP: if (ibuf_data_received) next_state = act_load_last ? ST_COMPUTE : ST_LOAD_ACT_REQ;
+            ST_LOAD_ACT_RESP: if (ibuf_data_received) next_state = ST_LOAD_ACT_LATCH;
+            ST_LOAD_ACT_LATCH: next_state = act_load_last ? ST_COMPUTE : ST_LOAD_ACT_REQ;
             ST_COMPUTE: begin
                 if (compute_done)
                     next_state = all_rows_processed ? ST_WAIT_RESULT : ST_PREP_PPCACHE;
@@ -414,24 +416,27 @@ module DCIM_Tile #(
 
                 ST_LOAD_ACT_RESP: begin
                     ibuf_rd_en <= 1'b0;
-                    if (ibuf_data_received) begin
+                    if (ibuf_data_received)
+                        ibuf_data_latch <= ibuf_rd_data;
+                end
+
+                ST_LOAD_ACT_LATCH: begin
                         if (is_int16) begin
                             for (int ch = 0; ch < BUF_DATA_WIDTH/16; ch++) begin
                                 if ((act_load_cnt * (BUF_DATA_WIDTH/16) + ch) < CH_IN)
-                                    conv_data[(act_load_cnt * (BUF_DATA_WIDTH/16) + ch)*16 +: 16] <= ibuf_rd_data[ch*16 +: 16];
+                                    conv_data[(act_load_cnt * (BUF_DATA_WIDTH/16) + ch)*16 +: 16] <= ibuf_data_latch[ch*16 +: 16];
                             end
                         end else begin
                             for (int ch = 0; ch < BUF_DATA_WIDTH/8; ch++) begin
                                 if ((act_load_cnt * (BUF_DATA_WIDTH/8) + ch) < CH_IN)
                                     conv_data[(act_load_cnt * (BUF_DATA_WIDTH/8) + ch)*16 +: 16] <=
-                                        {{8{ibuf_rd_data[ch*8 + 7]}}, ibuf_rd_data[ch*8 +: 8]};
+                                        {{8{ibuf_data_latch[ch*8 + 7]}}, ibuf_data_latch[ch*8 +: 8]};
                             end
                         end
                         if (act_load_last)
                             act_load_cnt <= '0;
                         else
                             act_load_cnt <= act_load_cnt + 1'b1;
-                    end
                 end
 
                 ST_COMPUTE: begin
