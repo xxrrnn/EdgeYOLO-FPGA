@@ -205,10 +205,9 @@ def emit_conv(
         oh_chunk = max(1, min(oh, max_oh_by_act, max_oh_by_tile_obuf))
 
         relu_flag = (1 << 0) if bool(layer.get("has_activation", True)) else 0
-        # DCIM INT16 still writes dense INT32 accumulators to tile_obuf.  The
-        # DQA INT16 flag is only for 16-bit accumulator blobs; using it here
-        # makes DQA reinterpret each int32 word as two int16 channels.
-        dqa_flags = relu_flag
+        # Native INT16 DCIM writes dense INT64 accumulators. VPU_FLAG_INT16
+        # selects the matching two-word-per-channel-quad DQA load path.
+        dqa_flags = relu_flag | vpu_flags
         tile_ch = out_ch_per_tile
         eff_ch = full_cout
 
@@ -364,10 +363,9 @@ def emit_conv(
         ops.append({"kind": "dcim_exec"})
         ops.append({"kind": "wait_dcim"})
 
-        # 5) DQA + ReLU + bias: OBUF[dcim INT32] → OBUF[fp32 quantized to INT8 in place]
+        # 5) DQA + ReLU + bias: DCIM accumulator -> FP32.
         relu_flag = (1 << 0) if bool(layer.get("has_activation", True)) else 0
-        # DCIM output is INT32 accumulators in both INT8 and INT16 conv modes.
-        dqa_flags = relu_flag
+        dqa_flags = relu_flag | vpu_flags
         ops.append({
             "kind": "vpu_exec", "unit": "dqa", "layer": layer["name"],
             "flags": dqa_flags,

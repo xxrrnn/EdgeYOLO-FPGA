@@ -76,7 +76,11 @@ def _conv_dqa_fp32(feat: np.ndarray, meta, npz, mode: str, *, relu: bool = True)
     if mode == "int16":
         feat_q = feat.astype(np.int16, copy=False)
         cols = im2col_int16(feat_q, meta)
-        matmul_dtype = np.float32
+        # Native W16A16 accumulates exactly in the RTL's signed INT64 path.
+        # Float32 loses several low accumulator bits once full-range INT16
+        # weights are used, which makes this oracle report hardware errors
+        # that do not exist.
+        matmul_dtype = np.int64
     else:
         feat_q = feat.astype(np.int8, copy=False)
         cols = im2col(feat_q, meta)

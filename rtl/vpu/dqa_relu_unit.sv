@@ -19,7 +19,7 @@ module dqa_relu_unit #(
     input   wire                                dqa_unit_start,
     output  wire                                dqa_unit_ready,
     input   wire                                dqa_relu_en,     // 1=ReLU（max(·,0)），0=线性直通
-    input   wire                                dqa_int16_mode,  // 1=输入 INT16 accumulator，0=输入 INT32 accumulator
+    input   wire                                dqa_int16_mode,  // 1=INT16 mode. DQA_ACT reads int16 packed; DCIM accum reads int64.
     input   wire                                dqa_act_mode,    // 1=输入为 QA packed activation，0=DCIM accumulator
 
     input   wire[ADDR_WIDTH - 1:0]              dqa_src_addr,
@@ -86,6 +86,7 @@ module dqa_relu_unit #(
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_full_scale_wire;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_full_bias_wire;
     reg     [FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0]          dqa_int_in_reg;
+    reg     [FP_CORE_NUM * 64 - 1 : 0]                      dqa_int64_in_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_fp_reg;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_out_reg;
 
@@ -125,15 +126,33 @@ module dqa_relu_unit #(
     // wire [ADDR_WIDTH - 1 : 0]                       DQA_SINGLE_COMPUTE_SAVE_BLOCKS ;
     // localparam DQA_SINGLE_COMPUTE_BYTES        = (FP_CORE_NUM * C_INT_WIDTH_IN >> 3);
     localparam DQA_SINGLE_COMPUTE_BLOCKS32      = ((FP_CORE_NUM * 32 + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
+    localparam DQA_SINGLE_COMPUTE_BLOCKS64      = ((FP_CORE_NUM * 64 + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
     localparam DQA_SINGLE_COMPUTE_BLOCKS16      = ((FP_CORE_NUM * 16 + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
     localparam DQA_SINGLE_COMPUTE_BLOCKS        = ((FP_CORE_NUM * C_INT_WIDTH_IN + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
     localparam DQA_SINGLE_COMPUTE_SAVE_BLOCKS   = ((FP_CORE_NUM * FP_WIDTH + VB_BANDWIDTH - 1) / VB_BANDWIDTH);
-    localparam DQA_LOAD_WORDS_MAX = (DQA_SINGLE_COMPUTE_BLOCKS32 > DQA_SINGLE_COMPUTE_BLOCKS16) ?
-                                    DQA_SINGLE_COMPUTE_BLOCKS32 : DQA_SINGLE_COMPUTE_BLOCKS16;
+    localparam DQA_LOAD_WORDS_MAX_0 = (DQA_SINGLE_COMPUTE_BLOCKS32 > DQA_SINGLE_COMPUTE_BLOCKS16) ?
+                                      DQA_SINGLE_COMPUTE_BLOCKS32 : DQA_SINGLE_COMPUTE_BLOCKS16;
+    localparam DQA_LOAD_WORDS_MAX = (DQA_SINGLE_COMPUTE_BLOCKS64 > DQA_LOAD_WORDS_MAX_0) ?
+                                    DQA_SINGLE_COMPUTE_BLOCKS64 : DQA_LOAD_WORDS_MAX_0;
     localparam DQA_LOAD_WORDS_BITS = (DQA_LOAD_WORDS_MAX <= 1) ? 1 : $clog2(DQA_LOAD_WORDS_MAX);
     localparam DQA_SAVE_WORDS_BITS = (DQA_SINGLE_COMPUTE_SAVE_BLOCKS <= 1) ? 1 : $clog2(DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
-    wire [ADDR_WIDTH - 1 : 0] dqa_single_compute_blocks_active =
-        dqa_act_mode ? 1 : (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32);
+    localparam INT64_LANES_PER_WORD = VB_BANDWIDTH / 64;
+
+    wire [ADDR_WIDTH-1:0] dqa_start_src_c_groups =
+        dqa_src_c >> $clog2(FP_CORE_NUM);
+    wire [ADDR_WIDTH-1:0] dqa_start_save_c_groups =
+        (dqa_total_c != '0) ? (dqa_total_c >> $clog2(FP_CORE_NUM)) :
+                              (dqa_src_c   >> $clog2(FP_CORE_NUM));
+    wire [ADDR_WIDTH-1:0] dqa_start_save_c_wrap_step =
+        dqa_start_save_c_groups -
+        ((dqa_start_src_c_groups - 1'b1) * DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
+
+    initial begin
+        if (VB_BANDWIDTH % 64 != 0)
+            $error("dqa_relu_unit requires VB_BANDWIDTH divisible by 64 for native INT16 accumulators");
+        if (FP_CORE_NUM % INT64_LANES_PER_WORD != 0)
+            $error("dqa_relu_unit requires complete INT64 channel groups in each load transaction");
+    end
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
     logic [ADDR_WIDTH - 1 : 0]                       dqa_h_load_stride;
@@ -147,6 +166,8 @@ module dqa_relu_unit #(
     reg [ADDR_WIDTH - 1 : 0] dqa_src_base_word_reg;
     reg [ADDR_WIDTH - 1 : 0] dqa_dst_base_word_reg;
     reg [ADDR_WIDTH - 1 : 0] dqa_load_word_stride_reg;
+    reg [ADDR_WIDTH - 1 : 0] dqa_save_addr_add;
+    reg [ADDR_WIDTH - 1 : 0] dqa_save_c_wrap_step_reg;
 
     assign dqa_w_load_stride = dqa_w_load_stride_reg;
     assign dqa_w_save_stride = dqa_w_save_stride_reg;
@@ -238,18 +259,27 @@ module dqa_relu_unit #(
             dqa_x_load_h_cnt        <= '0;
             dqa_x_load_c_cnt        <= '0;
             dqa_x_load_addr_add     <= '0;
+            dqa_save_addr_add       <= '0;
         end else if (c_state == DQA_UPDATE) begin
             dqa_x_load_block_cnt    <= n_dqa_x_load_block_cnt;
             dqa_x_load_c_cnt        <= n_dqa_x_load_c_cnt;
             dqa_x_load_w_cnt        <= n_dqa_x_load_w_cnt;
             dqa_x_load_h_cnt        <= n_dqa_x_load_h_cnt;
-            dqa_x_load_addr_add         <= n_dqa_x_load_addr_add;
+            dqa_x_load_addr_add     <= n_dqa_x_load_addr_add;
+            if (dqa_done) begin
+                dqa_save_addr_add <= '0;
+            end else if (dqa_x_load_block_done) begin
+                dqa_save_addr_add <= dqa_save_addr_add +
+                                     (dqa_x_load_c_done ? dqa_save_c_wrap_step_reg :
+                                                          DQA_SINGLE_COMPUTE_SAVE_BLOCKS);
+            end
         end else if(c_state == IDLE) begin
             dqa_x_load_block_cnt    <= '0;
             dqa_x_load_w_cnt        <= '0;
             dqa_x_load_h_cnt        <= '0;
             dqa_x_load_c_cnt        <= '0;
             dqa_x_load_addr_add     <= '0;
+            dqa_save_addr_add       <= '0;
         end
     end
     
@@ -316,6 +346,7 @@ module dqa_relu_unit #(
     always_ff @(posedge clk or negedge rst_n) begin
         if(!rst_n) begin
             dqa_int_in_reg <= '0;
+            dqa_int64_in_reg <= '0;
             dqa_save_cnt <= '0;
             dqa_save_addr <= '0;
         end else begin
@@ -334,34 +365,29 @@ module dqa_relu_unit #(
                                     <= {{(C_INT_WIDTH_IN-8){gb_doutb[dqa_x_load_addr_add[1:0]*32 + dqa_act8_i*8 + 7]}},
                                         gb_doutb[dqa_x_load_addr_add[1:0]*32 + dqa_act8_i*8 +: 8]};
                             end
-                        end else if (dqa_int16_mode) begin
-                            for (int dqa_i16_i = 0; dqa_i16_i < FP_CORE_NUM; dqa_i16_i++) begin
-                                dqa_int_in_reg[dqa_i16_i*C_INT_WIDTH_IN +: C_INT_WIDTH_IN]
-                                    <= {{(C_INT_WIDTH_IN-16){gb_doutb[dqa_i16_i*16+15]}}, gb_doutb[dqa_i16_i*16 +: 16]};
-                            end
                         end else begin
                             dqa_int_in_reg <= gb_doutb[FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0];
+                            if (dqa_int16_mode) begin
+                                for (int dqa_acc64_i = 0; dqa_acc64_i < INT64_LANES_PER_WORD; dqa_acc64_i++) begin
+                                    dqa_int64_in_reg[(dqa_x_load_block_cnt[DQA_LOAD_WORDS_BITS-1:0] * INT64_LANES_PER_WORD + dqa_acc64_i) * 64 +: 64]
+                                        <= gb_doutb[dqa_acc64_i*64 +: 64];
+                                end
+                            end
                         end
                     end
                 end
                 DQA_SAVE: begin
                     dqa_save_cnt <= dqa_save_cnt + 1'b1;
                 end
-                // save addr 独立于 load addr 计算，使用 save stride（支持 tile-sequential total_c != src_c）
-                // SAVE_ADDR_1: base = dst_base + c_cnt * DQA_SINGLE_COMPUTE_SAVE_BLOCKS；同时清零 save_cnt
-                // SAVE_ADDR_2: += w_cnt * w_save_stride
-                // SAVE_ADDR_3: += h_cnt * h_save_stride
-                // DQA_SAVE   : 写地址 = save_addr + save_cnt（save_cnt 从 0 递增）
+                // Save address is maintained incrementally in dqa_save_addr_add.
+                // Keep the three address states to preserve the original FSM cadence.
                 DQA_SAVE_ADDR_1: begin
                     dqa_save_cnt  <= '0;
-                    dqa_save_addr <= dqa_dst_base_word_reg +
-                                     dqa_x_load_c_cnt * DQA_SINGLE_COMPUTE_SAVE_BLOCKS;
+                    dqa_save_addr <= dqa_dst_base_word_reg + dqa_save_addr_add;
                 end
                 DQA_SAVE_ADDR_2: begin
-                    dqa_save_addr <= dqa_save_addr + dqa_x_load_w_cnt * dqa_w_save_stride_reg;
                 end
                 DQA_SAVE_ADDR_3: begin
-                    dqa_save_addr <= dqa_save_addr + dqa_x_load_h_cnt * dqa_h_save_stride_reg;
                 end
                 IDLE: begin
                     dqa_save_cnt <= '0;
@@ -395,13 +421,23 @@ module dqa_relu_unit #(
 
     /* FP2INT ARRAY*/
     localparam   FP_TRAN_LENGTH_IN =  FP_TRAN_NUM * C_INT_WIDTH_IN;
+    localparam   FP_TRAN_LENGTH_IN64 = FP_TRAN_NUM * 64;
     localparam   FP_TRAN_LENGTH_FP = FP_TRAN_NUM*FP_WIDTH;
     logic  s_axis_tvalid, m_axis_result_tvalid;
     
     wire  [FP_TRAN_NUM*C_INT_WIDTH_IN-1:0]     s_axis_tdata;
+    wire  [FP_TRAN_NUM*64-1:0]                 s_axis_tdata64;
     wire  [FP_TRAN_LENGTH_FP-1:0]         m_axis_result_tdata;
+    wire  [FP_TRAN_LENGTH_FP-1:0]         m_axis_result_tdata32;
+    wire  [FP_TRAN_LENGTH_FP-1:0]         m_axis_result_tdata64;
+    wire                                  m_axis_result_tvalid32;
+    wire                                  m_axis_result_tvalid64;
+    wire                                  dqa_use_int64_accum = dqa_int16_mode && !dqa_act_mode;
     assign s_axis_tvalid = (c_state == DQA_FP); 
     assign s_axis_tdata = dqa_int_in_reg[dqa_x_tran_cnt << $clog2(FP_TRAN_LENGTH_IN) +:FP_TRAN_LENGTH_IN];
+    assign s_axis_tdata64 = dqa_int64_in_reg[dqa_x_tran_cnt << $clog2(FP_TRAN_LENGTH_IN64) +:FP_TRAN_LENGTH_IN64];
+    assign m_axis_result_tvalid = dqa_use_int64_accum ? m_axis_result_tvalid64 : m_axis_result_tvalid32;
+    assign m_axis_result_tdata  = dqa_use_int64_accum ? m_axis_result_tdata64  : m_axis_result_tdata32;
 
     logic [FP_CORE_NUM*FP_WIDTH-1:0] dqa_relu_res;
 
@@ -431,20 +467,31 @@ module dqa_relu_unit #(
                 .FP_TRAN_NUM(FP_TRAN_NUM)
             ) int32_2_fp16_array_inst (
                 .clk(clk),
-                .s_axis_tvalid(s_axis_tvalid),
+                .s_axis_tvalid(s_axis_tvalid && !dqa_use_int64_accum),
                 .s_axis_tdata(s_axis_tdata),
-                .m_axis_result_tvalid(m_axis_result_tvalid),
-                .m_axis_result_tdata(m_axis_result_tdata)
+                .m_axis_result_tvalid(m_axis_result_tvalid32),
+                .m_axis_result_tdata(m_axis_result_tdata32)
             );
+            assign m_axis_result_tvalid64 = 1'b0;
+            assign m_axis_result_tdata64 = '0;
         end else begin : GEN_FP32
             int32_2_fp32_array #(
                 .FP_TRAN_NUM(FP_TRAN_NUM)
             ) int32_2_fp32_array_inst (
                 .clk(clk),
-                .s_axis_a_tvalid(s_axis_tvalid),
+                .s_axis_a_tvalid(s_axis_tvalid && !dqa_use_int64_accum),
                 .s_axis_a_tdata(s_axis_tdata),
-                .m_axis_result_tvalid(m_axis_result_tvalid),
-                .m_axis_result_tdata(m_axis_result_tdata)
+                .m_axis_result_tvalid(m_axis_result_tvalid32),
+                .m_axis_result_tdata(m_axis_result_tdata32)
+            );
+            int64_2_fp32_array #(
+                .FP_TRAN_NUM(FP_TRAN_NUM)
+            ) int64_2_fp32_array_inst (
+                .clk(clk),
+                .s_axis_a_tvalid(s_axis_tvalid && dqa_use_int64_accum),
+                .s_axis_a_tdata(s_axis_tdata64),
+                .m_axis_result_tvalid(m_axis_result_tvalid64),
+                .m_axis_result_tdata(m_axis_result_tdata64)
             );
         end
     endgenerate
@@ -510,6 +557,7 @@ module dqa_relu_unit #(
             dqa_src_base_word_reg <= '0;
             dqa_dst_base_word_reg <= '0;
             dqa_load_word_stride_reg <= '0;
+            dqa_save_c_wrap_step_reg <= '0;
         end else if (dqa_unit_start && dqa_unit_ready) begin
             dqa_src_addr_reg   <= dqa_src_addr;
             dqa_dst_addr_reg   <= dqa_dst_addr;
@@ -519,19 +567,25 @@ module dqa_relu_unit #(
             dqa_src_h_reg      <= dqa_src_h;
             dqa_src_w_reg      <= dqa_src_w;
             // Use input ports (not _reg): NBAs in this block still see pre-latch values.
-            dqa_w_load_stride_reg <= dqa_src_c >> $clog2(FP_CORE_NUM);
+            dqa_w_load_stride_reg <= (dqa_int16_mode && !dqa_act_mode) ?
+                                     ((dqa_src_c >> $clog2(FP_CORE_NUM)) * DQA_SINGLE_COMPUTE_BLOCKS64) :
+                                     (dqa_src_c >> $clog2(FP_CORE_NUM));
             // save stride 基于 total_c（tile-sequential 时 > src_c），total_c=0 退化为旧行为
             dqa_w_save_stride_reg <= (dqa_total_c != '0) ?
                                      (dqa_total_c >> $clog2(FP_CORE_NUM)) :
                                      (dqa_src_c   >> $clog2(FP_CORE_NUM));
-            dqa_h_load_stride_reg <= dqa_src_w * (dqa_src_c >> $clog2(FP_CORE_NUM));
+            dqa_h_load_stride_reg <= dqa_src_w * ((dqa_int16_mode && !dqa_act_mode) ?
+                                     ((dqa_src_c >> $clog2(FP_CORE_NUM)) * DQA_SINGLE_COMPUTE_BLOCKS64) :
+                                     (dqa_src_c >> $clog2(FP_CORE_NUM)));
             dqa_h_save_stride_reg <= dqa_src_w * ((dqa_total_c != '0) ?
                                      (dqa_total_c >> $clog2(FP_CORE_NUM)) :
                                      (dqa_src_c   >> $clog2(FP_CORE_NUM)));
             dqa_src_base_word_reg <= dqa_src_addr >> BYTE_ADDR_SHIFT;
             dqa_dst_base_word_reg <= dqa_dst_addr >> BYTE_ADDR_SHIFT;
             dqa_load_word_stride_reg <= dqa_act_mode ? 1 :
-                                        (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS16 : DQA_SINGLE_COMPUTE_BLOCKS32);
+                                        (dqa_int16_mode ? DQA_SINGLE_COMPUTE_BLOCKS64 :
+                                                          DQA_SINGLE_COMPUTE_BLOCKS32);
+            dqa_save_c_wrap_step_reg <= dqa_start_save_c_wrap_step;
         end
     end
 

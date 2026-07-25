@@ -164,6 +164,18 @@ python run.py --one-shot --network yolo --yolo-model infrared --yolo-precision i
 以下内容保留调试过程和旧路径，可能引用未纳入 Git 的临时 `output/` artifact。
 部署和验收请只使用上面的 Stable c1773f6 流程。
 
+### 2026-07-25 FPGA recheck: native W16A16 status
+
+- Infrared YOLO INT8/INT16-widened and ResNet VAI INT8/INT16-widened pass the
+  strict one-shot feature gate (`atol=1e-3`) on FPGA.
+- COCO YOLO native W16A16 completes 57/57 layers on FPGA. Its PAN P3/P4/P5
+  maximum absolute errors are `0.00930/0.00712/0.00696`; it passes a declared
+  `--one-shot-compare-atol 0.01` gate and detects chair/tv, but is not
+  bit-perfect at `1e-3` because quantized FP32 rounding accumulates through
+  the full network.
+- `run.py` exposes `--one-shot-compare-atol` (default `1e-3`) so strict and
+  tolerance-based native W16A16 verification remain explicit.
+
 ### 2026-07-22 Stable-bitstream recovery and INT16-widened deployment
 
 - 新生成的 true-INT16/INT64-accumulator bitstream 在网络启动前就出现

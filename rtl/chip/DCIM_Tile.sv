@@ -9,7 +9,8 @@
 //   - weight：每个 acc step 从 IBUF 读 CYCLE 个 128-bit word，写入 DCIM 内部 SRAM。
 //   - ppCache：每个 acc step 从 SRAM 慢速 load 到 ppCache，再 swap 后计算。
 //   - activation：按 CH_IN 参数多 beat 读取，INT8 为 CH_IN/16 个 word，INT16 为 CH_IN/8 个 word。
-//   - output：按 INT32 结果慢速分 word 写回 OBUF；不追求连续写吞吐。
+//   - output：INT8 按 INT32 写回；INT16 按 INT64 accumulator 写回，避免 true W16A16 溢出。
+//     写回均为慢速分 word，不追求连续写吞吐。
 //
 // 对 64×64 配置：
 //   CYCLE = 64*64*4/128 = 128，SRAM_DP=128，因此每个 chunk 只包含 1 个 acc row。
@@ -36,12 +37,14 @@ module DCIM_Tile #(
     localparam OUT_WIDTH      = CH_OUT * WD3,
     localparam ACC_UBD_WD     = $clog2(ACC+1),
     localparam STRB_WIDTH     = BUF_DATA_WIDTH / 8,
-    localparam RESULTS_PER_WORD = BUF_DATA_WIDTH / 32,
+    localparam INT8_RESULTS_PER_WORD = BUF_DATA_WIDTH / 32,
+    localparam INT16_ACC_WIDTH = 64,
+    localparam INT16_RESULTS_PER_WORD = BUF_DATA_WIDTH / INT16_ACC_WIDTH,
     localparam INT8_OUT_CH    = CH_OUT / 2,
     localparam INT16_OUT_CH   = CH_OUT / 4,
     localparam MAX_OUT_CH     = INT8_OUT_CH,
-    localparam INT8_OUT_WORDS = (INT8_OUT_CH + RESULTS_PER_WORD - 1) / RESULTS_PER_WORD,
-    localparam INT16_OUT_WORDS = (INT16_OUT_CH + RESULTS_PER_WORD - 1) / RESULTS_PER_WORD,
+    localparam INT8_OUT_WORDS = (INT8_OUT_CH + INT8_RESULTS_PER_WORD - 1) / INT8_RESULTS_PER_WORD,
+    localparam INT16_OUT_WORDS = (INT16_OUT_CH + INT16_RESULTS_PER_WORD - 1) / INT16_RESULTS_PER_WORD,
     localparam INT8_ACT_WORDS = (CH_IN * 8 + BUF_DATA_WIDTH - 1) / BUF_DATA_WIDTH,
     localparam INT16_ACT_WORDS = (CH_IN * 16 + BUF_DATA_WIDTH - 1) / BUF_DATA_WIDTH,
     localparam ACT_WORDS_MAX  = (INT16_ACT_WORDS > INT8_ACT_WORDS) ? INT16_ACT_WORDS : INT8_ACT_WORDS,
@@ -86,6 +89,9 @@ module DCIM_Tile #(
         if (BUF_DATA_WIDTH % 32 != 0) begin
             $error("DCIM_Tile requires BUF_DATA_WIDTH to contain whole INT32 results");
         end
+        if (BUF_DATA_WIDTH % INT16_ACC_WIDTH != 0) begin
+            $error("DCIM_Tile requires BUF_DATA_WIDTH to contain whole INT64 INT16 accumulators");
+        end
     end
 
     // obuf.v：reg1+reg2+reg3 → mem；末次 grant 后等待写流水排空（DCIM_OBUF_WR_DRAIN）
@@ -101,6 +107,7 @@ module DCIM_Tile #(
         ST_SWAP_PPCACHE,
         ST_LOAD_ACT_REQ,
         ST_LOAD_ACT_RESP,
+        ST_LOAD_ACT_LATCH,
         ST_COMPUTE,
         ST_WAIT_RESULT,
         ST_DONE
@@ -145,7 +152,7 @@ module DCIM_Tile #(
     reg [ACC_UBD_WD-1:0]     chunk_base;
     reg                      chunk_continue_req;
     reg signed [31:0]        int8_partial_accum [0:INT8_OUT_CH-1];
-    reg signed [31:0]        int16_partial_accum [0:INT16_OUT_CH-1];
+    reg signed [INT16_ACC_WIDTH-1:0] int16_partial_accum [0:INT16_OUT_CH-1];
     reg [OUT_WORD_CNT_W-1:0] result_cnt;
     reg                      result_write_done;
     reg [ACT_CNT_W-1:0]      act_load_cnt;
@@ -264,7 +271,8 @@ module DCIM_Tile #(
             ST_LOAD_PPCACHE:  if (ppcache_finished) next_state = ST_SWAP_PPCACHE;
             ST_SWAP_PPCACHE:  next_state = ST_LOAD_ACT_REQ;
             ST_LOAD_ACT_REQ:  if (ibuf_handshake_done) next_state = ST_LOAD_ACT_RESP;
-            ST_LOAD_ACT_RESP: if (ibuf_data_received) next_state = act_load_last ? ST_COMPUTE : ST_LOAD_ACT_REQ;
+            ST_LOAD_ACT_RESP: if (ibuf_data_received) next_state = ST_LOAD_ACT_LATCH;
+            ST_LOAD_ACT_LATCH: next_state = act_load_last ? ST_COMPUTE : ST_LOAD_ACT_REQ;
             ST_COMPUTE: begin
                 if (compute_done)
                     next_state = all_rows_processed ? ST_WAIT_RESULT : ST_PREP_PPCACHE;
@@ -408,24 +416,27 @@ module DCIM_Tile #(
 
                 ST_LOAD_ACT_RESP: begin
                     ibuf_rd_en <= 1'b0;
-                    if (ibuf_data_received) begin
+                    if (ibuf_data_received)
+                        ibuf_data_latch <= ibuf_rd_data;
+                end
+
+                ST_LOAD_ACT_LATCH: begin
                         if (is_int16) begin
                             for (int ch = 0; ch < BUF_DATA_WIDTH/16; ch++) begin
                                 if ((act_load_cnt * (BUF_DATA_WIDTH/16) + ch) < CH_IN)
-                                    conv_data[(act_load_cnt * (BUF_DATA_WIDTH/16) + ch)*16 +: 16] <= ibuf_rd_data[ch*16 +: 16];
+                                    conv_data[(act_load_cnt * (BUF_DATA_WIDTH/16) + ch)*16 +: 16] <= ibuf_data_latch[ch*16 +: 16];
                             end
                         end else begin
                             for (int ch = 0; ch < BUF_DATA_WIDTH/8; ch++) begin
                                 if ((act_load_cnt * (BUF_DATA_WIDTH/8) + ch) < CH_IN)
                                     conv_data[(act_load_cnt * (BUF_DATA_WIDTH/8) + ch)*16 +: 16] <=
-                                        {{8{ibuf_rd_data[ch*8 + 7]}}, ibuf_rd_data[ch*8 +: 8]};
+                                        {{8{ibuf_data_latch[ch*8 + 7]}}, ibuf_data_latch[ch*8 +: 8]};
                             end
                         end
                         if (act_load_last)
                             act_load_cnt <= '0;
                         else
                             act_load_cnt <= act_load_cnt + 1'b1;
-                    end
                 end
 
                 ST_COMPUTE: begin
@@ -461,10 +472,11 @@ module DCIM_Tile #(
     save_state_t save_state;
     (* keep = "true" *) reg [OUT_WIDTH-1:0] dcim_data_latch;
     (* keep = "true" *) reg signed [WD3-1:0] phys_ch_reg [0:CH_OUT-1];
+    reg save_chunk_has_more_reg;
     reg signed [31:0] result_buffer [0:MAX_OUT_CH-1];
 
     wire signed [31:0] int8_result [0:INT8_OUT_CH-1];
-    wire signed [31:0] int16_result [0:INT16_OUT_CH-1];
+    wire signed [INT16_ACC_WIDTH-1:0] int16_result [0:INT16_OUT_CH-1];
 
     genvar gi;
     generate
@@ -479,10 +491,14 @@ module DCIM_Tile #(
 
         for (gi = 0; gi < INT16_OUT_CH; gi = gi + 1) begin : gen_int16_extract
             localparam COL_BASE = gi * 4;
-            wire [4*WD3-1:0] raw_int16;
+            wire signed [4*WD3-1:0] raw_int16;
             assign raw_int16 = {phys_ch_reg[COL_BASE+3], phys_ch_reg[COL_BASE+2],
                                 phys_ch_reg[COL_BASE+1], phys_ch_reg[COL_BASE]};
-            assign int16_result[gi] = raw_int16[31:0];
+            if ((4*WD3) <= INT16_ACC_WIDTH) begin : gen_i16_sign_extend
+                assign int16_result[gi] = {{(INT16_ACC_WIDTH-(4*WD3)){raw_int16[4*WD3-1]}}, raw_int16};
+            end else begin : gen_i16_truncate
+                assign int16_result[gi] = raw_int16[INT16_ACC_WIDTH-1:0];
+            end
         end
     endgenerate
 
@@ -492,10 +508,19 @@ module DCIM_Tile #(
         integer out_idx;
         begin
             result_word = '0;
-            for (lane = 0; lane < RESULTS_PER_WORD; lane = lane + 1) begin
-                out_idx = word_idx * RESULTS_PER_WORD + lane;
-                if (out_idx < active_out_ch)
-                    result_word[lane*32 +: 32] = result_buffer[out_idx];
+            if (is_int16_reg) begin
+                for (lane = 0; lane < INT16_RESULTS_PER_WORD; lane = lane + 1) begin
+                    out_idx = word_idx * INT16_RESULTS_PER_WORD + lane;
+                    if (out_idx < active_out_ch)
+                        result_word[lane*INT16_ACC_WIDTH +: INT16_ACC_WIDTH] =
+                            int16_partial_accum[out_idx];
+                end
+            end else begin
+                for (lane = 0; lane < INT8_RESULTS_PER_WORD; lane = lane + 1) begin
+                    out_idx = word_idx * INT8_RESULTS_PER_WORD + lane;
+                    if (out_idx < active_out_ch)
+                        result_word[lane*32 +: 32] = result_buffer[out_idx];
+                end
             end
             pack_result_word = result_word;
         end
@@ -510,6 +535,7 @@ module DCIM_Tile #(
             obuf_wr_strb <= '0;
             save_state <= SAVE_WAIT;
             dcim_data_latch <= '0;
+            save_chunk_has_more_reg <= 1'b0;
             chunk_continue_req <= 1'b0;
             result_write_done <= 1'b0;
             for (int i = 0; i < CH_OUT; i++) phys_ch_reg[i] <= '0;
@@ -522,6 +548,7 @@ module DCIM_Tile #(
                 obuf_wr_valid <= 1'b0;
                 obuf_wr_strb <= '0;
                 save_state <= SAVE_WAIT;
+                save_chunk_has_more_reg <= 1'b0;
                 chunk_continue_req <= 1'b0;
                 result_write_done <= 1'b0;
                 for (int i = 0; i < INT8_OUT_CH; i++) int8_partial_accum[i] <= '0;
@@ -532,6 +559,7 @@ module DCIM_Tile #(
                     obuf_wr_valid <= 1'b0;
                     obuf_wr_strb <= '0;
                     save_state <= SAVE_WAIT;
+                    save_chunk_has_more_reg <= 1'b0;
                     chunk_continue_req <= 1'b0;
                     result_write_done <= 1'b0;
                 end
@@ -548,11 +576,12 @@ module DCIM_Tile #(
                     SAVE_LATCH: begin
                         for (int i = 0; i < CH_OUT; i++)
                             phys_ch_reg[i] <= dcim_data_latch[i*WD3 +: WD3];
+                        save_chunk_has_more_reg <= chunk_has_more;
                         save_state <= SAVE_ACCUM;
                     end
 
                     SAVE_ACCUM: begin
-                        if (chunk_has_more) begin
+                        if (save_chunk_has_more_reg) begin
                             if (is_int16_reg) begin
                                 for (int i = 0; i < INT16_OUT_CH; i++)
                                     int16_partial_accum[i] <= int16_partial_accum[i] + int16_result[i];
@@ -565,7 +594,7 @@ module DCIM_Tile #(
                         end else begin
                             if (is_int16_reg) begin
                                 for (int i = 0; i < INT16_OUT_CH; i++)
-                                    result_buffer[i] <= int16_result[i] + int16_partial_accum[i];
+                                    int16_partial_accum[i] <= int16_result[i] + int16_partial_accum[i];
                             end else begin
                                 for (int i = 0; i < INT8_OUT_CH; i++)
                                     result_buffer[i] <= int8_result[i] + int8_partial_accum[i];

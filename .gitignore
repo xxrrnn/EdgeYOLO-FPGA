@@ -53,6 +53,8 @@
 !tests/**/*.py
 !tests/**/*.ipynb
 !tests/**/*.sh
+!tests/**/*.yaml
+!tests/**/*.yml
 
 !xdc/
 !xdc/**/

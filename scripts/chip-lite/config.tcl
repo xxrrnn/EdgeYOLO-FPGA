@@ -14,7 +14,8 @@ set boardPart  "xilinx.com:vcu128:part0:1.0"
 # ------------------------------------------------------------------------------
 # 优先级：
 #   1. 环境变量 BUILD_TAG   → 自定义标签，例如 aggressive / exp1 / 260606
-#   2. 自动时间戳           → 格式 yymmdd_HHMM，每次唯一
+#   2. 当前 git short sha    → 便于 bitstream 追溯源码
+#   3. 自动时间戳           → 非 git 环境下兜底
 #
 # 用法示例：
 #   # 自动时间戳（推荐日常使用，无需手动命名）
@@ -39,8 +40,12 @@ if {[info exists ::env(BUILD_TAG)] && [string trim $::env(BUILD_TAG)] ne ""} {
     # 用户指定 tag（去除两端空白）
     set runTag [string trim $::env(BUILD_TAG)]
 } else {
-    # 自动生成时间戳（yymmdd_HHMM），并行时每次唯一
-    set runTag [clock format [clock seconds] -format "%y%m%d_%H%M"]
+    # 默认使用 git short sha；非 git 环境下自动生成时间戳兜底。
+    if {[catch {exec git rev-parse --short HEAD} _git_sha] || [string trim $_git_sha] eq ""} {
+        set runTag [clock format [clock seconds] -format "%y%m%d_%H%M"]
+    } else {
+        set runTag [string trim $_git_sha]
+    }
 }
 
 # --- 路径 ---
@@ -84,13 +89,16 @@ set routeDirective      AggressiveExplore
 # run.tcl 在 post-route timing 失败时，从 post_opt.dcp 重新尝试下一组 directive。
 # 每组策略跑 place → phys_opt → route 完整流程。
 # 策略名 | place | phys_opt | route
-# 注意：SSI_SpreadLogic 在 Vivado 2024.2 中已无效（Constraints 18-641），
-#       替换为 SSI_SpreadSLLs（专用于 SSI 跨 SLR SLL 分散）
+# 这些 directive 已按 Vivado 2024.2.2 help/probe 过滤，避免无效策略浪费整轮实现。
 set retryStrategies {
-    {Default         AggressiveExplore  AggressiveExplore}
-    {ExtraTimingOpt  AggressiveExplore  NoTimingRelaxation}
-    {AltSpreadLogic  AggressiveExplore  AggressiveExplore}
-    {SSI_SpreadSLLs  AggressiveExplore  Explore}
+    {ExtraTimingOpt  AggressiveExplore     NoTimingRelaxation}
+    {ExtraTimingOpt  AggressiveExplore     AggressiveExplore}
+    {Explore         AggressiveExplore     NoTimingRelaxation}
+    {Explore         AggressiveExplore     AggressiveExplore}
+    {ExtraTimingOpt  ExploreWithHoldFix    NoTimingRelaxation}
+    {Explore         ExploreWithHoldFix    Explore}
+    {Default         AggressiveExplore     AggressiveExplore}
+    {Default         ExploreWithHoldFix    Explore}
 }
 
 # --- DSP 用量说明 ---
@@ -115,16 +123,65 @@ set rptMaxPaths      50
 # post-route: WNS < 0 不写 bitstream
 # (hardcoded in proc, threshold = 0)
 
+# STOP_AFTER=opt 只跑到 post_opt.dcp，用作 impl-race 的共享起点。
+set stopAfter ""
+if {[info exists ::env(STOP_AFTER)]} {
+    set stopAfter [string tolower [string trim $::env(STOP_AFTER)]]
+}
+if {$stopAfter ne "" && $stopAfter ne "opt"} {
+    puts "WARNING: STOP_AFTER='$stopAfter' is unsupported; ignoring."
+    set stopAfter ""
+}
+
 # --- 并发线程 ---
-# Vivado 上限 64 线程；服务器 128 核，以下设置在安全范围内。
-# synthJobs: launch_runs -jobs 的并行 OOC synth 进程数（充分利用 CPU）
-# maxThreads: 单个 Vivado 进程内部的多线程数
-set synthJobs 128
-set_param general.maxThreads 32
+# Vivado 2024.2.2 对 general.maxThreads 的有效范围是 1..32。
+# 服务器 128 核主要通过 launch_runs -jobs 并行 OOC/IP 综合来利用。
+proc env_int_or_default {name default} {
+    if {[info exists ::env($name)] && [string trim $::env($name)] ne ""} {
+        set value [string trim $::env($name)]
+        if {![string is integer -strict $value] || $value < 1} {
+            puts "WARNING: $name='$value' is invalid; using $default."
+            return $default
+        }
+        return $value
+    }
+    return $default
+}
+
+proc clamp_vivado_threads {name value} {
+    if {$value > 32} {
+        puts "WARNING: $name=$value exceeds Vivado 2024.2 limit; using 32."
+        return 32
+    }
+    return $value
+}
+
+set synthJobs [env_int_or_default SYNTH_JOBS 128]
+set vivadoThreads [clamp_vivado_threads VIVADO_THREADS [env_int_or_default VIVADO_THREADS 32]]
+set placeThreads  [clamp_vivado_threads PLACE_THREADS  [env_int_or_default PLACE_THREADS 8]]
+set routeThreads  [clamp_vivado_threads ROUTE_THREADS  [env_int_or_default ROUTE_THREADS 32]]
+
+proc use_vivado_threads {} {
+    global vivadoThreads
+    set_param general.maxThreads $vivadoThreads
+}
+
+proc use_place_threads {} {
+    global placeThreads
+    set_param general.maxThreads $placeThreads
+}
+
+proc use_route_threads {} {
+    global routeThreads
+    set_param general.maxThreads $routeThreads
+}
+
+use_vivado_threads
 catch {set_param place.ILREnabled false}
 
 puts "INFO: config.tcl loaded — project: $projName  tag: $runTag  part: $part"
 puts "INFO: projPath = $projPath"
+puts "INFO: Vivado parallelism — VIVADO_THREADS=$vivadoThreads  PLACE_THREADS=$placeThreads  ROUTE_THREADS=$routeThreads  SYNTH_JOBS=$synthJobs"
 
 # ==============================================================================
 # 邮件通知配置（126邮箱，留空则不启用）

@@ -322,6 +322,11 @@ reload_xdc
 report_timing_summary -file [file normalize "$ImplOutputDir/post_opt_timing_summary.rpt"]
 report_utilization -file [file normalize "$ImplOutputDir/post_opt_util.rpt"]
 
+if {[info exists stopAfter] && $stopAfter eq "opt"} {
+    puts "INFO: STOP_AFTER=opt — stopping after post_opt.dcp."
+    return
+}
+
 # ==============================================================================
 # Step 3~6: Place → Phys Opt → Route → Bitstream (with Retry)
 # ==============================================================================
@@ -360,9 +365,9 @@ for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_i
     # --- Place ---
     puts "\n---------- Place Design (attempt $_attempt) ----------"
     catch {set_param place.ILREnabled false}
-    set_param general.maxThreads 8
+    use_place_threads
     place_design -directive $_placeDir
-    set_param general.maxThreads 32
+    use_vivado_threads
 
     set _placeDcp [file normalize "$ImplOutputDir/post_place_attempt${_attempt}.dcp"]
     write_checkpoint -force $_placeDcp
@@ -394,7 +399,7 @@ for {set _retry_idx 0} {$_retry_idx < [llength $retryStrategies]} {incr _retry_i
 
     # --- Route ---
     puts "\n---------- Route Design (attempt $_attempt) ----------"
-    set_param general.maxThreads 32
+    use_route_threads
     route_design -directive $_routeDir
 
     phys_opt_design -hold_fix
