@@ -341,6 +341,7 @@ def run_one_shot_fpga(
     iou: float,
     poll_timeout_s: float,
     read_chunk_bytes: int,
+    compare_atol: float,
     quiet_xdma: bool,
     soft_reset: bool,
     recompile: bool,
@@ -397,7 +398,7 @@ def run_one_shot_fpga(
         "--build-dir", str(build_dir),
         "--image", str(img_path),
         "--output", str(primary),
-        "--atol", "1e-3",
+        "--atol", str(compare_atol),
     ]
     if named_outputs:
         compare_cmd.extend(["--output-dir", str(feat_dir)])
@@ -478,6 +479,8 @@ def run_yolo_int8_one_shot_fpga(
         conf=conf,
         iou=iou,
         poll_timeout_s=poll_timeout_s,
+        read_chunk_bytes=65536,
+        compare_atol=1e-3,
         quiet_xdma=quiet_xdma,
         soft_reset=soft_reset,
         recompile=recompile,
@@ -652,6 +655,8 @@ def parse_args() -> argparse.Namespace:
                     help="decoder timeout for one-shot FPGA execution")
     ap.add_argument("--one-shot-read-chunk-bytes", type=int, default=65536,
                     help="C2H readback chunk size for one-shot named outputs; lower this if XDMA C2H is unstable")
+    ap.add_argument("--one-shot-compare-atol", type=float, default=1e-3,
+                    help="absolute tolerance for FPGA versus compiler-feature comparison (default: 1e-3)")
     ap.add_argument("--one-shot-no-soft-reset", action="store_true",
                     help="do not issue decoder soft reset before one-shot execution")
     ap.add_argument("--one-shot-recompile", action="store_true",
@@ -736,6 +741,7 @@ def main() -> int:
                 iou=args.iou,
                 poll_timeout_s=args.one_shot_poll_timeout_s,
                 read_chunk_bytes=args.one_shot_read_chunk_bytes,
+                compare_atol=args.one_shot_compare_atol,
                 quiet_xdma=not args.verbose_xdma,
                 soft_reset=not args.one_shot_no_soft_reset,
                 recompile=args.one_shot_recompile,

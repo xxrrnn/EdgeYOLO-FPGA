@@ -103,11 +103,16 @@ def _run_yolo(plan: dict, image_path: Path, output_dir: Path, parsed_dir: Path,
     head = DetectHead(str(parsed_dir / "weights"))
     # The trained host detect head expects quantized PAN features.  The one-shot
     # compiler exposes FP32 DQA features, so round them back to the per-scale
-    # activation grids before running model.24 on host.
+    # activation grids before running model.24 on host.  Native W16A16 plans
+    # must retain the full INT16 grid here; clipping them to INT8 changes the
+    # model inputs and invalidates the host-side detect result.
+    mode = str(plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8")))
+    quant_dtype = np.int16 if mode == "int16" else np.int8
+    quant_limit = 32767 if mode == "int16" else 127
     feats_q = []
     for i, feat in enumerate(feats):
         scale = float(head.convs[i]["act_scale"])
-        feats_q.append(np.clip(np.round(feat / scale), -128, 127).astype(np.int8))
+        feats_q.append(np.clip(np.round(feat / scale), -quant_limit, quant_limit).astype(quant_dtype))
     raw_preds = head.forward(feats_q[0], feats_q[1], feats_q[2])
     results = head.postprocess(raw_preds, conf_thres=conf, iou_thres=iou, img_size=320)
 
