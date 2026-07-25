@@ -472,6 +472,7 @@ module DCIM_Tile #(
     save_state_t save_state;
     (* keep = "true" *) reg [OUT_WIDTH-1:0] dcim_data_latch;
     (* keep = "true" *) reg signed [WD3-1:0] phys_ch_reg [0:CH_OUT-1];
+    reg save_chunk_has_more_reg;
     reg signed [31:0] result_buffer [0:MAX_OUT_CH-1];
 
     wire signed [31:0] int8_result [0:INT8_OUT_CH-1];
@@ -534,6 +535,7 @@ module DCIM_Tile #(
             obuf_wr_strb <= '0;
             save_state <= SAVE_WAIT;
             dcim_data_latch <= '0;
+            save_chunk_has_more_reg <= 1'b0;
             chunk_continue_req <= 1'b0;
             result_write_done <= 1'b0;
             for (int i = 0; i < CH_OUT; i++) phys_ch_reg[i] <= '0;
@@ -546,6 +548,7 @@ module DCIM_Tile #(
                 obuf_wr_valid <= 1'b0;
                 obuf_wr_strb <= '0;
                 save_state <= SAVE_WAIT;
+                save_chunk_has_more_reg <= 1'b0;
                 chunk_continue_req <= 1'b0;
                 result_write_done <= 1'b0;
                 for (int i = 0; i < INT8_OUT_CH; i++) int8_partial_accum[i] <= '0;
@@ -556,6 +559,7 @@ module DCIM_Tile #(
                     obuf_wr_valid <= 1'b0;
                     obuf_wr_strb <= '0;
                     save_state <= SAVE_WAIT;
+                    save_chunk_has_more_reg <= 1'b0;
                     chunk_continue_req <= 1'b0;
                     result_write_done <= 1'b0;
                 end
@@ -572,11 +576,12 @@ module DCIM_Tile #(
                     SAVE_LATCH: begin
                         for (int i = 0; i < CH_OUT; i++)
                             phys_ch_reg[i] <= dcim_data_latch[i*WD3 +: WD3];
+                        save_chunk_has_more_reg <= chunk_has_more;
                         save_state <= SAVE_ACCUM;
                     end
 
                     SAVE_ACCUM: begin
-                        if (chunk_has_more) begin
+                        if (save_chunk_has_more_reg) begin
                             if (is_int16_reg) begin
                                 for (int i = 0; i < INT16_OUT_CH; i++)
                                     int16_partial_accum[i] <= int16_partial_accum[i] + int16_result[i];
