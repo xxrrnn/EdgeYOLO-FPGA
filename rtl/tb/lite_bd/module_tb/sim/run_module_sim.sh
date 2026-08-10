@@ -6,7 +6,7 @@ MODULE_SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE_TB_DIR="$(cd "$MODULE_SIM_DIR/.." && pwd)"
 LITE_BD_DIR="$(cd "$MODULE_TB_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$LITE_BD_DIR/../../.." && pwd)"
-source "$REPO_ROOT/rtl/vpu/tb/sim/vcs_common.sh"
+source "$REPO_ROOT/rtl/tb/lite_bd/sim/vcs_common.sh"
 
 vcs_setup
 
@@ -38,6 +38,7 @@ MODULE_VERIFY_WORDS="${MODULE_VERIFY_WORDS:-0}"
 MODULE_QUANT="${MODULE_QUANT:-int8}"
 MODULE_DIM="${MODULE_DIM:-}"
 FSDB="${FSDB:-0}"
+PEAK_INT8="${PEAK_INT8:-0}"
 RUN_EXPORT="${RUN_EXPORT:-0}"
 FAST="${FAST:-1}"
 VCS_JOBS="${VCS_JOBS:-64}"
@@ -79,7 +80,7 @@ GOLDEN_PY="$MODULE_TB_DIR/golden_module_tb.py"
 
 if [[ "$RUN_EXPORT" == "1" ]]; then
   echo "=== Vivado export_simulation (lite BD) ==="
-  vivado -mode batch -source "$REPO_ROOT/scripts/chip-lite/4_export_sim.tcl" \
+  vivado -mode batch -source "$REPO_ROOT/scripts/chip-lite/export_sim.tcl" \
     2>&1 | tee "$REPO_ROOT/sim/lite_bd_export/export.log"
 fi
 
@@ -151,9 +152,9 @@ compile_simv() {
     "+incdir+$LITE_BD_DIR"
     "+incdir+$MODULE_TB_DIR"
     "+incdir+$LITE_BUILD_DIR/lite.ip_user_files/bd/lite/ip/lite_xdma_0_0/ip_0/source"
-    "+incdir+$REPO_ROOT/bd/lite/ipshared/eebc/hdl/verilog"
+    "+incdir+$LITE_BUILD_DIR/bd/lite/ipshared/eebc/hdl/verilog"
     "+incdir+$LITE_BUILD_DIR/lite.ip_user_files/bd/lite/ip/lite_hbm_0_0/hdl/rtl"
-    "+incdir+$REPO_ROOT/bd/lite/ipshared/7b8c/verif/model"
+    "+incdir+$LITE_BUILD_DIR/bd/lite/ipshared/7b8c/verif/model"
     "+define+SIMULATION"
   )
   if [[ "${FP32_2_INT16_BEHAVIORAL:-1}" == "1" ]]; then
@@ -223,7 +224,7 @@ ensure_simv() {
 
 summarize_log() {
   [[ $# -ge 1 ]] || return 0
-  grep -E "(MODULE_TB|MODULE RESULTS|MODULE CHECK|FATAL|MISMATCH|Decoder done)" "$1" | tail -120 || true
+  grep -E "(MODULE_TB|MODULE RESULTS|MODULE CHECK|PEAK_INT8_METRIC|FATAL|MISMATCH|Decoder done)" "$1" | tail -120 || true
 }
 
 check_log_pass() {
@@ -262,6 +263,9 @@ run_simv() {
   fi
   if [[ "$FSDB" == "1" ]]; then
     sim_opts+=(+FSDB)
+  fi
+  if [[ "$PEAK_INT8" == "1" ]]; then
+    sim_opts+=(+PEAK_INT8)
   fi
   echo "=== VCS simulate module BD test (reuse simv, PRELOAD_MODE=$PRELOAD_MODE) ==="
   (cd "$RUN_DIR"

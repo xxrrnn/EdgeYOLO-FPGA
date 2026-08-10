@@ -70,6 +70,8 @@ DCIM_MODREF_SIM_ALT := $(if $(_LATEST_BUILD),$(_LATEST_BUILD)/lite.ip_user_files
 SIM_DIR       := $(MODULE_TB_DIR)/sim
 RUN_SCRIPT    := $(SIM_DIR)/run_module_sim.sh
 GOLDEN_PY     := $(MODULE_TB_DIR)/golden_module_tb.py
+PEAK_REPORT_PY := $(MODULE_TB_DIR)/report_peak_int8.py
+PEAK_RUN_DIR  := $(SIM_DIR)/run_peak_int8_all_tiles
 
 # 运行目录 slug：run_<MODULE_CASE>_<VARIANT>_<quant|dcim_int8|dcim_int16>
 _QUANT_SLUG := $(if $(filter dcim_matmul,$(MODULE_CASE)),$(if $(findstring int16,$(MODULE_VARIANT)),dcim_int16,dcim_int8),$(if $(filter all,$(QUANT)),allq,q$(QUANT)))
@@ -140,7 +142,7 @@ BATCH_SUITE_concat_tb    := $(BATCH_SUITE_concat_all)     # 2src / 4src
 BATCH_SUITE_cdma_tb      := $(BATCH_SUITE_cdma_memtest_all)  # roundtrip + large
 BATCH_SUITE_conv_pipe_tb := $(BATCH_SUITE_conv_pipe_all)  # 含 tilepass（INT8+INT16）
 
-.PHONY: export compile sim sim-export run fsdb verdi data clean clean-compile help
+.PHONY: export compile sim sim-export run fsdb peak-int8 peak-int8-verilator verdi data clean clean-compile help
 .PHONY: check-export sim-batch _sim_batch_run data-batch _data_batch_run
 .PHONY: sim-unit sim-unit-tb sim-pipeline sim-all sim-results sim-ps sim-watch sim-done
 .PHONY: sim-unit-smoke sim-pipeline-smoke sim-smoke
@@ -151,11 +153,11 @@ BATCH_SUITE_conv_pipe_tb := $(BATCH_SUITE_conv_pipe_all)  # 含 tilepass（INT8+
 # ==============================================================================
 
 # export：仅 export_simulation → sim/lite_bd_export/（与 make export 在 lite_bd/ 等价）
-# BUILD_TAG 可选：指定要 export 哪个 build（同 run.tcl 的 BUILD_TAG）
-#   不指定时 export_sim.tcl 自动选取最新已有 build。
+# Windows 默认 XSim，Linux 默认 VCS；可用 SIMULATOR=xsim|vcs 显式指定。
+# BUILD_TAG 可选：指定要 export 哪个 build（同 run.tcl 的 BUILD_TAG）；不指定时自动取最新。
 export:
-	@echo "[export] Vivado export_simulation（不跑 VCS）$(if $(BUILD_TAG), BUILD_TAG=$(BUILD_TAG))"
-	cd $(REPO_ROOT) && $(if $(BUILD_TAG),BUILD_TAG=$(BUILD_TAG),) vivado -mode batch \
+	@echo "[export] Vivado export_simulation（不运行仿真器）$(if $(BUILD_TAG), BUILD_TAG=$(BUILD_TAG))$(if $(SIMULATOR), SIMULATOR=$(SIMULATOR))"
+	cd $(REPO_ROOT) && $(if $(BUILD_TAG),BUILD_TAG=$(BUILD_TAG),) $(if $(SIMULATOR),SIMULATOR=$(SIMULATOR),) vivado -mode batch \
 		-source $(REPO_ROOT)/scripts/chip-lite/export_sim.tcl
 
 # compile：只编 simv，不跑用例；export 比 simv 新时会自动 clean-compile
@@ -306,6 +308,20 @@ fsdb: check-export
 	ACTION=rebuild-sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(RUN_DIR) \
 	MODULE_CASE=$(MODULE_CASE) MODULE_VARIANT=$(MODULE_VARIANT) \
 	MODULE_VERIFY_WORDS=$(MODULE_VERIFY_WORDS) FAST=0 VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) FSDB=1 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
+
+# peak-int8：8 个 Tile/DCIM 同时计算，生成 FSDB、周期/TOPS 报告和 SVG 波形图。
+# 峰值只使用所有 tile 的 compute_phase_fire 同时为 1 的计算窗口；完整事务延迟另列。
+peak-int8: check-export
+	ACTION=rebuild-sim COMPILE_DIR=$(COMPILE_DIR) RUN_DIR=$(PEAK_RUN_DIR) \
+	MODULE_CASE=dcim_matmul MODULE_VARIANT=peak_int8_all_tiles \
+	MODULE_VERIFY_WORDS=0 MODULE_QUANT=int8 FAST=0 VCS_JOBS=$(VCS_JOBS) SIMV_JOBS=$(SIMV_JOBS) \
+	FSDB=1 PEAK_INT8=1 PRELOAD_MODE=$(PRELOAD_MODE) bash $(RUN_SCRIPT)
+	python3 $(PEAK_REPORT_PY) --run-dir $(PEAK_RUN_DIR)
+
+# Local pure-RTL preflight.  No Vivado/VCS/Xilinx encrypted IP is required.
+# It verifies all 32 output words and emits VCD + the same peak metric report.
+peak-int8-verilator:
+	bash $(REPO_ROOT)/rtl/tb/lite_bd/verilator_peak/run_verilator_peak.sh
 
 verdi:
 	@if [ -f "$(FSDB_FILE)" ]; then verdi -ssf "$(FSDB_FILE)" -nologo & \
@@ -462,6 +478,8 @@ help:
 	@echo "单用例：make sim MODULE_CASE=... MODULE_VARIANT=..."
 	@echo "子集：  make sim-batch MODULE_CASE=qa BATCH_SUITE=qa_all QUANT=all"
 	@echo "调试：make fsdb  make verdi  make sim-watch"
+	@echo "本地预检：make peak-int8-verilator  # VCD + SVG + JSON/Markdown 报告"
+	@echo "峰值复核：make peak-int8            # VCS FSDB + SVG + JSON/Markdown 报告"
 	@echo ""
 	@echo "Vivado 综合实现（仓库根目录）："
 	@echo "  vivado -mode batch -source scripts/chip-lite/run.tcl"

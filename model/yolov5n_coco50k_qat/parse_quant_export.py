@@ -1,7 +1,8 @@
-"""Parse COCO YOLOv5n export_for_host/*.quant.onnx into FPGA parsed format.
+"""Parse the bundled COCO YOLOv5n quantized ONNX into FPGA format.
 
-This parser is intentionally local to the COCO export so the original
-infrared `model/yolov5n/parsed` assets remain untouched.
+The checked-in COCO INT8 network description is used as the structural
+template.  The PT and ONNX inputs are retained under ``int8/`` so this parser
+works after a fresh clone without a separate model download.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from onnx import numpy_helper
 
 
 REPO = Path(__file__).resolve().parents[2]
-IR_PARSED = REPO / "model" / "yolov5n" / "parsed"
+NETWORK_TEMPLATE = REPO / "model" / "yolov5n_coco50k_qat" / "parsed_int8" / "network.json"
 INPUT_ACT_SCALE_INT8 = 1.0 / 127.0
 INPUT_ACT_SCALE_INT16 = 1.0 / 32767.0
 HARD_QUANT_SCALE = 1.0 / 127.0
@@ -117,7 +118,7 @@ def parse_export(quant_onnx: Path, fp_onnx: Path, out_dir: Path, *, mode: str) -
     specs = _tensor_specs(qmodel)
     bn = _bn_params(fpmodel)
 
-    template = json.loads((IR_PARSED / "network.json").read_text())
+    template = json.loads(NETWORK_TEMPLATE.read_text())
     net = json.loads(json.dumps(template))
     widened_int16 = mode == INT16_WIDENED_MODE
     int16_storage = mode in {"int16", INT16_WIDENED_MODE}

@@ -13,8 +13,17 @@ Makefile text eol=lf
 
 *.bit binary
 *.bin binary
+bitstream/*.rpt binary
 *.dcp binary
 *.ltx binary
 *.wdb binary
+*.onnx binary
+*.pt binary
+*.npz binary
+*.npy binary
+*.jpg binary
+*.JPEG binary
+*.docx binary
+*.exe binary
 *.jou text eol=lf
 *.log text eol=lf

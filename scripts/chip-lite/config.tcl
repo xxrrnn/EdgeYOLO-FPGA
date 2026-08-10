@@ -186,7 +186,7 @@ puts "INFO: Vivado parallelism — VIVADO_THREADS=$vivadoThreads  PLACE_THREADS=
 # ==============================================================================
 # 邮件通知配置（126邮箱，留空则不启用）
 # ==============================================================================
-# 填写后自动在 build 完成/失败时发送通知
-set notifyEmail    "xrn2019@126.com"             ;# 接收通知的邮箱（可与发件箱不同）
-set notify126From  "xrn2019@126.com"             ;# 你的126发件邮箱，例如 foo@126.com
-set notify126Auth  "EP35FjvaTixBNgbq"             ;# 126邮箱授权码（网页端「设置-POP3/SMTP」获取）
+# 通过环境变量配置；未设置时不发送，避免把邮箱授权码提交到仓库。
+set notifyEmail    [expr {[info exists ::env(EDGEYOLO_NOTIFY_EMAIL)] ? $::env(EDGEYOLO_NOTIFY_EMAIL) : ""}]
+set notify126From  [expr {[info exists ::env(EDGEYOLO_NOTIFY_FROM)] ? $::env(EDGEYOLO_NOTIFY_FROM) : ""}]
+set notify126Auth  [expr {[info exists ::env(EDGEYOLO_NOTIFY_AUTH)] ? $::env(EDGEYOLO_NOTIFY_AUTH) : ""}]

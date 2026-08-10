@@ -52,7 +52,7 @@ import numpy as np
 # -----------------------------------------------------------------------------
 WEIGHT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    '..', '..', '..', '..', 'model', 'yolov5n', 'parsed', 'weights'
+    '..', '..', '..', '..', 'model', 'yolov5n_coco50k_qat', 'parsed_int8', 'weights'
 )
 
 NUM_TILES = 8                     # DCIM_NUM_TILES (chip_defines.vh)
@@ -138,7 +138,7 @@ MODE_INT8 = 0b110  # signed INT8 activation x INT8 weight (split nibble)
 
 NETWORK_JSON = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    '..', '..', '..', '..', 'model', 'yolov5n', 'parsed', 'network.json'
+    '..', '..', '..', '..', 'model', 'yolov5n_coco50k_qat', 'parsed_int8', 'network.json'
 )
 
 # Connected 3-layer chains from network.json (L1->L2->L3 channel/spatial compatible).
@@ -185,7 +185,7 @@ def load_network_conv_index(path=None):
 
 
 def npz_path_for_layer(name):
-    """model.1.conv -> model/yolov5n/parsed/weights/model_1_conv.npz"""
+    """model.1.conv -> current COCO parsed weights/model_1_conv.npz"""
     fname = name.replace('.', '_') + '.npz'
     return os.path.join(WEIGHT_DIR, fname)
 

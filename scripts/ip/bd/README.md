@@ -1,1 +1,2 @@
-用于在blockdesign中导入相应的ip。write_ip_tcl导出的tcl无法直接使用，在这里给出可以直接使用的tcl。
+这里保存可复现 block design 的 Tcl 源码。当前发布流程只使用 `xdma.tcl` 与 `lite/`；
+生成后的 `.bd`、wrapper、IP、DCP 和仿真导出统一写入 `build/` 或 `sim/`，不纳入版本控制。

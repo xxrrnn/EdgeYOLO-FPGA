@@ -13,7 +13,7 @@ Covered module groups:
   * dqa / qa: VPU post-process units using WB scale/bias data.
   * us / mp / add: VPU feature-map units using FP32 tensors in OBUF.
 
-Case shapes are selected from model/yolov5n/parsed/network.json to include 6x6/3x3/1x1
+Case shapes are selected from the current COCO parsed network to include 6x6/3x3/1x1
 convs, stride-2 and stride-1 layers, 16/32/64/128 channels, SPPF maxpool, FPN/PAN
 upsample, and residual/concat-like add workloads.
 """
@@ -53,10 +53,10 @@ require_consistent()
 # 在两个连续 vpu_exec 之间插入这么多 NOP，避免上一个 unit 的 douta_valid 残留污染下一个 unit
 VPU_BUF_RD_LATENCY = 10
 
-NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'network.json')
-WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'yolov5n', 'parsed', 'weights')
-RESNET18_NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_qdq', 'network.json')
-RESNET18_WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_qdq', 'weights')
+NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'yolov5n_coco50k_qat', 'parsed_int8', 'network.json')
+WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'yolov5n_coco50k_qat', 'parsed_int8', 'weights')
+RESNET18_NETWORK_JSON = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_vai', 'network.json')
+RESNET18_WEIGHT_DIR = os.path.join(REPO_ROOT, 'model', 'resnet18', 'parsed_vai', 'weights')
 
 OBUF_WORD_BYTES = BYTES_PER_WORD
 IBUF_WORD_BYTES = BYTES_PER_WORD
@@ -181,6 +181,10 @@ DCIM_REG_TILE_MASK_HI = 0x244
 
 # Curated dcim_matmul cases (optional in_hw override for fast smoke tests).
 DCIM_MATMUL_CURATED = [
+    # Peak-compute acceptance case: one output pixel, K=512, all 8 tiles active.
+    # INT8 needs two nibble phases per logical MAC.  At 250 MHz this case must
+    # expose 4096 logical MAC/cycle = 2.048 TOPS (counting mul+add as 2 ops).
+    {'name': 'peak_int8_all_tiles',       'layer': 'model.9.cv2.conv',       'in_hw': (1, 1),  'synthetic_out_ch': 128, 'peak_int8': True},
     # INT8 smoke（各 kernel/stride/channel 覆盖）
     {'name': 'dcim_tiny_1x1',       'layer': 'model.2.cv1.conv',      'in_hw': (2, 2)},
     {'name': 'conv6_s2_c3_to16',    'layer': 'model.0.conv',           'in_hw': (12, 12)},
@@ -1773,6 +1777,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
             f'in_hw={h}x{w}({hw_note})'
         ),
         'wpt': DCIM_INT16_OUT_WORDS_PER_TILE if use_int16 else DCIM_INT8_OUT_WORDS_PER_TILE,
+        'peak_int8': bool(spec.get('peak_int8', False)),
     }
 
 
@@ -2820,6 +2825,7 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
         if meta['module'] == 'dcim_matmul':
             for k in ('matmul_m', 'matmul_k', 'matmul_n', 'acc_depth', 'in_hw', 'in_hw_note', 'network_in_hw'):
                 f.write(f'{k}: {meta[k]}\n')
+            f.write(f'peak_int8: {1 if meta.get("peak_int8", False) else 0}\n')
         if meta.get('layer') not in ('cdma_concat', 'cdma_memtest', ''):
             f.write(f'weight_npz_sha256_16: {meta.get("npz_sha256_16", "unknown")}\n')
             f.write('golden_numeric_semantics: network.json + parsed/weights npz; DQA_RELU=max(accum*scale+bias,0); QA=round(x/act_scale) clamp int8\n')

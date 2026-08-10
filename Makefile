@@ -60,9 +60,7 @@ synth:
 	            -nojournal \
 	            -log $(CURDIR)/$(_LOG_PRJ)
 
-# ------------------------------------------------------------------------------
-# synth-to-opt: 只跑到 post_opt.dcp，作为 impl-race 的共享起点
-# ------------------------------------------------------------------------------
+# 只运行到 post_opt.dcp，作为并行 implementation race 的共享起点。
 synth-to-opt:
 	@mkdir -p $(_BUILD_DIR) $(_LOG_DIR)
 	@echo "[Makefile] Project Mode to post_opt | tag=$(TAG) | threads=$(VIVADO_THREADS) jobs=$(SYNTH_JOBS) | log=$(_LOG_PRJ)"
@@ -116,9 +114,8 @@ endif
 	            -nojournal \
 	            -log $(CURDIR)/$(_LOG_RESUME)
 
-# ------------------------------------------------------------------------------
-# impl-race: 从 post_opt.dcp 并行跑多个 place/route 策略，最快拿到 timing-clean bitstream
-# ------------------------------------------------------------------------------
+# 从 post_opt.dcp 并行运行多个 place/route 策略。当前发布 bitstream 使用
+# attempt1_clean_ExtraTimingOpt_AggressiveExplore_AggressiveExplore。
 impl-race:
 	@mkdir -p $(_BUILD_DIR) $(_LOG_DIR)
 	@echo "[Makefile] Impl race | tag=$(TAG) | jobs=$(IMPL_JOBS) | place=$(RACE_PLACE_THREADS) route=$(RACE_ROUTE_THREADS)"
@@ -148,9 +145,7 @@ help:
 	@echo "  make bd    TAG=foo      只跑 BD（1_build + 2_bd，为 nonproj 做准备）"
 	@echo "  make resume TAG=foo FROM=place  从 checkpoint 续跑"
 	@echo "  make impl-race TAG=foo IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16"
-	@echo "      IMPL_JOBS is capped at 8; each worker may use up to 32 Vivado threads"
-	@echo "      Optional stable reference: RACE_INCREMENTAL_DCP=/path/to/stable/post_route.dcp"
-	@echo "      Acceptance defaults: RACE_MIN_WNS_NS=0.05 RACE_MIN_WHS_NS=0.02"
+	@echo "      IMPL_JOBS 最大为 8；可用 RACE_MIN_WNS_NS/RACE_MIN_WHS_NS 设置验收裕量"
 	@echo "    FROM 可选: opt | place | phys_opt"
 	@echo "  make synth VIVADO_THREADS=32 PLACE_THREADS=8 ROUTE_THREADS=32 SYNTH_JOBS=128"
 	@echo "      Vivado 单进程线程上限通常为 32；SYNTH_JOBS 用于 OOC/IP 并行"
@@ -160,6 +155,6 @@ help:
 	@echo "  logs/         Vivado logs and journals"
 	@echo "  SynOutputDir/ synthesis checkpoints/reports"
 	@echo "  ImplOutputDir implementation checkpoints/reports/race attempts"
-	@echo "  bitstreams/   timing-clean bitstreams copied from successful attempts"
+	@echo "  bitstreams/   timing-met bitstreams copied from race attempts"
 	@echo "  summary/      impl-race TSV/Markdown summary"
 	@echo ""

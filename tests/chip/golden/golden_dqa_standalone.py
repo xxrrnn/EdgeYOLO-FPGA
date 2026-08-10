@@ -10,7 +10,7 @@ E2E may use --scale 0.1 in golden_e2e_inst.py for faster integration sim.
 
 Usage:
   python3 tools/golden_dqa_standalone.py
-  python3 tools/golden_dqa_standalone.py --scale 1.0 --out-dir rtl/vpu/tb/standalone/generated
+  python3 tests/chip/golden/golden_dqa_standalone.py --scale 1.0 --out-dir output/dqa_standalone
 """
 from __future__ import annotations
 

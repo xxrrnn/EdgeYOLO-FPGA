@@ -1,0 +1,53 @@
+{
+  "purpose": "Model inputs retained for offline migration; run.py uses the parsed deployment models without downloading files",
+  "files": [
+    {
+      "path": "model/resnet18/resnet18_fp32.onnx",
+      "role": "ResNet18 FP32 reference graph",
+      "bytes": 46733690,
+      "sha256": "2123c7b0849a23a0770edc615bbe450adf629bfd05e0ad573d75604a81c48195"
+    },
+    {
+      "path": "model/resnet18/resnet18_w8a8.onnx",
+      "role": "ResNet18 W8A8 QDQ graph",
+      "bytes": 11834426,
+      "sha256": "7c2c240c3fddd9927fe03c81eb819ccacd6d8f5790c87e6cffbc290627be878a"
+    },
+    {
+      "path": "model/yolov5n_coco50k_qat/int8/best.pt",
+      "role": "YOLOv5n W8A8 QAT checkpoint",
+      "bytes": 23518985,
+      "sha256": "e23f1697b751e6610b9d08e0095c766ebb340adc0e8ca452f02a28ad6d6a89d4"
+    },
+    {
+      "path": "model/yolov5n_coco50k_qat/int8/best.onnx",
+      "role": "YOLOv5n W8A8 fake-quant inference graph",
+      "bytes": 16334522,
+      "sha256": "90fd34cce55475760f4f0b5cc92f0649e6c4c8c11367b4bee100aa8e9459a3ad"
+    },
+    {
+      "path": "model/yolov5n_coco50k_qat/int8/best.quant.onnx",
+      "role": "YOLOv5n W8A8 FPGA export",
+      "bytes": 1972077,
+      "sha256": "56454f32c78ae6f6b2cc90b7f7c85fa366120fdaf15c3d04c57d2c802ee3aad2"
+    },
+    {
+      "path": "model/yolov5n_coco50k_qat/int16/best.pt",
+      "role": "YOLOv5n native W16A16 QAT checkpoint",
+      "bytes": 23518985,
+      "sha256": "295567cfbfafe10651cd3a75d6977813e75d5daa7809c305f4fe673e1cc722f5"
+    },
+    {
+      "path": "model/yolov5n_coco50k_qat/int16/best.onnx",
+      "role": "YOLOv5n native W16A16 fake-quant inference graph",
+      "bytes": 16334522,
+      "sha256": "f9de68e1a1d60e2a356223a1739dd98c5b2a5fa8362423f081fac781e101a079"
+    },
+    {
+      "path": "model/yolov5n_coco50k_qat/int16/best.quant.onnx",
+      "role": "YOLOv5n native W16A16 FPGA export",
+      "bytes": 3834001,
+      "sha256": "ec0a476e7cff4a01e5ecfc24e4cf3c7c26576666f9ad0f99df001323c097c9fb"
+    }
+  ]
+}

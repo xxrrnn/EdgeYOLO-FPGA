@@ -1,0 +1,27 @@
+{
+  "dataset": "ImageNet-1k public sample mirror",
+  "split_note": "One public sample per class; the first 20 class IDs are used for functional acceptance, not for reporting ImageNet accuracy.",
+  "source": "https://github.com/EliSchwartz/imagenet-sample-images",
+  "images": [
+    {"file": "n01440764_tench.JPEG", "class_id": 0, "synset": "n01440764", "label": "tench"},
+    {"file": "n01443537_goldfish.JPEG", "class_id": 1, "synset": "n01443537", "label": "goldfish"},
+    {"file": "n01484850_great_white_shark.JPEG", "class_id": 2, "synset": "n01484850", "label": "great white shark"},
+    {"file": "n01491361_tiger_shark.JPEG", "class_id": 3, "synset": "n01491361", "label": "tiger shark"},
+    {"file": "n01494475_hammerhead.JPEG", "class_id": 4, "synset": "n01494475", "label": "hammerhead"},
+    {"file": "n01496331_electric_ray.JPEG", "class_id": 5, "synset": "n01496331", "label": "electric ray"},
+    {"file": "n01498041_stingray.JPEG", "class_id": 6, "synset": "n01498041", "label": "stingray"},
+    {"file": "n01514668_cock.JPEG", "class_id": 7, "synset": "n01514668", "label": "cock"},
+    {"file": "n01514859_hen.JPEG", "class_id": 8, "synset": "n01514859", "label": "hen"},
+    {"file": "n01518878_ostrich.JPEG", "class_id": 9, "synset": "n01518878", "label": "ostrich"},
+    {"file": "n01530575_brambling.JPEG", "class_id": 10, "synset": "n01530575", "label": "brambling"},
+    {"file": "n01531178_goldfinch.JPEG", "class_id": 11, "synset": "n01531178", "label": "goldfinch"},
+    {"file": "n01532829_house_finch.JPEG", "class_id": 12, "synset": "n01532829", "label": "house finch"},
+    {"file": "n01534433_junco.JPEG", "class_id": 13, "synset": "n01534433", "label": "junco"},
+    {"file": "n01537544_indigo_bunting.JPEG", "class_id": 14, "synset": "n01537544", "label": "indigo bunting"},
+    {"file": "n01558993_robin.JPEG", "class_id": 15, "synset": "n01558993", "label": "robin"},
+    {"file": "n01560419_bulbul.JPEG", "class_id": 16, "synset": "n01560419", "label": "bulbul"},
+    {"file": "n01580077_jay.JPEG", "class_id": 17, "synset": "n01580077", "label": "jay"},
+    {"file": "n01582220_magpie.JPEG", "class_id": 18, "synset": "n01582220", "label": "magpie"},
+    {"file": "n01592084_chickadee.JPEG", "class_id": 19, "synset": "n01592084", "label": "chickadee"}
+  ]
+}

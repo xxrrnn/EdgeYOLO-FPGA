@@ -1,6 +1,6 @@
 """Pack ONNX INT8 weights into DCIM IBUF nibble layout.
 
-Reference: `rtl/vpu/tb/e2e/golden_e2e.py:220-240` and `rtl/vpu/tb/golden_im2col_dcim.py:355-381`.
+Packing contract used by the maintained compiler and lite-BD golden generators.
 
 Per-tile layout (INT8 mode, weight bits = 4, two nibbles per INT8):
   - For each acc_word a in 0..acc_depth-1, for each ch_out_local in 0..15:

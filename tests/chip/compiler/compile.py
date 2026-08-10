@@ -27,6 +27,13 @@ import shutil
 import sys
 from pathlib import Path
 
+import numpy as np
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 REPO = Path(__file__).resolve().parents[3]
 CHIP_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHIP_DIR))
@@ -45,8 +52,8 @@ from compiler.packer.wb_packer import pack_all_layers as pack_wbs
 
 NETWORK_CONFIG = {
     "yolov5n": {
-        "parsed_dir":  "model/yolov5n/parsed",
-        "parsed_dir_int16": "model/yolov5n/parsed_int16_widened",
+        "parsed_dir":  "model/yolov5n_coco50k_qat/parsed_int8",
+        "parsed_dir_int16": "model/yolov5n_coco50k_qat/parsed_int16",
         "weight_key":  "weight_int8",
     },
     "resnet18": {
@@ -339,7 +346,6 @@ def main():
     sample_layer = next(iter(plan["weights_layout"]["layers"]), None)
     if sample_layer is not None:
         safe = sample_layer["name"].replace(".", "_").replace("/", "_")
-        import numpy as np
         z = np.load(weights_dir / f"{safe}.npz")
         if cfg["weight_key"] not in z.files:
             print(f"NOTE: {cfg['weight_key']!r} missing from {safe}.npz "

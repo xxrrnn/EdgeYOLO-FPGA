@@ -1,0 +1,26 @@
+{
+  "release": "80832ec_attempt1",
+  "source_commit": "80832ec49984c559d4f5c1bba8d8da40807369f3",
+  "file": "edgeyolo_80832ec_attempt1_native_w16a16.bit",
+  "original_file": "80832ec_attempt1_clean_ExtraTimingOpt_AggressiveExplore_AggressiveExplore.bit",
+  "bytes": 84989276,
+  "sha256": "17ec07b150d187d777b02f79541adad7407ddbafa38aeddfdd7ff74c084933cf",
+  "device": "xcvu37p-fsvh2892-2L-e",
+  "vivado": "2024.2.2",
+  "generated_at": "2026-07-25 04:50:43 (bitstream header)",
+  "implementation": {
+    "mode": "clean",
+    "place": "ExtraTimingOpt",
+    "phys_opt": "AggressiveExplore",
+    "route": "AggressiveExplore"
+  },
+  "supported_precisions": [
+    "int8",
+    "native_int16_with_int64_accumulators"
+  ],
+  "validation": {
+    "coco_yolov5n_native_w16a16": "57/57 FPGA layers; PAN max_abs 0.00930/0.00712/0.00696; chair/tv detections; atol 0.01",
+    "resnet18_int8_and_widened_int16": "strict one-shot feature gate atol 0.001"
+  },
+  "note": "This is the attempt1 image selected locally as 0725.bit. No numeric routed timing report for this attempt is committed, so this manifest does not reuse c1773f6 timing numbers."
+}

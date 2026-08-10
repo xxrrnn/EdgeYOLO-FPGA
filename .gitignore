@@ -19,10 +19,12 @@
 !*.sh
 !*.tcl
 !*.f
-!*.ipynb
 !*.data
 !*.gtkw
 !requirements*.txt
+
+# Final project documents (render intermediates remain under ignored tmp/).
+!docs/**/*.docx
 
 # Source trees
 !rtl/
@@ -51,10 +53,10 @@
 !tests/
 !tests/**/
 !tests/**/*.py
-!tests/**/*.ipynb
 !tests/**/*.sh
 !tests/**/*.yaml
 !tests/**/*.yml
+!tests/bin/*.exe
 
 !xdc/
 !xdc/**/
@@ -67,15 +69,16 @@
 !model/**/*.json
 !model/**/*.yaml
 !model/**/*.yml
-!model/yolov5n/parsed/weights/*.npz
-!model/yolov5n/parsed_int16_widened/weights/*.npz
+!model/model_inputs_manifest.json
 !model/resnet18/parsed_vai/weights/*.npz
 !model/resnet18/parsed_vai_int16_widened/weights/*.npz
 
-# Keep small top-level sample images if they already exist.
-!test_yolo.jpg
-!test_resnet*.jpg
-!test_resnet*.JPEG
+!examples/
+!examples/**/
+!examples/**/*.md
+!examples/**/*.json
+!examples/**/*.jpg
+!examples/**/*.JPEG
 
 # ==============================================================================
 # Generated Vivado/build artifacts
@@ -103,19 +106,15 @@ logs/**
 *.sim/
 *.srcs/
 *.runs/
-bd/
+/bd/
 rtl/chip/build/
 scripts/chip-lite/tmp/
+sim/lite_bd_export/**
 
 # ==============================================================================
 # Runtime outputs and temporary probes
 # ==============================================================================
 output/**
-!output/
-!output/final_inference/
-!output/final_inference/README.md
-!output/probe/
-!output/probe/README.md
 
 # Downloaded model packages and external algorithm repos
 weihgts/
@@ -132,25 +131,32 @@ model/algorithm/Resnet18-quantization/
 model/algorithm/quantized-yolov5/
 model/algorithm/quantized-yolov5_arcive/
 
-# Self-contained c1773f6 inference milestone. These exceptions intentionally
-# come after the generic bitstream, output, and weights exclusions above.
-!chip.bit
-!artifacts/
-!artifacts/c1773f6/
-!artifacts/c1773f6/**
-# Local copy byproducts are not part of the frozen reference layout.
-artifacts/c1773f6/reference_results/*/one_shot_*/
+# Self-contained 80832ec attempt1 release.  Keep the one deployment image and
+# offline model inputs; compiler/runtime outputs remain ignored under output/.
+!bitstream/
+!bitstream/*.bit
+!bitstream/*.json
+!bitstream/*.md
 !model/yolov5n_coco50k_qat/
 !model/yolov5n_coco50k_qat/**/
 !model/yolov5n_coco50k_qat/README.txt
 !model/yolov5n_coco50k_qat/parse_quant_export.py
+!model/yolov5n_coco50k_qat/int8/
+!model/yolov5n_coco50k_qat/int8/best.pt
+!model/yolov5n_coco50k_qat/int8/best.onnx
+!model/yolov5n_coco50k_qat/int8/best.quant.onnx
+!model/yolov5n_coco50k_qat/int16/
+!model/yolov5n_coco50k_qat/int16/best.pt
+!model/yolov5n_coco50k_qat/int16/best.onnx
+!model/yolov5n_coco50k_qat/int16/best.quant.onnx
 !model/yolov5n_coco50k_qat/parsed_int8/network.json
 !model/yolov5n_coco50k_qat/parsed_int8/activation_scales.json
 !model/yolov5n_coco50k_qat/parsed_int8/weights/*.npz
-!model/yolov5n_coco50k_qat/parsed_int16_widened/network.json
-!model/yolov5n_coco50k_qat/parsed_int16_widened/activation_scales.json
-!model/yolov5n_coco50k_qat/parsed_int16_widened/weights/*.npz
-!model/yolov5n_coco50k_qat/template/*.jpg
+!model/yolov5n_coco50k_qat/parsed_int16/network.json
+!model/yolov5n_coco50k_qat/parsed_int16/activation_scales.json
+!model/yolov5n_coco50k_qat/parsed_int16/weights/*.npz
+!model/resnet18/resnet18_fp32.onnx
+!model/resnet18/resnet18_w8a8.onnx
 
 # ==============================================================================
 # Simulation and tool byproducts
@@ -161,16 +167,19 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 .codex/
+.codex_tmp/
+.pytest_cache/
+/tmp/
 .cursor/
 
 rtl/ref/YOLOv11-RTL/
-rtl/ref/DCIM/pnr/scripts_ref/floorplan/floorplan.tcl
 rtl/**/spyglass/
 rtl/**/.project*
 rtl/**/.design*
 rtl/**/.CurrentSessionRunSummaryFiles
 rtl/**/xsim.dir/
 rtl/**/sim/build_*/
+rtl/tb/lite_bd/module_tb/sim/compile/
 rtl/**/simv*
 rtl/**/simv*.daidir/
 rtl/**/csrc/
@@ -185,12 +194,6 @@ rtl/**/xvlog.*
 rtl/**/xsim*.jou
 rtl/**/xsim*.log
 rtl/**/xsim*.pb
-
-rtl/vpu/tb/golden_*.hex
-rtl/vpu/tb/tb_im2col_*.hex
-rtl/vpu/tb/regression_l1/golden_*.hex
-rtl/vpu/tb/regression_l1/params.json
-rtl/vpu/tb/standalone/generated/
 
 .cxl.vcs*.version
 synopsys_sim.setup

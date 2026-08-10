@@ -19,7 +19,7 @@ shortcut adds inside C3 blocks.  Keep this schedule aligned with that oracle;
 otherwise full-network detections drift even when the one-shot feature compare
 is internally self-consistent.
 
-Layer indices match model/yolov5n/parsed/network.json.
+Layer indices match model/yolov5n_coco50k_qat/parsed_int8/network.json.
 """
 
 # fmt: off

@@ -1,7 +1,7 @@
 {
   "model_info": {
     "name": "resnet18-vai",
-    "source": "Vitis AI pytorch_nndct PTQ INT8, ResNet_int.onnx",
+    "source": "Bundled Vitis AI pytorch_nndct PTQ INT8 parsed weights",
     "input_shape": [
       1,
       3,

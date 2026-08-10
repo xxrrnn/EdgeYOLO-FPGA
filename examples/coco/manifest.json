@@ -1,0 +1,27 @@
+{
+  "dataset": "COCO 2017 validation",
+  "source": "https://cocodataset.org/#download",
+  "image_url_template": "http://images.cocodataset.org/val2017/{file}",
+  "images": [
+    {"file": "000000000139.jpg", "image_id": 139},
+    {"file": "000000000285.jpg", "image_id": 285},
+    {"file": "000000000632.jpg", "image_id": 632},
+    {"file": "000000000724.jpg", "image_id": 724},
+    {"file": "000000000776.jpg", "image_id": 776},
+    {"file": "000000000785.jpg", "image_id": 785},
+    {"file": "000000000802.jpg", "image_id": 802},
+    {"file": "000000000872.jpg", "image_id": 872},
+    {"file": "000000000885.jpg", "image_id": 885},
+    {"file": "000000001000.jpg", "image_id": 1000},
+    {"file": "000000001268.jpg", "image_id": 1268},
+    {"file": "000000001296.jpg", "image_id": 1296},
+    {"file": "000000001353.jpg", "image_id": 1353},
+    {"file": "000000001425.jpg", "image_id": 1425},
+    {"file": "000000001490.jpg", "image_id": 1490},
+    {"file": "000000001503.jpg", "image_id": 1503},
+    {"file": "000000001532.jpg", "image_id": 1532},
+    {"file": "000000001584.jpg", "image_id": 1584},
+    {"file": "000000001675.jpg", "image_id": 1675},
+    {"file": "000000001761.jpg", "image_id": 1761}
+  ]
+}

@@ -5,8 +5,8 @@ set -euo pipefail
 BD_SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LITE_BD_DIR="$(cd "$BD_SIM_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$LITE_BD_DIR/../../.." && pwd)"
-# shellcheck source=../../../vpu/tb/sim/vcs_common.sh
-source "$REPO_ROOT/rtl/vpu/tb/sim/vcs_common.sh"
+# shellcheck source=vcs_common.sh
+source "$BD_SIM_DIR/vcs_common.sh"
 
 vcs_setup
 

@@ -26,6 +26,8 @@ if [[ -z "${LITE_GEN:-}" ]]; then
   fi
 fi
 
+LITE_BUILD_DIR="${LITE_BUILD_DIR:-$(cd "$LITE_GEN/../../.." && pwd)}"
+
 emit() { if [[ -n "$OUT" ]]; then cat >"$OUT"; else cat; fi; }
 
 emit <<EOF
@@ -33,7 +35,6 @@ $REPO_ROOT/rtl/ref/DCIM/src/inc/para.v
 $REPO_ROOT/rtl/ref/DCIM/src/inc/counter.v
 $REPO_ROOT/rtl/ref/DCIM/src/inc/dff.v
 $REPO_ROOT/rtl/ref/DCIM/src/inc/pipe_stage.v
-$REPO_ROOT/rtl/ref/DCIM/src/macro/rf_sp_hde128x128.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/multiplier.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/multiplier_dsp.v
 $REPO_ROOT/rtl/ref/DCIM/src/dcim/adderTree.v
@@ -81,7 +82,7 @@ $REPO_ROOT/rtl/vpu/INST_BRAM.v
 $REPO_ROOT/rtl/vpu/VPU_AXI_Regs.v
 $REPO_ROOT/rtl/vpu/CDMA_Controller.sv
 $REPO_ROOT/rtl/vpu/CDMA_Controller_wrapper.v
-$REPO_ROOT/bd/lite/hdl/lite_wrapper.v
+$LITE_BUILD_DIR/bd/lite/hdl/lite_wrapper.v
 $LITE_GEN/fp32_mac/sim/fp32_mac.v
 $LITE_GEN/fp32_add/sim/fp32_add.v
 $LITE_GEN/fp32_compare_leq/sim/fp32_compare_leq.v

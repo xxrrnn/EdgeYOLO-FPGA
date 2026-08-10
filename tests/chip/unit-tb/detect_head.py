@@ -10,7 +10,7 @@ YOLOv5n 检测头 (model.24) — Host 端实现
 
 用法：
     from detect_head import DetectHead
-    head = DetectHead('model/yolov5n/parsed/weights')
+    head = DetectHead('model/yolov5n_coco50k_qat/parsed_int8/weights')
     raw_preds = head.forward(feat_p3, feat_p4, feat_p5)
     boxes = head.postprocess(raw_preds, conf_thres=0.25, iou_thres=0.45)
 """

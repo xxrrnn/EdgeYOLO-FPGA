@@ -28,7 +28,7 @@
 ## 仿真依赖与编译方式
 
 - **工具**：Synopsys VCS（示例命令行含 `-full64`、`-kdb`、`-lca`）；波形使用 Verdi FSDB（测试台内调用 `$fsdbDumpvars`）。
-- **RTL 依赖**：`rtl/ref/DCIM`（`dcim.v`、`para.v` 等）、`rtl/DCIM_Macro/ibuf.v`、`obuf.v`。
+- **RTL 依赖**：`rtl/ref/DCIM/src`（`dcim.v`、`para.v` 等）以及 `rtl/chip` 内的 tile buffer。
 
 **务必通过 `tb/Makefile`（或 `rtl/chip` 根目录转发 Makefile）编译**：`make compile` 会先 `cd ../build`（即 `rtl/chip/build`）再调用 VCS，`filelist.f` 内路径（如 `../../ref/...`、`../DCIM_Tile.sv`）是**相对于 `rtl/chip/build/` 当前工作目录**解析的。若在其它目录手动执行 VCS，相对路径会错位。
 
@@ -82,7 +82,7 @@ Tile/阵列通过 `` `include "../../ref/DCIM/src/inc/para.v" `` 使用 `MODE_IN
 
 ---
 
-## 目标网络：EdgeYOLO (`model/best.quant.onnx`)
+## 目标网络：EdgeYOLO（当前 COCO YOLOv5n 解析参数见 `model/yolov5n_coco50k_qat/`）
 
 - 输入：`1×3×320×320`（INT8 量化）
 - 输出：3 scale 检测头（40×40, 20×20, 10×10），每 scale 输出 `3×8` = 24 通道

@@ -42,6 +42,17 @@ module tb_lite_bd_module;
         .user_lnk_up_0       (user_lnk_up)
     );
 
+    // Peak INT8 acceptance probes. These are testbench-only hierarchical
+    // taps; no synthesizable RTL is modified by the peak-compute test.
+    wire [`DCIM_NUM_TILES-1:0] peak_int8_compute_fire;
+    genvar peak_tile_i;
+    generate
+        for (peak_tile_i = 0; peak_tile_i < `DCIM_NUM_TILES; peak_tile_i = peak_tile_i + 1) begin : gen_peak_int8_probe
+            assign peak_int8_compute_fire[peak_tile_i] =
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[peak_tile_i].u_tile.compute_phase_fire;
+        end
+    endgenerate
+
     reg tb_aclk;
     bit sim_axi_ready;
     string run_dir;
@@ -178,6 +189,59 @@ module tb_lite_bd_module;
     reg [127:0] expected [0:GOLDEN_DEPTH-1];
     string preload_mode;
 
+    bit peak_int8_enabled;
+    bit peak_int8_transaction_active;
+    longint unsigned peak_int8_clock_cycles;
+    longint unsigned peak_int8_start_cycle;
+    longint unsigned peak_int8_transaction_cycles;
+    longint unsigned peak_int8_any_cycles;
+    longint unsigned peak_int8_all_cycles;
+    longint unsigned peak_int8_skew_cycles;
+    time peak_int8_first_time;
+    time peak_int8_last_time;
+
+    initial begin : peak_int8_init
+        peak_int8_enabled = $test$plusargs("PEAK_INT8");
+        peak_int8_transaction_active = 1'b0;
+        peak_int8_clock_cycles = 0;
+        peak_int8_start_cycle = 0;
+        peak_int8_transaction_cycles = 0;
+        peak_int8_any_cycles = 0;
+        peak_int8_all_cycles = 0;
+        peak_int8_skew_cycles = 0;
+        peak_int8_first_time = 0;
+        peak_int8_last_time = 0;
+    end
+
+    always @(posedge dut.lite_i.dcim_array_0.inst.clk) begin : peak_int8_monitor
+        if (peak_int8_enabled) begin
+            peak_int8_clock_cycles = peak_int8_clock_cycles + 1;
+            if (dut.lite_i.dcim_array_0.inst.u_dcim_array.start &&
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.tile_mask == {`DCIM_NUM_TILES{1'b1}}) begin
+                peak_int8_transaction_active = 1'b1;
+                peak_int8_start_cycle = peak_int8_clock_cycles;
+            end
+            if (|peak_int8_compute_fire) begin
+                if (peak_int8_any_cycles == 0)
+                    peak_int8_first_time = $time;
+                peak_int8_last_time = $time;
+                peak_int8_any_cycles = peak_int8_any_cycles + 1;
+                if (&peak_int8_compute_fire)
+                    peak_int8_all_cycles = peak_int8_all_cycles + 1;
+                else
+                    peak_int8_skew_cycles = peak_int8_skew_cycles + 1;
+                $display("PEAK_INT8_EVENT cycle=%0d time_ns=%0t mask=0x%0h",
+                         peak_int8_clock_cycles - peak_int8_start_cycle,
+                         $time, peak_int8_compute_fire);
+            end
+            if (peak_int8_transaction_active &&
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.done) begin
+                peak_int8_transaction_cycles = peak_int8_clock_cycles - peak_int8_start_cycle;
+                peak_int8_transaction_active = 1'b0;
+            end
+        end
+    end
+
     function automatic bit addr_in_range(input [63:0] addr, input [63:0] base, input [63:0] size);
         begin
             addr_in_range = (addr >= base) && (addr < (base + size));
@@ -206,12 +270,12 @@ module tb_lite_bd_module;
     endtask
 
     // chip-v3: checks.txt dst bit23 set → 读 tile_obuf
-    // expected.hex 格式: for px, for tile(0..3), for word[0..WPT-1]
+    // expected.hex 格式: for px, for tile(0..DCIM_NUM_TILES-1), for word[0..WPT-1]
     // DCIM硬件: 每个 tile 地址空间独立，px N 的数据写在 addr = px*WPT + intra_w
     //   WPT = DCIM_CH_OUT/8 = 8
     localparam int DCIM_WORDS_PER_TILE_PX = (`DCIM_CH_OUT / 8);  // INT8: 64ch/tile ÷ 4ch/word = 8 (32-bit acc)
-    localparam int DCIM_NUM_TILES_LC      = `DCIM_NUM_TILES;      // 4
-    localparam int DCIM_OUT_STRIDE        = DCIM_NUM_TILES_LC * DCIM_WORDS_PER_TILE_PX; // 32
+    localparam int DCIM_NUM_TILES_LC      = `DCIM_NUM_TILES;
+    localparam int DCIM_OUT_STRIDE        = DCIM_NUM_TILES_LC * DCIM_WORDS_PER_TILE_PX;
     localparam logic [23:0] TILE_OBUF_CHK_SENTINEL = 24'h80_0000; // bit23 = sentinel flag
 
     // 当前 check 使用的 wpt（words per tile per px），由 run_checks 写入，obuf_read_word128 读取
@@ -784,6 +848,19 @@ module tb_lite_bd_module;
             run_suite(suite_file);
         end else begin
             run_one_case(run_dir, 0);
+        end
+
+        if (peak_int8_enabled) begin
+            $display("PEAK_INT8_METRIC tiles=%0d any_cycles=%0d all_cycles=%0d skew_cycles=%0d transaction_cycles=%0d first_time_ns=%0t last_time_ns=%0t",
+                     `DCIM_NUM_TILES, peak_int8_any_cycles, peak_int8_all_cycles,
+                     peak_int8_skew_cycles, peak_int8_transaction_cycles,
+                     peak_int8_first_time, peak_int8_last_time);
+            if (peak_int8_any_cycles == 0 ||
+                peak_int8_all_cycles != peak_int8_any_cycles ||
+                peak_int8_skew_cycles != 0) begin
+                $display("FATAL: peak INT8 case did not keep every tile active on every compute phase");
+                total_fail = total_fail + 1;
+            end
         end
 
         $display("============================================================");

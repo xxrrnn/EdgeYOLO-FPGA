@@ -33,7 +33,8 @@ IMG_SIZE_YOLO = 320
 IMG_SIZE_RESNET = 224
 
 # 重新 QAT 后 act_scale 会变化，从 parsed/network.json 读取第一层 act_scale
-_YOLO_PARSED = _THIS.parents[3] / "model" / "yolov5n" / "parsed" / "network.json"
+_YOLO_PARSED = (_THIS.parents[3] / "model" / "yolov5n_coco50k_qat"
+                / "parsed_int8" / "network.json")
 def _load_act_scale() -> float:
     """从 parsed network.json 读取 input_act_scale (用于量化输入图像)"""
     import json

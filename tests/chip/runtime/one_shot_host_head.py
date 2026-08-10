@@ -229,7 +229,7 @@ def main() -> None:
                     help="optional class id gate for ResNet Top-1")
     ap.add_argument("--parsed-dir", default=None, help="optional ResNet parsed dir")
     ap.add_argument("--yolo-parsed-dir", default=None,
-                    help="optional YOLO parsed dir; default is model/yolov5n/parsed")
+                    help="optional YOLO parsed dir; run.py supplies the current COCO parsed directory")
     args = ap.parse_args()
 
     build_dir = Path(args.build_dir)

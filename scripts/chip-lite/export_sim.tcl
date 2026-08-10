@@ -1,5 +1,5 @@
 # ==============================================================================
-# export_sim.tcl — 打开已有 Vivado 项目，生成仿真目标，export_simulation → VCS
+# export_sim.tcl — 打开已有 Vivado 项目并导出仿真脚本
 #
 # 用法：
 #   cd <repo_root>
@@ -10,6 +10,9 @@
 #   BUILD_TAG=20260606_143000 vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 #   BUILD_TAG=aggressive      vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 #   不指定 BUILD_TAG 时：自动选取 build/lite/ 下最新的子目录
+#
+# SIMULATOR 可显式指定 xsim/vcs。默认值按宿主系统选择：Windows=xsim，
+# Linux=vcs。Vivado Windows 版不支持导出 VCS 脚本，不能把其错误信息当成成功。
 #
 # 前提：
 #   build/lite/<tag>/lite.xpr 已存在（先跑 1_build.tcl + 2_bd.tcl）
@@ -42,9 +45,22 @@ if {![info exists ::env(BUILD_TAG)] || [string trim $::env(BUILD_TAG)] eq ""} {
 
 source [file normalize "$thisScriptDir/config.tcl"]
 
-# --- 导出路径 ---
+# --- 仿真器与导出路径 ---
+if {[info exists ::env(SIMULATOR)] && [string trim $::env(SIMULATOR)] ne ""} {
+    set simulator [string tolower [string trim $::env(SIMULATOR)]]
+} elseif {$::tcl_platform(platform) eq "windows"} {
+    set simulator "xsim"
+} else {
+    set simulator "vcs"
+}
+if {$simulator ni {xsim vcs}} {
+    error "Unsupported SIMULATOR='$simulator'; expected xsim or vcs."
+}
+if {$::tcl_platform(platform) eq "windows" && $simulator eq "vcs"} {
+    error "Vivado on Windows cannot export VCS scripts; use SIMULATOR=xsim locally or export VCS on the Linux server."
+}
 set exportRoot [file normalize "$localDir/sim/lite_bd_export"]
-set exportDir  [file normalize "$exportRoot/vcs"]
+set exportDir  [file normalize "$exportRoot/$simulator"]
 file mkdir $exportRoot
 
 # --- 打开已有项目 ---
@@ -78,24 +94,39 @@ puts "INFO: generate_target simulation for $bdName"
 generate_target {simulation} [get_files $bdFile]
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
-# --- 导出 VCS 仿真脚本 ---
+# --- 导出仿真脚本；catch 是必要的，部分 Vivado 版本会打印 ERROR 却返回批处理成功 ---
 puts "INFO: export_simulation → $exportDir"
-export_simulation \
+set exportArgs [list \
     -of_objects [get_files $bdFile] \
-    -simulator vcs \
+    -simulator $simulator \
     -ip_user_files_dir [file normalize "$projPath/${projName}.ip_user_files"] \
     -ipstatic_source_dir [file normalize "$projPath/${projName}.ip_user_files/ipstatic"] \
-    -lib_map_path [file normalize "$projPath/${projName}.ip_user_files/sim_scripts/vcs"] \
-    -use_ip_compiled_libs \
     -force \
-    -directory $exportDir
+    -directory $exportDir]
+if {$simulator eq "vcs"} {
+    lappend exportArgs \
+        -lib_map_path [file normalize "$projPath/${projName}.ip_user_files/sim_scripts/vcs"] \
+        -use_ip_compiled_libs
+}
+if {[catch {export_simulation {*}$exportArgs} exportError exportOptions]} {
+    close_project
+    return -options $exportOptions $exportError
+}
+set exportedScript [file normalize "$exportDir/$bdName/$simulator/$bdName.sh"]
+if {![file exists $exportedScript]} {
+    close_project
+    error "export_simulation did not create the expected script: $exportedScript"
+}
 
 # --- 更新 export stamp ---
-set stampFile [file normalize "$exportRoot/.export_stamp"]
+set stampFile [file normalize "$exportRoot/.export_stamp_$simulator"]
 set fh [open $stampFile w]
 puts $fh [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
 close $fh
 puts "INFO: export stamp written: $stampFile"
+if {$simulator eq "vcs"} {
+    file copy -force $stampFile [file normalize "$exportRoot/.export_stamp"]
+}
 
 # --- 拷贝 BD sim wrapper 到导出根目录（module_tb run_script 依赖）---
 set bdSimV [file normalize "$bdDir/$bdName/sim/$bdName.v"]
@@ -107,6 +138,9 @@ if {[file exists $bdSimV]} {
 
 puts "INFO: BD export simulation complete."
 puts "INFO:   export dir : $exportDir"
-puts "INFO: Set XILINX_VCS_LIB before VCS (see scripts/sim/compile_xilinx_vcs_lib.tcl)"
+puts "INFO:   simulator  : $simulator"
+if {$simulator eq "vcs"} {
+    puts "INFO: Set XILINX_VCS_LIB before VCS (see scripts/sim/compile_xilinx_vcs_lib.tcl)"
+}
 
 close_project

@@ -70,8 +70,8 @@ def prepare_vai_int16() -> Path:
     """
     if not _weights_ready(PARSED_VAI):
         raise FileNotFoundError(
-            "ResNet VAI parsed weights are missing. Run:\n"
-            "  python tests/chip/compiler/frontend/parse_resnet18_vai.py"
+            "Bundled ResNet VAI parsed weights are missing; restore "
+            "model/resnet18/parsed_vai from the release checkout."
         )
 
     PARSED_VAI_INT16.mkdir(parents=True, exist_ok=True)
@@ -108,8 +108,8 @@ def configure_resnet_precision(precision: str) -> Path:
         parsed = PARSED_VAI
         if not _weights_ready(parsed):
             raise FileNotFoundError(
-                "ResNet VAI parsed weights not found. Run:\n"
-                "  python tests/chip/compiler/frontend/parse_resnet18_vai.py"
+                "Bundled ResNet VAI parsed weights are missing; restore "
+                "model/resnet18/parsed_vai from the release checkout."
             )
     elif precision == "int16":
         parsed = prepare_vai_int16()

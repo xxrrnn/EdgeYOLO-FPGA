@@ -102,7 +102,9 @@ def _conv_dqa_fp32(feat: np.ndarray, meta, npz, mode: str, *, relu: bool = True)
 def run_yolo_compiler_golden(image_path: Path, mode: str, max_layers: int | None,
                              parsed_override: str | None = None) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     unit_run = _load_unit_tb_run()
-    parsed_dir = Path(parsed_override) if parsed_override else REPO / "model" / "yolov5n" / ("parsed_int16_widened" if mode == "int16" else "parsed")
+    parsed_dir = Path(parsed_override) if parsed_override else (
+        REPO / "model" / "yolov5n_coco50k_qat" / ("parsed_int16" if mode == "int16" else "parsed_int8")
+    )
     network_json = parsed_dir / "network.json"
     parsed = json.loads(network_json.read_text())
     qa_reciprocal_multiply = (

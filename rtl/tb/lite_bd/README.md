@@ -2,7 +2,7 @@
 
 在 Vivado 导出的 `lite` Block Design 上，用 VCS 仿真 **真实 HBM + axi_cdma + SmartConnect**，主机通过 **force `xdma_0/M_AXI`** 预加载数据并启动 `INST_Decoder`，跑 3 层 conv 指令链并与 golden 比对。
 
-VPU 单元/联合仿真见 [`rtl/vpu/tb/README.md`](../../vpu/tb/README.md)。
+当前维护的 VPU/BD 联合仿真入口位于本目录及 `module_tb/`。
 
 ---
 
@@ -112,7 +112,7 @@ export XILINX_VCS_LIB=/data/home/rn_xu29/Tools/vcs_lib   # 按本机路径修改
 ### 3. 导出 BD 仿真文件（推荐）
 
 ```bash
-vivado -mode batch -source scripts/chip-lite/4_export_sim.tcl
+vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 ```
 
 输出：`sim/lite_bd_export/vcs/lite/vcs/lite.sh` 与 `synopsys_sim.setup`。
@@ -182,7 +182,7 @@ vcs -ID
 python3 -c "import numpy; print('numpy OK')"
 ```
 
-**说明**：生成 golden 需要 `numpy`；权重从 `model/yolov5n/parsed/weights/*.npz` 读取。
+**说明**：生成 golden 需要 `numpy`；权重从当前 COCO `parsed_int8/weights/*.npz` 读取。
 
 **期望**：打印 `numpy OK`。
 
@@ -249,7 +249,7 @@ ls "$VIVADO_HOME/data/ip/xilinx/floating_point_v7_1/hdl"
 
 ```bash
 cd "$REPO"
-vivado -mode batch -source scripts/chip-lite/4_export_sim.tcl
+vivado -mode batch -source scripts/chip-lite/export_sim.tcl
 ```
 
 **说明**：从 `build/lite/lite.xpr` 导出 VCS 用的 `lite.sh`、filelist、IP 编译脚本。BD 或 IP 有改动后需 **重新执行**。耗时约 **数分钟**。
@@ -518,7 +518,7 @@ ln -sf ../data/*.hex .
   1-1  compile_xilinx_vcs_lib.tcl
   1-2  export XILINX_VCS_LIB
   1-3  export VIVADO_HOME
-  1-4  4_export_sim.tcl
+  1-4  export_sim.tcl
 
 [每次仿真]
   3-1  export 环境变量
@@ -550,7 +550,7 @@ bash rtl/tb/lite_bd/sim/run_bd_sim.sh
 | `BD_VERIFY_WORDS` | `0` | 每层 checkpoint 比对 128-bit 字数；`0`=全 tensor |
 | `BD_MODE` | `fast` | `fast`=层级B，Host 直写 OBUF/IBUF，跳过 HBM 预加载；`hbm`=HBM-first，最接近硬件 |
 | `SKIP_LITE_COMPILE` | `0` | `1` 时复用已有 export 编译结果，跳过 `lite.sh -step compile` |
-| `RUN_EXPORT` | `0` | `1` 时先跑 `4_export_sim.tcl` |
+| `RUN_EXPORT` | `0` | `1` 时先跑 `export_sim.tcl` |
 | `XILINX_VCS_LIB` | （必填） | `compile_xilinx_vcs_lib.tcl` 输出目录 |
 | `VIVADO_HOME` | Vivado 2024.2 | FP IP sim wrapper 路径 |
 | `LITE_GEN` | `build/lite/lite.gen/sources_1/ip` | 浮点 IP sim 模型 |
@@ -641,7 +641,7 @@ python3 rtl/tb/lite_bd/data/golden_conv_inst.py --case list
 | `downsample` | `model.2.cv3` → `model.3` → `model.4.cv1` |
 | `c3_deep` | `model.3` → `model.4.cv3` → `model.4.cv2` |
 
-每层从 `model/yolov5n/parsed/weights/<layer>.npz` 读取：
+每层从 `model/yolov5n_coco50k_qat/parsed_int8/weights/<layer>.npz` 读取：
 
 - `weight_int8`：INT8 权重  
 - `dqa_scale` / `dqa_bias`：每 OC 的 FP32 BN 参数  
@@ -738,7 +738,7 @@ L2/L3 的输入 feature 已在链上前一层 QA 输出写入 OBUF，不再从 H
 
 | 现象 | 处理 |
 |------|------|
-| 缺少 `lite.sh` | 运行 `4_export_sim.tcl` |
+| 缺少 `lite.sh` | 运行 `export_sim.tcl` |
 | `hbm` / `axi_cdma` 未解析 | 检查 `XILINX_VCS_LIB` 是否含对应库 |
 | `Global_VPU_top` 未定义 | 确认 `gen_bd_rtl_extra.sh` 已执行且无 vlogan 错误 |
 | `axi_aresetn` 一直为 0 | TB 会 wait/force；检查 `timescale 1ps` 与 clock 周期 |
@@ -752,6 +752,6 @@ L2/L3 的输入 feature 已在链上前一层 QA 输出写入 OBUF，不再从 H
 
 | 脚本 | 作用 |
 |------|------|
-| `scripts/chip-lite/4_export_sim.tcl` | `export_simulation` → `sim/lite_bd_export/` |
+| `scripts/chip-lite/export_sim.tcl` | `export_simulation` → `sim/lite_bd_export/` |
 | `scripts/sim/compile_xilinx_vcs_lib.tcl` | 预编译 Xilinx IP 到 VCS |
 | `scripts/ip/bd/lite/address.tcl` | BD 地址分配源 |
