@@ -5,7 +5,7 @@
 
 常用命令::
 
-    python run.py                 # YOLO INT8/native W16A16 + ResNet INT8/widened INT16
+    python run.py                 # YOLO INT8/native W16A16 + ResNet INT8
     python run.py --self-check    # 无需 FPGA，校验所有随附文件及 SHA256
     python run.py --network yolo --yolo-precision int8
     python run.py --acceptance --vcs skip
@@ -55,12 +55,14 @@ MODEL_INPUTS_MANIFEST = REPO_ROOT / "model" / "model_inputs_manifest.json"
 
 ONE_SHOT_DEFAULT_BUILDS = {
     ("resnet", "vai"): COMPILED_DIR / "resnet18_int8",
-    ("resnet", "int16"): COMPILED_DIR / "resnet18_int16_widened",
+    ("resnet", "int16"): COMPILED_DIR / "resnet18_int16_native",
+    ("resnet", "int16_widened"): COMPILED_DIR / "resnet18_int16_widened",
 }
 
 ONE_SHOT_COMPILE_PARSED = {
     ("resnet", "vai"): REPO_ROOT / "model" / "resnet18" / "parsed_vai",
-    ("resnet", "int16"): REPO_ROOT / "model" / "resnet18" / "parsed_vai_int16_widened",
+    ("resnet", "int16"): REPO_ROOT / "model" / "resnet18" / "parsed_int16",
+    ("resnet", "int16_widened"): REPO_ROOT / "model" / "resnet18" / "parsed_vai_int16_widened",
 }
 
 YOLO_ONE_SHOT_PROFILES = {
@@ -157,10 +159,18 @@ def _one_shot_tag(network: str, precision: str) -> str:
     return "int8" if network == "resnet" and precision == "vai" else precision
 
 
+def _hardware_mode(network: str, precision: str) -> str:
+    if network == "resnet" and precision == "vai":
+        return "int8"
+    if precision in {"int16", "int16_widened"}:
+        return "int16"
+    return precision
+
+
 def _compile_one_shot_artifact(network: str, precision: str, build_dir: Path,
                                parsed_override: Path | None = None) -> None:
     compile_network = "yolov5n" if network == "yolo" else "resnet18"
-    mode = _one_shot_tag(network, precision)
+    mode = _hardware_mode(network, precision)
     cmd = [
         sys.executable, "tests/chip/compiler/compile.py",
         "--network", compile_network,
@@ -171,6 +181,8 @@ def _compile_one_shot_artifact(network: str, precision: str, build_dir: Path,
     parsed = parsed_override or ONE_SHOT_COMPILE_PARSED.get((network, precision))
     if parsed is not None:
         cmd.extend(["--parsed", str(parsed)])
+    if precision == "int16_widened":
+        cmd.append("--allow-widened-int16")
     _run_checked(cmd)
 
 
@@ -190,6 +202,7 @@ def run_one_shot_fpga(
     soft_reset: bool,
     recompile: bool,
     yolo_parsed_dir: Path | None = None,
+    resnet_parsed_dir: Path | None = None,
     yolo_expect_detections: int | None = 1,
     resnet_expect_top1: int | None = 1,
     result_group: str | None = None,
@@ -211,7 +224,8 @@ def run_one_shot_fpga(
     if recompile or not (build_dir / "plan.json").exists():
         reason = "requested" if recompile else f"missing {build_dir / 'plan.json'}"
         print(f"  [compile] {reason}, compiling {label} full one-shot", flush=True)
-        _compile_one_shot_artifact(network, precision, build_dir, yolo_parsed_dir if network == "yolo" else None)
+        parsed_dir = yolo_parsed_dir if network == "yolo" else resnet_parsed_dir
+        _compile_one_shot_artifact(network, precision, build_dir, parsed_dir)
 
     stem = img_path.stem
     file_prefix = f"{stem}_{net_dir}_{tag}_fpga_oneshot"
@@ -238,6 +252,8 @@ def run_one_shot_fpga(
         run_cmd.extend(["--output-dir", str(feat_dir)])
     if network == "yolo" and yolo_parsed_dir is not None:
         run_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
+    if network == "resnet" and resnet_parsed_dir is not None:
+        run_cmd.extend(["--resnet-parsed-dir", str(resnet_parsed_dir)])
     if quiet_xdma:
         run_cmd.append("--quiet-xdma")
     if soft_reset:
@@ -255,6 +271,8 @@ def run_one_shot_fpga(
         compare_cmd.extend(["--output-dir", str(feat_dir)])
     if network == "yolo" and yolo_parsed_dir is not None:
         compare_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
+    if network == "resnet" and resnet_parsed_dir is not None:
+        compare_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
     _run_checked(compare_cmd)
 
     head_cmd = [
@@ -277,6 +295,8 @@ def run_one_shot_fpga(
     else:
         if resnet_expect_top1 is not None:
             head_cmd.extend(["--expect-top1", str(resnet_expect_top1)])
+        if resnet_parsed_dir is not None:
+            head_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
     _run_checked(head_cmd)
 
     result = json.loads(head_json.read_text())
@@ -506,7 +526,21 @@ def run_verilator_peak(*, mode: str) -> dict:
 
 def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                          yolo_precisions: list[str], resnet_precisions: list[str]) -> int:
-    """Run COCO native INT8/W16A16 and ResNet INT8/widened-INT16 acceptance."""
+    """Run selected native INT8/W16A16 network acceptance workloads."""
+    if "resnet" in networks and "int16" in resnet_precisions:
+        native_parsed = (
+            Path(args.one_shot_resnet_parsed_dir)
+            if args.one_shot_resnet_parsed_dir
+            else ONE_SHOT_COMPILE_PARSED[("resnet", "int16")]
+        )
+        if not (native_parsed / "network.json").is_file():
+            print(
+                "  [ERROR] native ResNet W16A16 parsed model not found: "
+                f"{native_parsed}. Parse a signed symmetric INT16 QDQ ONNX with "
+                "tests/chip/compiler/frontend/parse_resnet18_qdq.py --mode int16, "
+                "or pass --one-shot-resnet-parsed-dir."
+            )
+            return 1
     limit = int(args.acceptance_examples)
     out_root = Path(args.out_dir) if args.out_dir else OUT_DIR
     report_dir = out_root / "acceptance"
@@ -574,6 +608,11 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                     "expected_label": item.get("label"),
                 }
                 try:
+                    parsed_override = (
+                        Path(args.one_shot_resnet_parsed_dir)
+                        if args.one_shot_resnet_parsed_dir and precision == "int16"
+                        else ONE_SHOT_COMPILE_PARSED[("resnet", precision)]
+                    )
                     run_one_shot_fpga(
                         "resnet", precision, image, out_root,
                         build_dir=ONE_SHOT_DEFAULT_BUILDS[("resnet", precision)],
@@ -585,6 +624,7 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                         quiet_xdma=not args.verbose_xdma,
                         soft_reset=not args.one_shot_no_soft_reset,
                         recompile=False,
+                        resnet_parsed_dir=parsed_override,
                         resnet_expect_top1=None,
                         result_group="acceptance/resnet",
                     )
@@ -622,7 +662,8 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
             "yolo_int8": "native W8A8",
             "yolo_int16": "native W16A16 with signed INT64 accumulators",
             "resnet_int8": "Vitis-AI W8A8",
-            "resnet_int16": "INT8 quantized values widened onto the INT16/INT64 datapath",
+            "resnet_int16": "native W16A16 with signed INT64 accumulators",
+            "resnet_int16_widened": "explicit legacy data compatibility on the same MODE_INT16 hardware path",
         },
         "bitstream_integrity": bitstream_check,
         "examples_per_dataset": limit,
@@ -642,7 +683,7 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
         f"- Hardware image/precision cases: {len(cases) - failed}/{len(cases)} PASS",
         f"- Verilator peak INT8 preflight: {verilator.get('status', 'UNKNOWN')}",
         f"- VCS peak INT8: {vcs.get('status', 'UNKNOWN')}",
-        "- INT16 policy: YOLO uses native W16A16; ResNet uses widened values on the INT16/INT64 datapath",
+        "- INT16 policy: YOLO and ResNet use native W16A16; widened compatibility is explicit only",
         "",
         "| Network | Precision | Image | Result |",
         "|---|---:|---|---|",
@@ -669,8 +710,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--network", choices=["yolo", "resnet", "all"], default="all")
     ap.add_argument("--yolo-precision", choices=["int8", "int16", "both"], default="both",
                     help="YOLOv5n precision: int8 / int16 / both (default: both)")
-    ap.add_argument("--resnet-precision", choices=["vai", "int16", "both"], default="both",
-                    help="ResNet18 precision: vai=Vitis AI INT8 / int16=widened values on INT16/INT64 hardware / both")
+    ap.add_argument("--resnet-precision",
+                    choices=["vai", "int16", "int16_widened", "both"], default="vai",
+                    help="ResNet18 precision: vai=INT8 / int16=native W16A16 / int16_widened=legacy compatibility")
     # Legacy alias kept for compatibility
     ap.add_argument("--precision", choices=["vai", "int8", "int16", "both"], default=None,
                     help="(deprecated) 同时设置 YOLO 和 ResNet 精度；建议用 --yolo-precision / --resnet-precision")
@@ -705,12 +747,14 @@ def parse_args() -> argparse.Namespace:
                     help="rebuild the selected workload under output/ before FPGA execution")
     ap.add_argument("--one-shot-yolo-parsed-dir", default=None,
                     help="override YOLO parsed dir for one-shot compile/input/host head")
+    ap.add_argument("--one-shot-resnet-parsed-dir", default=None,
+                    help="override ResNet parsed dir; required when native parsed_int16 is not bundled")
     ap.add_argument("--one-shot-yolo-expect-detections", type=int, default=None,
                     help="override the profile detection-count gate; use -1 to disable")
     ap.add_argument("--verbose-xdma", action="store_true",
                     help="show verbose xdma_rw.exe commands in one-shot mode")
     ap.add_argument("--acceptance", action="store_true",
-                    help="run COCO INT8/native-W16A16 + ResNet INT8/widened-INT16 acceptance")
+                    help="run selected COCO/ResNet native INT8 or W16A16 acceptance")
     ap.add_argument("--acceptance-examples", type=int, default=20,
                     help="number of images per selected dataset in --acceptance mode (default: 20)")
     ap.add_argument("--vcs", choices=["auto", "local", "skip"], default="auto",
@@ -809,6 +853,16 @@ def main() -> int:
             print("  [ERROR] --one-shot-build-dir can only be used with a single selected workload")
             return 1
         yolo_parsed_override = Path(args.one_shot_yolo_parsed_dir) if args.one_shot_yolo_parsed_dir else None
+        resnet_parsed_override = Path(args.one_shot_resnet_parsed_dir) if args.one_shot_resnet_parsed_dir else None
+        if any(n == "resnet" and p == "int16" for n, p, _ in workloads):
+            native_parsed = resnet_parsed_override or ONE_SHOT_COMPILE_PARSED[("resnet", "int16")]
+            if not (native_parsed / "network.json").is_file():
+                print(
+                    "  [ERROR] native ResNet W16A16 parsed model not found: "
+                    f"{native_parsed}. Use parse_resnet18_qdq.py --mode int16 "
+                    "or --one-shot-resnet-parsed-dir."
+                )
+                return 1
 
         print("=" * 60)
         print("EdgeYOLO-FPGA Full One-Shot Inference")
@@ -832,8 +886,15 @@ def main() -> int:
             else:
                 default_build = ONE_SHOT_DEFAULT_BUILDS[(network, precision)]
                 yolo_parsed_dir = None
+                resnet_parsed_dir = (
+                    resnet_parsed_override
+                    if resnet_parsed_override is not None and precision == "int16"
+                    else ONE_SHOT_COMPILE_PARSED[(network, precision)]
+                )
                 yolo_expect = None
                 result_group = "resnet"
+            if network == "yolo":
+                resnet_parsed_dir = None
             build_dir = Path(args.one_shot_build_dir) if args.one_shot_build_dir else default_build
             print(f"\n--- {network.upper()} {_one_shot_tag(network, precision).upper()} One-Shot [{image.name}] ---")
             run_one_shot_fpga(
@@ -848,6 +909,7 @@ def main() -> int:
                 soft_reset=not args.one_shot_no_soft_reset,
                 recompile=args.one_shot_recompile,
                 yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+                resnet_parsed_dir=resnet_parsed_dir if network == "resnet" else None,
                 yolo_expect_detections=yolo_expect if network == "yolo" else None,
                 result_group=result_group,
             )

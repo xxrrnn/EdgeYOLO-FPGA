@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Parse a QDQ-quantized resnet18 ONNX (produced by torchvision FBGEMM PTQ +
-torch.onnx.export) and produce model/resnet18/parsed_qdq/ matching the
-schema that lower.py + compile.py consume.
+Parse a signed, symmetric QDQ-quantized ResNet18 ONNX and produce the schema
+consumed by lower.py + compile.py.  Both W8A8 and native W16A16 models are
+accepted; INT16 tensors are preserved and are never narrowed to INT8.
 
 Output:
     model/resnet18/parsed_qdq/
       network.json           topology + per-layer attrs
-      weights/<safe>.npz     weight_int8 + dqa_scale + dqa_bias + act_scale
+      weights/<safe>.npz     quantized weight + dqa_scale + dqa_bias + act_scale
       input_mean_std.json    preprocess
 
 Approach
@@ -24,7 +24,7 @@ mostly a passthrough).
   - y_scale, y_zero_point     ← next QuantizeLinear after Conv (or Conv+Relu)
 
 The mapping into the hardware compiler is:
-  - weight_int8                                            → goes to weights_packer
+  - weight_int8 (legacy key; dtype is int8 or int16)       → weights_packer
   - dqa_scale[c] = w_scale[c] * x_scale                    → DQA per-channel
   - dqa_bias[c]  = b_int32[c] * b_scale[c]                 → DQA bias (FP32)
   - act_scale    = y_scale                                 → QA for next layer
@@ -43,6 +43,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 import onnx
 from onnx import TensorProto
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 DTYPE_MAP = {
     TensorProto.FLOAT: np.float32,
@@ -121,23 +126,25 @@ def _find_output_quant(model, tensor_name, depth=0, saw_relu=False):
     Residual branch convs may emit Conv -> QuantizeLinear -> ... -> Add.
     """
     if depth > 8:
-        return 1.0, saw_relu
+        return 1.0, 0, saw_relu
     for node in _consumers(model, tensor_name):
         if node.op_type == "QuantizeLinear":
             sc = _const_value(model, node.input[1])
+            zp = _const_value(model, node.input[2]) if len(node.input) > 2 else None
+            zp_i = int(np.array(zp).flatten()[0]) if zp is not None and np.array(zp).size else 0
             if sc is not None:
-                return float(np.array(sc).flatten()[0]), saw_relu
-            return 1.0, saw_relu
+                return float(np.array(sc).flatten()[0]), zp_i, saw_relu
+            return 1.0, zp_i, saw_relu
         if node.op_type in {"Relu", "Cast", "DequantizeLinear", "Identity"}:
-            scale, relu = _find_output_quant(
+            scale, zero_point, relu = _find_output_quant(
                 model,
                 node.output[0],
                 depth + 1,
                 saw_relu or node.op_type == "Relu",
             )
             if scale != 1.0 or relu:
-                return scale, relu
-    return 1.0, saw_relu
+                return scale, zero_point, relu
+    return 1.0, 0, saw_relu
 
 
 def _back_to_dq_inputs(model, dq_node):
@@ -152,12 +159,16 @@ def _back_to_dq_inputs(model, dq_node):
     )
 
 
-def parse_resnet18_qdq(onnx_path):
+def parse_resnet18_qdq(onnx_path, mode: str = "auto"):
+    if mode not in {"auto", "int8", "int16"}:
+        raise ValueError(f"unsupported quantization mode {mode!r}")
     model = onnx.load(onnx_path)
 
     layers = []
     fused_weights = OrderedDict()
     topology = []
+    add_output_scales: Dict[str, float] = {}
+    detected_modes = set()
 
     # Track which Relu nodes are fused into a Conv → Relu sequence.
     relu_after = {}
@@ -177,6 +188,7 @@ def parse_resnet18_qdq(onnx_path):
     for node in model.graph.node:
         if node.op_type == "Conv":
             name = node.name.strip("/").replace("/", ".")
+            b_fp32_direct = None
 
             # ----- Decode the three DQ inputs (act, weight, bias) -----
             dq_act = _producer(model, node.input[0])
@@ -206,7 +218,7 @@ def parse_resnet18_qdq(onnx_path):
                     b_fp32_direct = None
 
             # b_fp32_direct overrides
-            if 'b_fp32_direct' in locals() and b_fp32_direct is not None:
+            if b_fp32_direct is not None:
                 dqa_bias_fp32 = b_fp32_direct.astype(np.float32)
             elif b_int is not None and b_scale is not None:
                 dqa_bias_fp32 = (b_int.astype(np.float64) *
@@ -215,11 +227,28 @@ def parse_resnet18_qdq(onnx_path):
                 dqa_bias_fp32 = np.zeros(w_int.shape[0], dtype=np.float32)
 
             if w_int is None:
-                print(f"  WARN: {name}: weight int8 not found; skipping.")
+                print(f"  WARN: {name}: quantized weight not found; skipping.")
                 continue
 
+            if w_int.dtype == np.int16:
+                layer_mode = "int16"
+            elif w_int.dtype == np.int8:
+                layer_mode = "int8"
+            else:
+                raise TypeError(f"{name}: expected signed INT8/INT16 weights, got {w_int.dtype}")
+            detected_modes.add(layer_mode)
+            if mode != "auto" and layer_mode != mode:
+                raise TypeError(f"{name}: --mode {mode} requires {mode} weights, got {w_int.dtype}")
+            if layer_mode == "int16":
+                if act_zp is not None and np.any(np.asarray(act_zp) != 0):
+                    raise ValueError(f"{name}: native INT16 activations require zero_point=0")
+                if w_zp is not None and np.any(np.asarray(w_zp) != 0):
+                    raise ValueError(f"{name}: native INT16 weights require zero_point=0")
+
             # ----- Find the output QuantizeLinear (next QDQ) to get y_scale -----
-            y_scale, has_activation = _find_output_quant(model, node.output[0])
+            y_scale, y_zero_point, has_activation = _find_output_quant(model, node.output[0])
+            if layer_mode == "int16" and y_zero_point != 0:
+                raise ValueError(f"{name}: native INT16 output requires zero_point=0")
 
             # Per-channel scale handling.
             w_scale_arr = np.array(w_scale).reshape(-1)
@@ -230,6 +259,10 @@ def parse_resnet18_qdq(onnx_path):
             act_scale_f = float(np.array(act_scale).flatten()[0])
             dqa_scale = (w_scale_arr * act_scale_f).astype(np.float32)
             dqa_bias = dqa_bias_fp32
+
+            # ONNX Conv stores OIHW.  The compiler's im2col order is HWIC, so
+            # deployment NPZ files must be OHWI before their flat packing.
+            weight_ohwi = np.transpose(w_int, (0, 2, 3, 1)).copy()
 
             kernel = [w_int.shape[2], w_int.shape[3]]
             stride = [1, 1]
@@ -257,21 +290,31 @@ def parse_resnet18_qdq(onnx_path):
                 "group": int(group),
                 "has_bn": False,             # already folded in by torchvision PTQ
                 "has_activation": bool(has_activation),
-                "weight_shape": list(w_int.shape),
+                "weight_shape": list(weight_ohwi.shape),
                 "act_scale": float(y_scale),
-                "act_zero_point": 0.0,
+                "act_zero_point": float(y_zero_point),
             }
             layers.append(entry)
             fused_weights[name] = {
-                "weight_int8": w_int.astype(np.int8),
+                # Keep the legacy key for compatibility; dtype is the W8/W16
+                # storage contract used by the compiler.
+                "weight_int8": weight_ohwi,
                 "weight_scale": w_scale_arr,
                 "weight_zero_point": np.array(w_zp).astype(np.int32).flatten(),
                 "dqa_scale": dqa_scale,
                 "dqa_bias": dqa_bias,
                 "act_scale": np.float32(y_scale),
-                "act_zero_point": np.float32(0.0),
+                "act_zero_point": np.float32(y_zero_point),
                 "has_bn": True,
             }
+
+        if node.op_type == "Add":
+            add_name = node.name.strip("/").replace("/", ".")
+            add_scale, add_zp, _ = _find_output_quant(model, node.output[0])
+            if add_scale != 1.0:
+                if (mode == "int16" or "int16" in detected_modes) and add_zp != 0:
+                    raise ValueError(f"{add_name}: native INT16 Add output requires zero_point=0")
+                add_output_scales[add_name] = float(add_scale)
 
         # Track topology
         if node.op_type in {"Conv", "Add", "MaxPool", "AveragePool", "GlobalAveragePool",
@@ -287,10 +330,15 @@ def parse_resnet18_qdq(onnx_path):
                     te[a.name] = list(a.ints)
             topology.append(te)
 
-    return layers, fused_weights, topology, model
+    if not detected_modes:
+        raise ValueError("no quantized Conv weights were found in the QDQ model")
+    if len(detected_modes) != 1:
+        raise ValueError(f"mixed Conv weight precisions are unsupported: {sorted(detected_modes)}")
+    resolved_mode = next(iter(detected_modes))
+    return layers, fused_weights, topology, model, add_output_scales, resolved_mode
 
 
-def save(output_dir, layers, fused_weights, topology, model):
+def save(output_dir, layers, fused_weights, topology, model, add_output_scales, mode):
     output_dir = Path(output_dir)
     weights_dir = output_dir / "weights"
     weights_dir.mkdir(parents=True, exist_ok=True)
@@ -318,9 +366,11 @@ def save(output_dir, layers, fused_weights, topology, model):
             "num_conv_layers": len(layers),
             "data_layout": "NHWC",
             "quantization": {
-                "weight_bits": 8,
-                "activation_bits": 8,
-                "accumulator_bits": 32,
+                "weight_bits": 16 if mode == "int16" else 8,
+                "activation_bits": 16 if mode == "int16" else 8,
+                "accumulator_bits": 64 if mode == "int16" else 32,
+                "scheme": "symmetric",
+                "semantics": "native_w16a16" if mode == "int16" else "native_w8a8",
             },
         },
         "preprocess": {
@@ -330,9 +380,17 @@ def save(output_dir, layers, fused_weights, topology, model):
         },
         "layers": layers,
         "topology": topology,
+        "hardware_mode": mode,
+        "quantization_semantics": "native_w16a16" if mode == "int16" else "native_w8a8",
     }
+    if add_output_scales:
+        network["add_output_scales_file"] = "add_output_scales.json"
     (output_dir / "network.json").write_text(json.dumps(network, indent=2, default=_json_default))
     (output_dir / "input_mean_std.json").write_text(json.dumps(network["preprocess"], indent=2))
+    if add_output_scales:
+        (output_dir / "add_output_scales.json").write_text(
+            json.dumps(add_output_scales, indent=2, sort_keys=True)
+        )
 
 
 def _json_default(obj):
@@ -349,13 +407,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--onnx", default=None,
                     help="QDQ resnet18 ONNX (default: model/resnet18/resnet18_w8a8.onnx)")
+    ap.add_argument("--mode", choices=["auto", "int8", "int16"], default="auto",
+                    help="required QDQ weight precision; auto detects from ONNX tensors")
     ap.add_argument("--output", default=None,
                     help="output dir (default: model/resnet18/parsed_qdq)")
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parents[3]
     onnx_path = args.onnx or str(repo / "model" / "resnet18" / "resnet18_w8a8.onnx")
-    out_dir = args.output or str(repo / "model" / "resnet18" / "parsed_qdq")
 
     if not os.path.exists(onnx_path):
         print(f"ERROR: ONNX 不存在: {onnx_path}", file=sys.stderr)
@@ -363,12 +422,20 @@ def main():
         sys.exit(1)
 
     print(f"[1/2] 解析 {onnx_path}")
-    layers, fused, topology, model = parse_resnet18_qdq(onnx_path)
+    layers, fused, topology, model, add_scales, resolved_mode = parse_resnet18_qdq(
+        onnx_path, mode=args.mode
+    )
     print(f"      Conv layers: {len(layers)}")
     print(f"      topology nodes: {len(topology)}")
+    bits = 16 if resolved_mode == "int16" else 8
+    print(f"      quantization: native W{bits}A{bits}")
 
+    out_dir = args.output or str(
+        repo / "model" / "resnet18" /
+        ("parsed_int16" if resolved_mode == "int16" else "parsed_qdq")
+    )
     print(f"[2/2] 保存到 {out_dir}")
-    save(out_dir, layers, fused, topology, model)
+    save(out_dir, layers, fused, topology, model, add_scales, resolved_mode)
     print("OK")
 
 

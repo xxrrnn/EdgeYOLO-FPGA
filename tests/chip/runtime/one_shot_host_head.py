@@ -165,7 +165,7 @@ def _resnet_parsed_dir(mode: str, override: str | None) -> Path:
     if override:
         return Path(override)
     if mode == "int16":
-        return REPO / "model" / "resnet18" / "parsed_vai_int16_widened"
+        return REPO / "model" / "resnet18" / "parsed_int16"
     return REPO / "model" / "resnet18" / "parsed_vai"
 
 

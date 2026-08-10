@@ -10,18 +10,21 @@ python run.py --self-check
 
 - 唯一 attempt1 bitstream 的大小与 SHA256；
 - 8 个 PT/ONNX 模型输入的大小与 SHA256；
-- YOLO native INT8/W16A16 与 ResNet INT8/widened-INT16 parsed 模型是否完整；
+- 随仓库发布的 YOLO native INT8/W16A16、ResNet INT8 与 widened 兼容模型是否完整；
 - 20 张 COCO、20 张 ImageNet 图片及 Windows XDMA 工具是否存在。
 
 ## 2. Compiler 与 native INT16 contract
 
 ```powershell
 python tests/chip/compiler/test_int16_contract.py
+python tests/chip/compiler/test_resnet_native_int16_frontend.py
 python tests/chip/compiler/check_release_repro.py
 ```
 
-`test_int16_contract.py` 验证 native INT16 的核心契约：每个 INT16 DCIM 结果使用 signed
-INT64、每个 128-bit word 放两个 accumulator、compiler 设置匹配的 VPU flag/stride。
+`test_int16_contract.py` 验证 native INT16 的核心契约：四个权重 nibble 均保留、每个
+INT16 DCIM 结果使用 signed INT64、每个 128-bit word 放两个 accumulator、compiler
+设置匹配的 VPU flag/stride。frontend 测试用数值 `30000` 的合成 W16 QDQ Conv 验证
+ResNet ONNX INT16 不会被收窄，并转换为 compiler 使用的 OHWI 权重。
 
 `check_release_repro.py` 分别编译 YOLO INT8、YOLO native W16A16、ResNet INT8 和 ResNet
 widened-INT16 两次，并比较 `program.bin/weights.bin/wb.bin`，确认编译可执行且确定性一致。
@@ -48,7 +51,7 @@ JSON/Markdown 报告到 `output/verilator_peak_int8/`。它不包含 XDMA/HBM/Xi
 python run.py
 ```
 
-首次运行会自动将四套 workload 编译到 `output/compiled/80832ec_attempt1/`。每套 workload
+默认运行三套随附模型 workload；ResNet native W16A16 需先导入对应模型。每套 workload
 依次执行输入预处理、上传、decoder 执行、输出读回、compiler golden feature compare、
 host boundary 和结果绘制。
 
@@ -59,13 +62,15 @@ host boundary 和结果绘制。
 | YOLO INT8 | 0.001 | native W8A8 / INT32 accumulator |
 | YOLO INT16 | 0.01 | native W16A16 / signed INT64 accumulator |
 | ResNet INT8 | 0.001 | Vitis-AI W8A8 |
-| ResNet INT16 | 0.001 | widened values / signed INT64 accumulator |
+| ResNet native INT16 | 0.001 | native W16A16 / signed INT64 accumulator |
+| ResNet widened INT16 | 0.001 | 显式兼容模式，使用同一 MODE_INT16 硬件路径 |
 
 若只运行一项：
 
 ```powershell
 python run.py --network yolo --yolo-precision int16
 python run.py --network resnet --resnet-precision vai
+python run.py --network resnet --resnet-precision int16 --one-shot-resnet-parsed-dir <parsed_int16>
 ```
 
 ## 5. 20+20 图片验收
@@ -82,11 +87,11 @@ python run.py --acceptance --vcs skip
 python run.py --acceptance --vcs-server user@server --vcs-remote-repo /path/to/EdgeYOLO-FPGA
 ```
 
-完整选择会运行 80 个硬件 workload：
+导入 ResNet native W16A16 模型后，完整选择可运行 80 个硬件 workload：
 
 ```text
 20 COCO × (YOLO INT8 + native W16A16) = 40
-20 ImageNet × (ResNet INT8 + widened INT16) = 40
+20 ImageNet × (ResNet INT8 + native W16A16) = 40
 ```
 
 汇总写入 `output/acceptance/acceptance_report.json` 与 `.md`。YOLO 不以固定检测数量作为

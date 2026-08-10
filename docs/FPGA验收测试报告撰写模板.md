@@ -14,6 +14,11 @@
 
 ---
 
+> 历史记录说明：下文的 widened INT16 数据与结论对应旧版 `c1773f6` 验收样品，不代表
+> 当前 native W16A16 架构的模型精度。当前硬件的 `MODE_INT16` 统一按原生有符号
+> 16×16/INT64 累加执行；软件默认 native，widened 仅为显式兼容模式。重新验收 native
+> ResNet18 时必须导入独立的 signed-symmetric W16A16 QDQ 模型并替换相应表格数据。
+
 ## 目录
 
 一．课题概述<br>

@@ -1,4 +1,4 @@
-"""Pack ONNX INT8 weights into DCIM IBUF nibble layout.
+"""Pack signed W8/W16 weights into the DCIM IBUF nibble layout.
 
 Packing contract used by the maintained compiler and lite-BD golden generators.
 
@@ -80,7 +80,7 @@ def _pack_nibble_entry_int16(weights_8: np.ndarray, nibble_idx: int) -> bytes:
 
 
 def pack_layer_weights_int16(
-    weight_int8: np.ndarray,        # [Cout, Cin, kH, kW]
+    weight_int16: np.ndarray,        # [Cout, kH, kW, Cin] (OHWI)
     *,
     expected_acc_depth: int,
     expected_tiles: int,
@@ -91,7 +91,9 @@ def pack_layer_weights_int16(
     every acc step, DCIM reads `DCIM_CYCLE` 128-bit words that cover
     `DCIM_CH_IN` logical input values across `DCIM_CH_OUT` physical lanes.
     """
-    cout, cin, kh, kw = weight_int8.shape
+    if weight_int16.dtype != np.int16:
+        raise TypeError(f"native W16A16 packing requires int16 weights, got {weight_int16.dtype}")
+    cout, kh, kw, cin = weight_int16.shape
     acc_depth = (kh * kw * cin + CH_IN_PER_TILE - 1) // CH_IN_PER_TILE
     tiles_needed = (cout + INT16_OUT_CH_PER_TILE - 1) // INT16_OUT_CH_PER_TILE
     if expected_acc_depth != acc_depth:
@@ -102,7 +104,7 @@ def pack_layer_weights_int16(
         raise ValueError(
             f"INT16 tile mismatch: weights need {tiles_needed} tiles, plan says {expected_tiles}"
         )
-    w = weight_int8.reshape(cout, kh * kw * cin).astype(np.int16)
+    w = weight_int16.reshape(cout, kh * kw * cin)
     pad_cols = acc_depth * CH_IN_PER_TILE - w.shape[1]
     if pad_cols > 0:
         w = np.pad(w, ((0, 0), (0, pad_cols)))
@@ -136,7 +138,7 @@ def pack_layer_weights_int16(
 
 
 def pack_layer_weights_int8(
-    weight_int8: np.ndarray,  # [Cout, Cin, kH, kW]
+    weight_int8: np.ndarray,  # [Cout, kH, kW, Cin] (OHWI)
     *,
     expected_acc_depth: int,
     expected_tiles: int,
@@ -146,7 +148,9 @@ def pack_layer_weights_int8(
     The layer's slot in IBUF spans  TILES * acc_depth * 16 entries
     (entries × 16 bytes each).  Unused tiles / unused ch_out are zero-filled.
     """
-    cout, cin, kh, kw = weight_int8.shape
+    if weight_int8.dtype != np.int8:
+        raise TypeError(f"native W8A8 packing requires int8 weights, got {weight_int8.dtype}")
+    cout, kh, kw, cin = weight_int8.shape
     acc_depth = (kh * kw * cin + CH_IN_PER_TILE - 1) // CH_IN_PER_TILE
     tiles_needed = (cout + INT8_OUT_CH_PER_TILE - 1) // INT8_OUT_CH_PER_TILE
 
@@ -200,9 +204,9 @@ def pack_all_layers(
 ) -> Tuple[bytes, Dict[str, dict]]:
     """Walk plan['weights_layout']['layers'] and produce one giant IBUF blob.
 
-    For `mode == 'int16'` the packing is the bit-extended INT16 layout used as
-    a correctness oracle; numerically equal to INT8 path but uses MODE_INT16
-    on the DCIM array.
+    For ``mode == 'int16'`` the input tensors must be genuine signed INT16
+    weights.  Each logical weight is split across four physical nibble lanes;
+    no numeric widening or remapping is performed here.
     """
     import os
     info: Dict[str, dict] = {}
@@ -223,7 +227,7 @@ def pack_all_layers(
 
         if mode == "int16":
             blob = pack_layer_weights_int16(
-                weights.astype(np.int16),
+                weights,
                 expected_acc_depth=expected_acc_depth,
                 expected_tiles=rec["tiles_needed"],
             )

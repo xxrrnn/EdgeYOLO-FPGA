@@ -27,6 +27,7 @@ from golden_module_tb import out_hw as _out_hw
 RESNET_DIR = REPO_ROOT / "model" / "resnet18"
 PARSED_VAI = RESNET_DIR / "parsed_vai"                   # Vitis AI quantized (INT8, correct model)
 PARSED_VAI_INT16 = RESNET_DIR / "parsed_vai_int16_widened"  # VAI weights widened to int16 dtype
+PARSED_NATIVE_INT16 = RESNET_DIR / "parsed_int16"         # true W16A16 QDQ parsed model
 ONNX_VAI = (REPO_ROOT / "model" / "algorithm" / "Resnet18-quantization"
             / "resnet18" / "quantize_result" / "ResNet_int.onnx")
 ONNX_QDQ = RESNET_DIR / "resnet18_w8a8.onnx"
@@ -45,6 +46,7 @@ def _load_class_names() -> list[str]:
 _load_class_names()
 _ADD_SCALE_CACHE: dict[str, float] | None = None
 _OP_SCALE_CACHE: dict[str, dict[str, float]] = {}
+_ACTIVE_INT16_WIDENED = False
 
 
 def _can_reuse_cases(runs_base: Path) -> bool:
@@ -83,6 +85,8 @@ def prepare_vai_int16() -> Path:
     net["model_info"]["quantization"]["weight_bits"] = 16
     net["model_info"]["name"] = "resnet18-vai-int16-widened"
     net["int16_from_int8"] = True
+    net["hardware_mode"] = "int16"
+    net["quantization_semantics"] = "int8_values_widened_to_int16"
     (PARSED_VAI_INT16 / "network.json").write_text(json.dumps(net, indent=2))
 
     src_pre = PARSED_VAI / "input_mean_std.json"
@@ -103,22 +107,33 @@ def prepare_vai_int16() -> Path:
     return PARSED_VAI_INT16
 
 
-def configure_resnet_precision(precision: str) -> Path:
-    if precision in ("vai", "int8_vai"):
+def configure_resnet_precision(precision: str, parsed_override: Path | None = None) -> Path:
+    global _ACTIVE_INT16_WIDENED
+    if parsed_override is not None:
+        parsed = Path(parsed_override)
+    elif precision in ("vai", "int8_vai"):
         parsed = PARSED_VAI
         if not _weights_ready(parsed):
             raise FileNotFoundError(
                 "Bundled ResNet VAI parsed weights are missing; restore "
                 "model/resnet18/parsed_vai from the release checkout."
             )
-    elif precision == "int16":
+    elif precision == "int16_widened":
         parsed = prepare_vai_int16()
+    elif precision == "int16":
+        parsed = PARSED_NATIVE_INT16
     else:
-        raise ValueError(f"unsupported ResNet precision: {precision!r}  (use 'vai' or 'int16')")
+        raise ValueError(
+            f"unsupported ResNet precision: {precision!r} "
+            "(use 'vai', 'int16', or 'int16_widened')"
+        )
 
     if not _weights_ready(parsed):
         raise FileNotFoundError(f"ResNet parsed weights not found: {parsed / 'weights'}")
 
+    metadata = json.loads((parsed / "network.json").read_text())
+    semantics = str(metadata.get("quantization_semantics", "")).lower()
+    _ACTIVE_INT16_WIDENED = bool(metadata.get("int16_from_int8")) or "widened" in semantics
     set_network_json(str(parsed / "network.json"))
     return parsed
 
@@ -154,10 +169,14 @@ def preprocess_resnet18(img_rgb: np.ndarray, parsed_dir: Path) -> np.ndarray:
     normalized = (arr - mean) / std
 
     input_scale = _infer_input_scale(parsed_dir)
-    # INT16-from-INT8: input is quantized with INT8 range [-128, 127] and cast to int16.
-    # Clip range stays INT8 to keep numerical equivalence with INT8 mode.
-    is_int16_from_int8 = "int16_from_int8" in parsed_dir.name
-    is_int16 = "int16" in parsed_dir.name and not is_int16_from_int8
+    metadata = json.loads((parsed_dir / "network.json").read_text())
+    semantics = str(metadata.get("quantization_semantics", "")).lower()
+    is_int16_from_int8 = bool(metadata.get("int16_from_int8")) or "widened" in semantics
+    quant = metadata.get("model_info", {}).get("quantization", {})
+    is_int16 = (
+        str(metadata.get("hardware_mode", "")).lower() == "int16"
+        or int(quant.get("activation_bits", 8)) == 16
+    ) and not is_int16_from_int8
     if is_int16_from_int8:
         clip_lo, clip_hi = -128, 127
         dtype = np.int16
@@ -216,7 +235,7 @@ def _clip_int16_from_int8(feat: np.ndarray) -> np.ndarray:
     To compare directly with the INT8/PT model, keep integer values in INT8
     range while storing them as int16 for the next FPGA INT16 layer.
     """
-    if feat.dtype == np.int16:
+    if _ACTIVE_INT16_WIDENED and feat.dtype == np.int16:
         return np.clip(feat, -128, 127).astype(np.int16)
     return feat
 
@@ -313,8 +332,8 @@ def _residual_add_quant(a: np.ndarray, a_scale: float,
     fp32 = np.maximum(fp32, 0.0)
     is_int16 = a.dtype == np.int16 or b.dtype == np.int16
     dtype = np.int16 if is_int16 else np.int8
-    # ResNet INT16 is INT8 widened; keep values numerically INT8-equivalent.
-    return np.clip(np.round(fp32 / float(out_scale)), -128, 127).astype(dtype)
+    limit = 127 if _ACTIVE_INT16_WIDENED or dtype == np.int8 else 32767
+    return np.clip(np.round(fp32 / float(out_scale)), -limit - (1 if limit == 127 else 1), limit).astype(dtype)
 
 
 def maxpool_3x3_s2(feat: np.ndarray) -> np.ndarray:
@@ -334,8 +353,9 @@ def maxpool_3x3_s2_quant(feat: np.ndarray, in_scale: float, out_scale: float) ->
         return pooled
     is_int16 = pooled.dtype == np.int16
     dtype = np.int16 if is_int16 else np.int8
+    limit = 127 if _ACTIVE_INT16_WIDENED or dtype == np.int8 else 32767
     return np.clip(np.round(pooled.astype(np.float32) * float(in_scale) / float(out_scale)),
-                   -128, 127).astype(dtype)
+                   -limit - 1, limit).astype(dtype)
 
 
 def _block(fpga: FPGAOps, parsed_dir: Path, x: np.ndarray, x_scale: float,

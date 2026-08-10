@@ -43,14 +43,16 @@ python run.py
 
 不需要填写模型、图片、编译产物或 XDMA 工具路径。`run.py` 会检查 bitstream 和八个
 PT/ONNX 输入的 SHA256；若 workload 尚不存在，会自动编译到
-`output/compiled/80832ec_attempt1/`，随后运行默认图片的四个 workload：
+`output/compiled/80832ec_attempt1/`。默认运行随仓库提供模型的 YOLO INT8/native
+W16A16 和 ResNet INT8；ResNet native W16A16 需要先提供对应的 QDQ 模型：
 
 | 网络 | `run.py` 选项 | 模型数值 | FPGA accumulator |
 | --- | --- | --- | --- |
 | COCO YOLOv5n | `--yolo-precision int8` | W8A8 | INT32 |
 | COCO YOLOv5n | `--yolo-precision int16` | native W16A16 | signed INT64 |
 | ImageNet ResNet18 | `--resnet-precision vai` | Vitis-AI W8A8 | INT32 |
-| ImageNet ResNet18 | `--resnet-precision int16` | INT8 量化值 widened 到 INT16 | signed INT64 |
+| ImageNet ResNet18 | `--resnet-precision int16` | native W16A16 | signed INT64 |
+| ImageNet ResNet18 | `--resnet-precision int16_widened` | 旧 INT8 值兼容模式 | signed INT64 |
 
 YOLO native W16A16 的默认 feature 容差是 `0.01`；其他路径默认 `0.001`。可用
 `--one-shot-compare-atol` 显式覆盖。单项运行示例：
@@ -58,7 +60,13 @@ YOLO native W16A16 的默认 feature 容差是 `0.01`；其他路径默认 `0.00
 ```powershell
 python run.py --network yolo --yolo-precision int16
 python run.py --network resnet --resnet-precision vai
+python tests/chip/compiler/frontend/parse_resnet18_qdq.py --onnx <resnet18_w16a16.qdq.onnx> --mode int16
+python run.py --network resnet --resnet-precision int16
 ```
+
+硬件只有一个 `MODE_INT16`，始终执行有符号 16×16 和 INT64 累加；native/widened
+只在软件模型契约中区分。`compile.py --mode int16` 默认拒绝 widened 模型，旧模型必须
+显式使用 `--allow-widened-int16`（或 `run.py --resnet-precision int16_widened`）。
 
 ## 保留的 PT/ONNX
 
@@ -70,7 +78,8 @@ python run.py --network resnet --resnet-precision vai
 | `model/yolov5n_coco50k_qat/int16/` | `best.pt`, `best.onnx`, `best.quant.onnx` | native W16A16 QAT、参考推理、FPGA export |
 | `model/resnet18/` | `resnet18_fp32.onnx`, `resnet18_w8a8.onnx` | FP32 参考与 W8A8 QDQ 图 |
 
-`parsed_int8/`、`parsed_int16/`、`parsed_vai/` 和 `parsed_vai_int16_widened/` 是 compiler
+`parsed_int8/`、YOLO 的 `parsed_int16/`、ResNet 的 `parsed_vai/` 和兼容用
+`parsed_vai_int16_widened/` 是 compiler
 直接读取的部署输入，保留它们可以让 `run.py` 无需 ONNX/PyTorch 解析环境。由 compiler
 生成的 `program.bin`、`weights.bin`、`wb.bin` 不进 Git。
 
@@ -102,7 +111,9 @@ xdc/                    引脚和时序约束源码
 
 2026-07-25 的上板记录：COCO YOLO native W16A16 完成 57/57 FPGA 层，PAN P3/P4/P5
 最大绝对误差为 `0.00930/0.00712/0.00696`，在 `atol=0.01` 下通过并检测到 chair/tv；
-ResNet INT8/widened INT16 通过 `atol=0.001` feature gate。
+ResNet INT8/widened INT16 通过 `atol=0.001` feature gate；这是历史兼容实测，不能作为
+ResNet native W16A16 模型精度记录。当前软件/RTL 已支持 native ResNet W16A16，但仓库
+没有随附该量化模型，需由上述 QDQ frontend 导入后重新上板验收。
 
 Detect head/NMS 与 ResNet GAP/FC/Top-k 在 host 执行。20+20 样例用于硬件功能与数据一致性，
 不能替代完整 COCO mAP 或 ImageNet Top-1 测试。当前仓库无法现场复现 routed timing 数字，

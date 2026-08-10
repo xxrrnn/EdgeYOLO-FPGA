@@ -54,11 +54,11 @@ def make_yolo_input(image_path: Path, mode: str, parsed_dir: Path | None = None)
     return q.tobytes()
 
 
-def make_resnet_input(image_path: Path, mode: str) -> bytes:
+def make_resnet_input(image_path: Path, mode: str, parsed_dir: Path | None = None) -> bytes:
     import resnet_e2e
 
     precision = "int16" if mode == "int16" else "vai"
-    parsed = resnet_e2e.configure_resnet_precision(precision)
+    parsed = resnet_e2e.configure_resnet_precision(precision, parsed_override=parsed_dir)
     img = resnet_e2e.load_image(str(image_path))
     q = resnet_e2e.preprocess_resnet18(img, parsed)
     if mode == "int16":
@@ -256,6 +256,8 @@ def main() -> None:
                     help="image to preprocess for ResNet18 input")
     ap.add_argument("--yolo-parsed-dir", default=None,
                     help="optional YOLO parsed dir for input activation scale")
+    ap.add_argument("--resnet-parsed-dir", default=None,
+                    help="optional native/widened ResNet parsed dir for input quantization")
     ap.add_argument("--output", default=None,
                     help="raw output feature file")
     ap.add_argument("--output-dir", default=None,
@@ -308,7 +310,10 @@ def main() -> None:
             Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else None,
         )
     elif args.resnet_image:
-        input_bytes = make_resnet_input(Path(args.resnet_image), mode)
+        input_bytes = make_resnet_input(
+            Path(args.resnet_image), mode,
+            Path(args.resnet_parsed_dir) if args.resnet_parsed_dir else None,
+        )
     else:
         raise SystemExit("provide --input, --yolo-image, or --resnet-image")
     input_bytes = _pad_nhwc_input(input_bytes, plan, mode)

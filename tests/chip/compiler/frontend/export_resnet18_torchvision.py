@@ -126,8 +126,8 @@ def main():
         )
     except Exception as e:
         print(f"ERROR: quantized ONNX export failed. {e}", file=sys.stderr)
-        print("Falling back: leaving FP32 ONNX in place.  You can still compile "
-              "resnet18 against the FP32 path; --mode int16 bit-extends it.")
+        print("Leaving the FP32 ONNX in place. Hardware compilation still requires "
+              "a signed QDQ model; native INT16 must be exported as symmetric W16A16.")
         sys.exit(2)
 
     # Back up the ONNX Model-Zoo file (if present) instead of overwriting.

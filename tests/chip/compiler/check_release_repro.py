@@ -30,16 +30,19 @@ def sha256(path: Path) -> str:
 
 
 def compile_case(out_dir: Path, network: str, mode: str, parsed: str) -> None:
+    cmd = [
+        sys.executable,
+        str(COMPILER),
+        "--network", network,
+        "--mode", mode,
+        "--full",
+        "--parsed", str(REPO / parsed),
+        "--out", str(out_dir),
+    ]
+    if "widened" in parsed:
+        cmd.append("--allow-widened-int16")
     subprocess.run(
-        [
-            sys.executable,
-            str(COMPILER),
-            "--network", network,
-            "--mode", mode,
-            "--full",
-            "--parsed", str(REPO / parsed),
-            "--out", str(out_dir),
-        ],
+        cmd,
         cwd=REPO,
         check=True,
     )

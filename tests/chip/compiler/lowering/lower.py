@@ -476,19 +476,6 @@ def lower(
 
     elem_bytes = 1 if mode == "int8" else 2
 
-    # ---- Fail-loud check: int16 mode requires RTL support that the current
-    # lite build only partly has (DCIM MODE_INT16 yes; im2col_unit / qa_unit
-    # / dqa_unit have no INT16 bytewidth path).  We still emit the plan for
-    # the sim_runner oracle, but warn loudly.
-    if mode == "int16":
-        unsupported.append(
-            "mode=int16: bit-extension W16A16 path is supported by the compiler "
-            "and weights_packer (W8→W16 zero/sign-extension keeps numerics identical), "
-            "but the current RTL does NOT yet have INT16 byte-wide paths in "
-            "im2col_unit / qa_unit / dqa_unit (only DCIM MODE_INT16 = 0b111 is wired).  "
-            "sim_runner can still run as an oracle; for HW execution, extend the VPU sub-units."
-        )
-
     last_out_obuf_off = 0x000000
     layer_records: List[Dict[str, Any]] = []
     wb_records: List[Dict[str, Any]] = []
@@ -534,7 +521,8 @@ def lower(
 
         planner.reset_ibuf()
         # IBUF layout: weights first (per-tile), then activation region.
-        tiles_needed = (cout + DCIM_INT8_OUT_CH_PER_TILE - 1) // DCIM_INT8_OUT_CH_PER_TILE
+        out_ch_per_tile = DCIM_INT16_OUT_CH_PER_TILE if mode == "int16" else DCIM_INT8_OUT_CH_PER_TILE
+        tiles_needed = (cout + out_ch_per_tile - 1) // out_ch_per_tile
         acc_depth_words = (kh * kw * cin + DCIM_CH_IN - 1) // DCIM_CH_IN
         weight_per_tile_words = acc_depth_words * DCIM_CYCLE
         weight_per_tile_bytes = weight_per_tile_words * BYTES_PER_WORD

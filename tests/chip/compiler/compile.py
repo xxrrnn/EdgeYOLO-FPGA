@@ -48,6 +48,7 @@ from compiler.codegen.encode_isa import (
 )
 from compiler.packer.weights_packer import pack_all_layers as pack_weights
 from compiler.packer.wb_packer import pack_all_layers as pack_wbs
+from compiler.model_contract import validate_model_precision
 
 
 NETWORK_CONFIG = {
@@ -58,7 +59,7 @@ NETWORK_CONFIG = {
     },
     "resnet18": {
         "parsed_dir":  "model/resnet18/parsed_vai",
-        "parsed_dir_int16": "model/resnet18/parsed_vai_int16_widened",
+        "parsed_dir_int16": "model/resnet18/parsed_int16",
         "weight_key":  "weight_int8",
     },
 }
@@ -308,6 +309,8 @@ def main():
                     help="path to hw_caps.yaml")
     ap.add_argument("--parsed", default=None,
                     help="override parsed/network.json directory")
+    ap.add_argument("--allow-widened-int16", action="store_true",
+                    help="explicitly allow legacy INT8 values stored on the INT16 datapath")
     ap.add_argument("--full", action="store_true",
                     help="use full-network lowering (Add/Concat/US/MP)")
     ap.add_argument("--dcim-loop", choices=["layer", "legacy"], default="layer",
@@ -332,6 +335,18 @@ def main():
         model_info["input_shape"] = network["input_shape"]
     model_info.setdefault("output_shape", network.get("output_shape", []))
 
+    try:
+        precision_contract = validate_model_precision(
+            network,
+            weights_dir,
+            mode=args.mode,
+            weight_key=cfg["weight_key"],
+            allow_widened_int16=args.allow_widened_int16,
+        )
+    except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        print(f"ERROR: quantized model contract rejected: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     hw = mini_yaml.load_file(args.hw_caps)
 
     # ---- 1. Lower ----
@@ -340,6 +355,8 @@ def main():
         plan = lower_full(network, hw, mode=args.mode, max_layers=args.max_layers, dcim_loop=args.dcim_loop)
     else:
         plan = lower(network, hw, mode=args.mode, max_layers=args.max_layers)
+    plan.setdefault("compile_meta", {})["precision_contract"] = precision_contract
+    plan["quantization_semantics"] = precision_contract["quantization_semantics"]
 
     # ---- 2. Pack weights (only valid if .npz has the requested weight_key) ----
     can_pack = True
