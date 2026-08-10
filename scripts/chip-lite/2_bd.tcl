@@ -128,6 +128,7 @@ catch {set_property generate_synth_checkpoint false [get_bd_cells vpu_0]}
 source [file normalize "$ipBdDir/../xdma.tcl"]
 source [file normalize "$ipBdDir/hbm.tcl"]
 source [file normalize "$ipBdDir/cdma.tcl"]
+source [file normalize "$ipBdDir/peak_ila.tcl"]
 source [file normalize "$ipBdDir/connect.tcl"]
 source [file normalize "$ipBdDir/address.tcl"]
 

@@ -127,7 +127,14 @@ module DCIM_Array_bd #(
     input  wire [BUF_DATA_WIDTH-1:0]     tile_obuf7_ext_dina,
     output wire [BUF_DATA_WIDTH-1:0]     tile_obuf7_ext_douta,
 
-    output wire ready
+    output wire ready,
+
+    // Minimal native probes for the peak-TOPS ILA.  Host-visible interfaces
+    // and all existing address/data mappings remain unchanged.
+    output wire [NUM_TILES-1:0]          peak_compute_mask,
+    output wire [31:0]                   peak_dcim_input,
+    output wire                          peak_result_valid,
+    output wire [31:0]                   peak_result_data
 );
 
     localparam ADDR_SHIFT = 4;
@@ -314,7 +321,11 @@ module DCIM_Array_bd #(
         .tile_obuf_ext_addra       (obuf_addra_vec),
         .tile_obuf_ext_dina        (obuf_dina_vec),
         .tile_obuf_ext_douta       (obuf_douta_vec),
-        .tile_obuf_ext_douta_valid ()
+        .tile_obuf_ext_douta_valid (),
+        .peak_compute_mask         (peak_compute_mask),
+        .peak_dcim_input           (peak_dcim_input),
+        .peak_result_valid         (peak_result_valid),
+        .peak_result_data          (peak_result_data)
     );
 
 endmodule

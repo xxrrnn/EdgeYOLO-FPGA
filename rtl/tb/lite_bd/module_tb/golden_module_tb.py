@@ -181,10 +181,11 @@ DCIM_REG_TILE_MASK_HI = 0x244
 
 # Curated dcim_matmul cases (optional in_hw override for fast smoke tests).
 DCIM_MATMUL_CURATED = [
-    # Peak-compute acceptance case: one output pixel, K=512, all 8 tiles active.
+    # Peak-compute acceptance case: one exact-fit output vector, K=64, all 8 tiles active.
     # INT8 needs two nibble phases per logical MAC.  At 250 MHz this case must
     # expose 4096 logical MAC/cycle = 2.048 TOPS (counting mul+add as 2 ops).
-    {'name': 'peak_int8_all_tiles',       'layer': 'model.9.cv2.conv',       'in_hw': (1, 1),  'synthetic_out_ch': 128, 'peak_int8': True},
+    {'name': 'peak_int8_all_tiles',       'layer': 'model.9.cv2.conv',       'in_hw': (1, 1),
+     'synthetic_in_ch': 64, 'synthetic_out_ch': 128, 'peak_int8': True},
     # INT8 smoke（各 kernel/stride/channel 覆盖）
     {'name': 'dcim_tiny_1x1',       'layer': 'model.2.cv1.conv',      'in_hw': (2, 2)},
     {'name': 'conv6_s2_c3_to16',    'layer': 'model.0.conv',           'in_hw': (12, 12)},
@@ -1690,6 +1691,8 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
                    shapes: Dict[str, ConvIm2colShape]) -> dict:
     use_int16 = spec.get('int16', False)
     meta = conv_meta(net, spec['layer'])
+    if 'synthetic_in_ch' in spec:
+        meta.in_ch = int(spec['synthetic_in_ch'])
     if 'synthetic_out_ch' in spec:
         meta.out_ch = min(NUM_TILES * DCIM_INT8_OUT_CH_PER_TILE, int(spec['synthetic_out_ch']))
     h, w, oh, ow, hw_note = resolve_dcim_in_hw(spec, shapes, meta)

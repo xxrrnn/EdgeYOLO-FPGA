@@ -207,6 +207,18 @@ connect_bd_net [get_bd_pins inst_decoder/dcim_cfg_wr_data] [get_bd_pins dcim_arr
 connect_bd_net [get_bd_pins dcim_array_0/ready]            [get_bd_pins inst_decoder/dcim_ready]
 
 # ==============================================================================
+# Peak-TOPS ILA
+#   probe0: all-Tile compute fire mask (trigger on 8'hFF)
+#   probe1: Tile 0 actual DCIM nibble input [31:0]
+#   probe2: Tile 0 final OBUF result valid
+#   probe3: Tile 0 final host-visible INT32 result [31:0]
+# ==============================================================================
+connect_bd_net [get_bd_pins dcim_array_0/peak_compute_mask] [get_bd_pins peak_tops_ila/probe0]
+connect_bd_net [get_bd_pins dcim_array_0/peak_dcim_input]   [get_bd_pins peak_tops_ila/probe1]
+connect_bd_net [get_bd_pins dcim_array_0/peak_result_valid] [get_bd_pins peak_tops_ila/probe2]
+connect_bd_net [get_bd_pins dcim_array_0/peak_result_data]  [get_bd_pins peak_tops_ila/probe3]
+
+# ==============================================================================
 # INST_Decoder <-> VPU_AXI_Regs (vpu_regs)
 # ==============================================================================
 connect_bd_net [get_bd_pins vpu_regs/decoder_start]  [get_bd_pins inst_decoder/decoder_start]
@@ -261,6 +273,7 @@ connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins cdma_ctrl/
 # DCIM Array
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins dcim_array_0/clk]
 connect_bd_net [get_bd_pins main_rst/peripheral_aresetn] [get_bd_pins dcim_array_0/rst_n]
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins peak_tops_ila/clk]
 
 # VPU
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_0/clk]

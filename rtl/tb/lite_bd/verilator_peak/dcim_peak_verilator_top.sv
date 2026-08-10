@@ -22,7 +22,10 @@ module dcim_peak_verilator_top (
 
     output wire         done,
     output wire         ready,
-    output wire [7:0]   compute_fire
+    output wire [7:0]   compute_fire,
+    output wire [31:0]  peak_dcim_input,
+    output wire         peak_result_valid,
+    output wire [31:0]  peak_result_data
 );
     localparam integer NUM_TILES = 8;
     localparam integer STRB_WIDTH = 16;
@@ -64,7 +67,7 @@ module dcim_peak_verilator_top (
         .done(done),
         .ready(ready),
         .mode(`MODE_INT8),
-        .acc_depth(7'd8),
+        .acc_depth(7'd1),
         .act_base_addr(15'd0),
         .wei_base_addrs(wei_base_addrs),
         .out_base_addrs(out_base_addrs),
@@ -79,12 +82,10 @@ module dcim_peak_verilator_top (
         .tile_obuf_ext_addra(obuf_addra),
         .tile_obuf_ext_dina(obuf_dina),
         .tile_obuf_ext_douta(obuf_douta),
-        .tile_obuf_ext_douta_valid(obuf_douta_valid)
+        .tile_obuf_ext_douta_valid(obuf_douta_valid),
+        .peak_compute_mask(compute_fire),
+        .peak_dcim_input(peak_dcim_input),
+        .peak_result_valid(peak_result_valid),
+        .peak_result_data(peak_result_data)
     );
-
-    generate
-        for (tile_i = 0; tile_i < NUM_TILES; tile_i = tile_i + 1) begin : gen_compute_probe
-            assign compute_fire[tile_i] = dut.gen_tiles[tile_i].u_tile.compute_phase_fire;
-        end
-    endgenerate
 endmodule

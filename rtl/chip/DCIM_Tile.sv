@@ -76,7 +76,12 @@ module DCIM_Tile #(
     input  wire                          obuf_wr_ready,
     output reg  [BUF_ADDR_WIDTH-1:0]     obuf_wr_addr,
     output reg  [BUF_DATA_WIDTH-1:0]     obuf_wr_data,
-    output reg  [STRB_WIDTH-1:0]         obuf_wr_strb
+    output reg  [STRB_WIDTH-1:0]         obuf_wr_strb,
+
+    // Peak-TOPS ILA taps.  These are observation-only signals: they do not
+    // feed back into the datapath or change the host-visible data mapping.
+    output wire                          peak_compute_fire,
+    output wire [31:0]                   peak_dcim_input
 );
 
     initial begin
@@ -216,6 +221,13 @@ module DCIM_Tile #(
     wire [1:0] compute_phase_last = (mode_reg == `MODE_INT16) ? 2'd3 : 2'd1;
     wire compute_phase_fire = (dcim_valid_act && dcim_ready_act);
     wire compute_done = compute_phase_fire && (compute_phase_cnt == compute_phase_last);
+
+    // A set bit means this Tile accepted one real DCIM nibble phase in this
+    // cycle.  For the exact-fit INT8 peak case (M=1,K=64,N=128,acc_depth=1),
+    // all eight Tiles assert this signal for exactly two consecutive cycles.
+    assign peak_compute_fire = compute_phase_fire;
+    assign peak_dcim_input   = dcim_data_act[31:0];
+
     wire [ACC_UBD_WD-1:0] rows_left = acc_reg - chunk_base;
     wire [ACC_UBD_WD-1:0] chunk_rows = (rows_left > MAX_ROWS_PER_CHUNK) ? MAX_ROWS_PER_CHUNK : rows_left;
     wire chunk_has_more = (chunk_base + chunk_rows < acc_reg);

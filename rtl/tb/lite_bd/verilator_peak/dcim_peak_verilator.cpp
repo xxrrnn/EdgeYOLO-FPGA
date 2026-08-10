@@ -74,6 +74,9 @@ struct Runner {
     uint64_t skew_cycles = 0;
     uint64_t first_time_ns = 0;
     uint64_t last_time_ns = 0;
+    std::vector<uint32_t> sampled_inputs;
+    uint64_t result_pulses = 0;
+    uint32_t sampled_result = 0;
     bool monitor_compute = false;
 
     explicit Runner(const std::string& vcd_path) {
@@ -103,9 +106,14 @@ struct Runner {
             ++any_cycles;
             if (mask == 0xff) ++all_cycles;
             else ++skew_cycles;
+            sampled_inputs.push_back(top.peak_dcim_input);
             std::cout << "PEAK_INT8_EVENT cycle=" << (cycles - start_cycle)
                       << " time_ns=" << sim_time_ns
                       << " mask=0x" << std::hex << mask << std::dec << "\n";
+        }
+        if (top.peak_result_valid) {
+            ++result_pulses;
+            sampled_result = top.peak_result_data;
         }
         sim_time_ns += 2;
     }
@@ -144,11 +152,21 @@ int main(int argc, char** argv) {
     try {
         const auto activations = read_hex_words(case_dir + "/act.hex");
         const auto expected = read_hex_words(case_dir + "/expected.hex");
-        if (activations.size() != 32) {
-            throw std::runtime_error("peak case must contain 32 activation words");
+        if (activations.size() != 4) {
+            throw std::runtime_error("exact-fit peak case must contain 4 activation words");
         }
         if (expected.size() != 32) {
             throw std::runtime_error("peak case must contain 32 expected output words");
+        }
+
+        // The ILA input probe carries Tile 0's first eight DCIM nibbles:
+        // high nibble on phase 0, low nibble on phase 1.
+        std::array<uint32_t, 2> expected_probe_inputs{};
+        for (unsigned channel = 0; channel < 8; ++channel) {
+            const unsigned byte_value =
+                (activations[0][channel / 4] >> (8 * (channel % 4))) & 0xffu;
+            expected_probe_inputs[0] |= ((byte_value >> 4) & 0xfu) << (4 * channel);
+            expected_probe_inputs[1] |= (byte_value & 0xfu) << (4 * channel);
         }
 
         Runner sim(argv[2]);
@@ -166,8 +184,8 @@ int main(int argc, char** argv) {
             }
             const auto weights = read_hex_words(
                 case_dir + "/weight_tile" + std::to_string(tile) + ".hex");
-            if (weights.size() != 512) {
-                throw std::runtime_error("peak case tile weight file must contain 512 words");
+            if (weights.size() != 64) {
+                throw std::runtime_error("exact-fit peak case tile weight file must contain 64 words");
             }
             for (unsigned index = 0; index < weights.size(); ++index) {
                 sim.load_word(tile, 0x4000u + index, weights[index]);
@@ -216,8 +234,19 @@ int main(int argc, char** argv) {
                   << " first_time_ns=" << sim.first_time_ns
                   << " last_time_ns=" << sim.last_time_ns << "\n";
 
-        if (mismatches == 0 && sim.any_cycles == 16 && sim.all_cycles == 16 &&
-            sim.skew_cycles == 0) {
+        const bool probe_input_ok =
+            sim.sampled_inputs.size() == expected_probe_inputs.size() &&
+            sim.sampled_inputs[0] == expected_probe_inputs[0] &&
+            sim.sampled_inputs[1] == expected_probe_inputs[1];
+        const bool probe_result_ok =
+            sim.result_pulses == 1 && sim.sampled_result == expected[0][0];
+
+        std::cout << "PEAK_ILA_CHECK input_match=" << probe_input_ok
+                  << " result_pulses=" << sim.result_pulses
+                  << " result_match=" << probe_result_ok << "\n";
+
+        if (mismatches == 0 && sim.any_cycles == 2 && sim.all_cycles == 2 &&
+            sim.skew_cycles == 0 && probe_input_ok && probe_result_ok) {
             std::cout << "MODULE CHECK PASSED\n";
             return 0;
         }

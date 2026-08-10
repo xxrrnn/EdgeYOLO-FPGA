@@ -53,7 +53,13 @@ module DCIM_Array #(
     input  wire [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0]    tile_obuf_ext_addra,
     input  wire [NUM_TILES*BUF_DATA_WIDTH-1:0]          tile_obuf_ext_dina,
     output wire [NUM_TILES*BUF_DATA_WIDTH-1:0]          tile_obuf_ext_douta,
-    output wire [NUM_TILES-1:0]                         tile_obuf_ext_douta_valid
+    output wire [NUM_TILES-1:0]                         tile_obuf_ext_douta_valid,
+
+    // Minimal peak-TOPS evidence exported to the BD-level ILA.
+    output wire [NUM_TILES-1:0]                         peak_compute_mask,
+    output wire [31:0]                                  peak_dcim_input,
+    output wire                                         peak_result_valid,
+    output wire [31:0]                                  peak_result_data
 );
 
     wire [NUM_TILES-1:0] tile_done;
@@ -112,6 +118,13 @@ module DCIM_Array #(
     wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_obuf_wr_data;
     wire [NUM_TILES*STRB_WIDTH-1:0]     tile_obuf_wr_strb;
 
+    // The result probe is output channel 0 of Tile 0, exactly as it is packed
+    // into the first host-visible INT8/INT32 OBUF word.
+    assign peak_result_valid = tile_obuf_wr_valid[0] &&
+                               (tile_obuf_wr_addr[0 +: TILE_OBUF_ADDR_WIDTH] ==
+                                out_base_addrs_r[0 +: TILE_OBUF_ADDR_WIDTH]);
+    assign peak_result_data  = tile_obuf_wr_data[31:0];
+
     generate
         genvar i;
         for (i = 0; i < NUM_TILES; i = i + 1) begin : gen_tiles
@@ -123,11 +136,18 @@ module DCIM_Array #(
             wire [BUF_ADDR_WIDTH-1:0]     t_wr_addr_full;
             wire [BUF_DATA_WIDTH-1:0]     t_wr_data;
             wire [STRB_WIDTH-1:0]         t_wr_strb;
+            wire                          t_peak_compute_fire;
+            wire [31:0]                   t_peak_dcim_input;
 
             assign tile_obuf_wr_valid[i] = t_wr_valid;
             assign tile_obuf_wr_addr[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH] = t_wr_addr_full[TILE_OBUF_ADDR_WIDTH-1:0];
             assign tile_obuf_wr_data[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = t_wr_data;
             assign tile_obuf_wr_strb[i*STRB_WIDTH +: STRB_WIDTH] = t_wr_strb;
+            assign peak_compute_mask[i] = t_peak_compute_fire;
+
+            if (i == 0) begin : gen_peak_tile0
+                assign peak_dcim_input = t_peak_dcim_input;
+            end
 
             // tile_ibuf Port B → Tile IBUF 读接口（无仲裁器，直连）
             wire                      t_ibuf_rd_valid;  // Tile → tile_ibuf: 读请求
@@ -169,7 +189,9 @@ module DCIM_Array #(
                 .obuf_wr_ready(1'b1),
                 .obuf_wr_addr(t_wr_addr_full),
                 .obuf_wr_data(t_wr_data),
-                .obuf_wr_strb(t_wr_strb)
+                .obuf_wr_strb(t_wr_strb),
+                .peak_compute_fire(t_peak_compute_fire),
+                .peak_dcim_input(t_peak_dcim_input)
             );
 
             // Per-tile tile_ibuf 实例（chip-v3: 512KB XPM, Port B 直连 Tile）
