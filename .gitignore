@@ -104,6 +104,8 @@ sim/lite_bd_export/**
 # Runtime outputs and temporary probes
 # ==============================================================================
 output/**
+TEST/end2end/output/**
+temp/
 
 # Downloaded model packages and external algorithm repos
 weihgts/
