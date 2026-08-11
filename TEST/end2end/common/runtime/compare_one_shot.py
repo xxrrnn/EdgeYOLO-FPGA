@@ -21,6 +21,8 @@ GMT = REPO / "rtl" / "tb" / "lite_bd" / "module_tb"
 LOWERING = COMMON_ROOT / "compiler" / "lowering"
 UTILS_ROOT = REPO / "TEST" / "utils"
 END2END_ROOT = COMMON_ROOT.parent
+YOLO_MODEL_ROOT = END2END_ROOT / "yolo" / "model"
+RESNET_MODEL_ROOT = END2END_ROOT / "resnet" / "model"
 for p in (UTILS_ROOT, UNIT_TB, END2END_ROOT / "yolo", END2END_ROOT / "resnet", GMT, LOWERING):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
@@ -95,7 +97,19 @@ def _conv_dqa_fp32(feat: np.ndarray, meta, npz, mode: str, *, relu: bool = True)
     accum = cols.astype(matmul_dtype) @ weights[:, :cols.shape[1]].T
     scale = npz["dqa_scale"].astype(np.float32)[:meta.out_ch]
     bias = npz["dqa_bias"].astype(np.float32)[:meta.out_ch]
-    dqa = accum.astype(np.float32) * scale[None, :] + bias[None, :]
+    # FPGA DQA: integer accum → FP32, then FP mul/add.
+    # INT16 uses int64→fp32 (drops low bits when |acc| > 2^24); INT8 uses
+    # int32→fp32 which is exact for typical early-layer accumulators.
+    # Host float32 mul/add still drifts ~1 ULP vs the board, so finish the
+    # affine in float64 and round once to float32.
+    if mode == "int16":
+        acc_f = accum.astype(np.float32)
+    else:
+        acc_f = accum.astype(np.float64)
+    dqa = (
+        acc_f.astype(np.float64) * scale.astype(np.float64)
+        + bias.astype(np.float64)
+    ).astype(np.float32)
     if relu:
         dqa = np.maximum(dqa, 0.0)
     oh, ow = out_hw(h, w, meta)
@@ -106,19 +120,21 @@ def run_yolo_compiler_golden(image_path: Path, mode: str, max_layers: int | None
                              parsed_override: str | None = None) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     unit_run = _load_unit_tb_run()
     parsed_dir = Path(parsed_override) if parsed_override else (
-        REPO / "model" / "yolov5n_coco50k_qat" / ("parsed_int16" if mode == "int16" else "parsed_int8")
+        YOLO_MODEL_ROOT / ("parsed_int16" if mode == "int16" else "parsed_int8")
     )
     network_json = parsed_dir / "network.json"
     parsed = json.loads(network_json.read_text())
-    qa_reciprocal_multiply = (
-        parsed.get("quantization_semantics") == "int8_values_widened_to_int16"
-    )
+    # FPGA WB stores qa_scale = float32(1/act_scale) and multiplies; legacy
+    # divide-by-act_scale can diverge on half-up boundaries and amplify through
+    # later layers. Always mirror the hardware QA multiply for one-shot compare.
+    qa_reciprocal_multiply = True
     unit_run.ACT_SCALE = float(parsed.get("input_act_scale", unit_run.ACT_SCALE))
     img = unit_run.load_image(str(image_path))
     if mode == "int16":
         padded, _ratio, _pad = unit_run.letterbox(img, unit_run.IMG_SIZE_YOLO)
         fp32 = padded.astype(np.float32) / 255.0
-        cur = np.clip(np.round(fp32 / float(unit_run.ACT_SCALE)), -32768, 32767).astype(np.int16)
+        qscale = np.float32(1.0 / float(unit_run.ACT_SCALE))
+        cur = np.clip(np.round(fp32 * qscale), -32768, 32767).astype(np.int16)
     else:
         q, _ratio, _pad, _orig = unit_run.preprocess_yolov5n(img)
         cur = q
@@ -190,8 +206,8 @@ def _resnet_parsed_dir(mode: str, override: str | None) -> Path:
     if override:
         return Path(override)
     if mode == "int16":
-        return REPO / "model" / "resnet18" / "parsed_vai_int16_widened"
-    return REPO / "model" / "resnet18" / "parsed_vai"
+        return RESNET_MODEL_ROOT / "parsed_vai_int16_widened"
+    return RESNET_MODEL_ROOT / "parsed_vai"
 
 
 def _load_resnet_input(image_path: Path, parsed_dir: Path) -> np.ndarray:
