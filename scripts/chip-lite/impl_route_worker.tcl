@@ -62,15 +62,17 @@ if {[catch {
     # used during placement. Do not reload constraints here.
     open_checkpoint $sourceDcp
 
+    # Cap phys_opt, route, and post-route repair to the same per-worker budget.
+    # With 8 workers and ROUTE_THREADS=16 this bounds aggregate demand to 128.
+    use_route_threads
     phys_opt_design -directive $physDirectiveWorker
     report_timing_summary -file [file normalize "$routeDir/post_phys_opt_timing_summary.rpt"]
 
-    use_route_threads
     route_design -directive $routeDirectiveWorker
-    use_vivado_threads
 
     phys_opt_design -directive AggressiveExplore
     phys_opt_design -hold_fix
+    use_vivado_threads
 
     set routeDcp [file normalize "$routeDir/post_route.dcp"]
     write_checkpoint -force $routeDcp

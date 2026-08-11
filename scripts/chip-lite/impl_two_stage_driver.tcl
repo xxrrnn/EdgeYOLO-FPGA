@@ -56,5 +56,25 @@ proc run_two_stage_impl {sourceDcp} {
         set ::twoStageBitWritten 1
         puts "INFO: canonical bitstream/debug probes written once for selected winner."
     }
+
+    # Refresh the Markdown after write_bitstream/write_debug_probes so its
+    # artifact links reflect what was actually produced, not merely expected.
+    set winnerFile [file normalize "$ImplOutputDir/two_stage_winner.txt"]
+    set raceRoot ""
+    if {[file exists $winnerFile]} {
+        set fp [open $winnerFile r]
+        while {[gets $fp line] >= 0} {
+            if {[regexp {^RACE_ROOT\t(.+)$} $line -> value]} { set raceRoot $value }
+        }
+        close $fp
+    }
+    set summaryScript [file normalize "$ScriptDir/impl_two_stage_summary.sh"]
+    if {$raceRoot ne "" && [file exists $summaryScript]} {
+        set summaryCommand [list env "BUILD_TAG=$runTag" "RACE_ROOT=$raceRoot" \
+            "VIVADO=[info nameofexecutable]" bash $summaryScript]
+        if {[catch {exec {*}$summaryCommand >@stdout 2>@stderr} summaryErr]} {
+            puts "WARNING: failed to refresh two-stage Markdown summary: $summaryErr"
+        }
+    }
     return [list $routeWns $routeWhs]
 }

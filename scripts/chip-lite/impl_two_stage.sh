@@ -10,10 +10,12 @@ cd "$repo_root"
 
 tag="${BUILD_TAG:-$(git rev-parse --short HEAD 2>/dev/null || date +%y%m%d_%H%M)}"
 vivado_bin="${VIVADO:-vivado}"
-place_threads="${PLACE_THREADS:-32}"
-route_threads="${ROUTE_THREADS:-32}"
+place_threads="${PLACE_THREADS:-24}"
+route_threads="${ROUTE_THREADS:-16}"
 vivado_threads="${VIVADO_THREADS:-32}"
-route_top_k="${IMPL_ROUTE_TOP_K:-3}"
+place_top_n="${IMPL_PLACE_TOP_N:-0}"
+route_variant_count="${IMPL_ROUTE_VARIANTS:-4}"
+route_task_limit="${IMPL_ROUTE_TOP_K:-0}"
 min_wns="${RACE_MIN_WNS_NS:-0.05}"
 min_whs="${RACE_MIN_WHS_NS:-0.02}"
 race_id="${RACE_ID:-$(date +%y%m%d_%H%M%S)}"
@@ -27,7 +29,13 @@ route_root="$race_root/route"
 log_root="$race_root/logs"
 summary_root="$race_root/summary"
 
-place_directives=(ExtraTimingOpt Explore Default)
+# Format: candidate key | top-level directive | optional subdirective list.
+place_strategies=(
+  "ExtraTimingOpt|ExtraTimingOpt|"
+  "Explore|Explore|"
+  "Default|Default|"
+  "SSI_SpreadLogicHigh|SSI_SpreadLogic_high|"
+)
 route_variants=(
   "AggressiveExplore|NoTimingRelaxation"
   "AggressiveExplore|AggressiveExplore"
@@ -39,13 +47,21 @@ if [[ ! -f "$source_dcp" ]]; then
   echo "ERROR: missing shared post_opt checkpoint: $source_dcp" >&2
   exit 1
 fi
-if [[ ! "$route_top_k" =~ ^[1-9][0-9]*$ ]]; then
-  echo "ERROR: IMPL_ROUTE_TOP_K must be a positive integer" >&2
+if [[ ! "$place_top_n" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: IMPL_PLACE_TOP_N must be a non-negative integer (0 means ceil(place_count/2))" >&2
   exit 1
 fi
-if (( route_top_k > 8 )); then
-  echo "WARNING: limiting IMPL_ROUTE_TOP_K=$route_top_k to 8"
-  route_top_k=8
+if [[ ! "$route_variant_count" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: IMPL_ROUTE_VARIANTS must be a positive integer" >&2
+  exit 1
+fi
+if (( route_variant_count > ${#route_variants[@]} )); then
+  echo "WARNING: limiting IMPL_ROUTE_VARIANTS=$route_variant_count to ${#route_variants[@]}"
+  route_variant_count="${#route_variants[@]}"
+fi
+if [[ ! "$route_task_limit" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: IMPL_ROUTE_TOP_K must be a non-negative integer (0 means unlimited)" >&2
+  exit 1
 fi
 if [[ "$resume_after_place" != "0" && "$resume_after_place" != "1" ]]; then
   echo "ERROR: RACE_RESUME_AFTER_PLACE must be 0 or 1" >&2
@@ -77,7 +93,7 @@ timing_summary_value() {
 
 echo "[two-stage] tag=$tag race_id=$race_id"
 echo "[two-stage] source=$source_dcp"
-echo "[two-stage] place=${#place_directives[@]}x${place_threads} threads; route_top_k=${route_top_k}x${route_threads} threads"
+echo "[two-stage] place=${#place_strategies[@]}x${place_threads} threads; place_top_n=${place_top_n}; route_variants=${route_variant_count}; route_threads=${route_threads}"
 echo "[two-stage] resume_after_place=$resume_after_place"
 
 # -----------------------------------------------------------------------------
@@ -86,9 +102,10 @@ echo "[two-stage] resume_after_place=$resume_after_place"
 # -----------------------------------------------------------------------------
 place_pids=()
 place_names=()
-for idx in "${!place_directives[@]}"; do
-  directive="${place_directives[$idx]}"
-  candidate="place${idx}_${directive}"
+for idx in "${!place_strategies[@]}"; do
+  strategy="${place_strategies[$idx]}"
+  IFS='|' read -r strategy_key directive subdirective <<<"$strategy"
+  candidate="place${idx}_${strategy_key}"
   candidate_dir="$place_root/$candidate"
   place_names+=("$candidate")
   if [[ "$resume_after_place" == "1" ]]; then
@@ -99,6 +116,7 @@ for idx in "${!place_directives[@]}"; do
   setsid env \
     BUILD_TAG="$tag" SOURCE_DCP="$source_dcp" RACE_ROOT="$race_root" \
     IMPL_CANDIDATE="$candidate" PLACE_DIRECTIVE="$directive" \
+    PLACE_SUBDIRECTIVE="$subdirective" \
     PLACE_THREADS="$place_threads" ROUTE_THREADS="$route_threads" \
     VIVADO_THREADS="$vivado_threads" \
     "$vivado_bin" -mode batch \
@@ -151,35 +169,32 @@ fi
 sort -t $'\t' -k2,2gr -k3,3gr -k4,4n "$sortable" >>"$ranking"
 mapfile -t ranked_lines < <(tail -n +2 "$ranking")
 
+available_places="${#ranked_lines[@]}"
+if (( place_top_n == 0 )); then
+  place_top_n=$(( (available_places + 1) / 2 ))
+fi
+if (( place_top_n > available_places )); then
+  echo "WARNING: limiting IMPL_PLACE_TOP_N=$place_top_n to available places=$available_places"
+  place_top_n="$available_places"
+fi
+
 echo "[two-stage] post-place ranking:"
 column -t -s $'\t' "$ranking" 2>/dev/null || cat "$ranking"
 
 # -----------------------------------------------------------------------------
-# Stage 2: route the top-N placements first. Only after every available ranked
-# placement has received the base route do additional slots explore alternate
-# routes. Therefore IMPL_ROUTE_TOP_K=3 means exactly rank0/rank1/rank2 -> route.
+# Stage 2: Cartesian expansion of the top half of ranked placements and all
+# requested routing variants. Four places -> top two -> 2 x 4 = 8 route workers.
 # -----------------------------------------------------------------------------
 declare -a route_specs=()
-add_route_spec() {
-  local rank="$1" variant="$2"
-  (( rank < ${#ranked_lines[@]} )) || return 0
-  (( variant < ${#route_variants[@]} )) || return 0
-  # The portfolio below is intentionally unique. Avoid expanding an empty
-  # array here: Bash 4.x treats it as unbound under `set -u`.
-  route_specs+=("$rank|$variant")
-}
-
-add_route_spec 0 0
-add_route_spec 1 0
-add_route_spec 2 0
-add_route_spec 0 1
-add_route_spec 1 1
-add_route_spec 2 1
-add_route_spec 0 2
-add_route_spec 0 3
-if (( ${#route_specs[@]} > route_top_k )); then
-  route_specs=("${route_specs[@]:0:route_top_k}")
+for ((rank = 0; rank < place_top_n; rank++)); do
+  for ((variant = 0; variant < route_variant_count; variant++)); do
+    route_specs+=("$rank|$variant")
+  done
+done
+if (( route_task_limit > 0 && ${#route_specs[@]} > route_task_limit )); then
+  route_specs=("${route_specs[@]:0:route_task_limit}")
 fi
+echo "[two-stage] selected_places=$place_top_n route_tasks=${#route_specs[@]}"
 
 route_pids=()
 route_names=()
@@ -267,6 +282,10 @@ cp -f "$winner_dir/post_route_util.rpt" "$impl_dir/post_route_util.rpt"
   printf "WINNER_WHS\t%s\n" "$winner_whs"
   printf "WINNER_DCP\t%s\n" "$winner_dcp"
 } >"$impl_dir/two_stage_winner.txt"
+
+BUILD_TAG="$tag" RACE_ROOT="$race_root" VIVADO="$vivado_bin" \
+  RACE_MIN_WNS_NS="$min_wns" RACE_MIN_WHS_NS="$min_whs" \
+  bash "$repo_root/scripts/chip-lite/impl_two_stage_summary.sh"
 
 echo "[two-stage] route ranking:"
 column -t -s $'\t' "$route_summary" 2>/dev/null || cat "$route_summary"

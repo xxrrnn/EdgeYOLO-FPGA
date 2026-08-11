@@ -11,14 +11,20 @@ proc env_required {name} {
     return [string trim $::env($name)]
 }
 
+proc env_string_default {name default} {
+    if {![info exists ::env($name)]} { return $default }
+    return [string trim $::env($name)]
+}
+
 proc write_place_status {status detail} {
-    global candidateDir candidateName placeDirectiveWorker ppWns
+    global candidateDir candidateName placeDirectiveWorker placeSubdirectiveWorker ppWns
     file mkdir $candidateDir
     set fp [open [file normalize "$candidateDir/status.txt"] w]
     puts $fp "STATUS\t$status"
     puts $fp "DETAIL\t$detail"
     puts $fp "CANDIDATE\t$candidateName"
     puts $fp "PLACE\t$placeDirectiveWorker"
+    puts $fp "PLACE_SUBDIRECTIVE\t$placeSubdirectiveWorker"
     if {[info exists ppWns]} { puts $fp "POST_PLACE_WNS\t$ppWns" }
     puts $fp "TIME\t[clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]"
     close $fp
@@ -28,6 +34,7 @@ set sourceDcp            [file normalize [env_required SOURCE_DCP]]
 set raceRoot             [file normalize [env_required RACE_ROOT]]
 set candidateName        [env_required IMPL_CANDIDATE]
 set placeDirectiveWorker [env_required PLACE_DIRECTIVE]
+set placeSubdirectiveWorker [env_string_default PLACE_SUBDIRECTIVE ""]
 set candidateDir         [file normalize "$raceRoot/place/$candidateName"]
 file mkdir $candidateDir
 
@@ -37,7 +44,7 @@ if {![file exists $sourceDcp]} {
 }
 
 puts "INFO: two-stage place worker: $candidateName"
-puts "INFO: source=$sourceDcp directive=$placeDirectiveWorker threads=$placeThreads"
+puts "INFO: source=$sourceDcp directive=$placeDirectiveWorker subdirective='$placeSubdirectiveWorker' threads=$placeThreads"
 
 if {[catch {
     open_checkpoint $sourceDcp
@@ -52,7 +59,11 @@ if {[catch {
 
     catch {set_param place.ILREnabled false}
     use_place_threads
-    place_design -directive $placeDirectiveWorker
+    if {$placeSubdirectiveWorker eq ""} {
+        place_design -directive $placeDirectiveWorker
+    } else {
+        place_design -directive $placeDirectiveWorker -subdirective $placeSubdirectiveWorker
+    }
     use_vivado_threads
 
     set placeDcp [file normalize "$candidateDir/post_place.dcp"]

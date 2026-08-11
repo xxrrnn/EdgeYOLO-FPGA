@@ -113,14 +113,18 @@ vivado -mode batch -source TEST/tops/fpga/synth_dcim_stream_ooc.tcl
 
 ```bash
 BUILD_TAG=tops_ila_ranked FLOW_MODE=project IMPL_FLOW=two_stage \
-IMPL_ROUTE_TOP_K=3 PLACE_THREADS=32 ROUTE_THREADS=32 SYNTH_JOBS=128 \
+IMPL_PLACE_TOP_N=0 IMPL_ROUTE_VARIANTS=4 \
+PLACE_THREADS=24 ROUTE_THREADS=16 SYNTH_JOBS=128 \
 vivado -mode batch -source scripts/chip-lite/run.tcl
 ```
 
 `run.tcl` 先完成 OOC/IP 综合、顶层综合和 `opt_design`，随后从本轮自动生成的
-`post_opt.dcp` 并行运行 `ExtraTimingOpt`、`Explore`、`Default` 三个唯一 place，
-按 WNS、TNS 和失败端点数排序。默认排名前三的 place 各自进入一次主
-phys_opt/route；只有 `IMPL_ROUTE_TOP_K>3` 时才追加高排名候选的备选路线。最终按
+`post_opt.dcp` 并行运行 `ExtraTimingOpt`、`Explore`、`Default`，以及
+SLR-aware 的 `SSI_SpreadLogic_high` 四个唯一 place，按
+WNS、TNS 和失败端点数排序。默认
+`IMPL_PLACE_TOP_N=0` 表示取前一半并向上取整，即选 top-2；每个入选 place 展开
+4种 phys_opt/route 组合，共8个 routing worker。每个 worker 的 phys_opt、route 和
+post-route 修复均受 `ROUTE_THREADS=16` 限制，总并发上限约128 CPU线程。最终按
 timing 状态、WNS、WHS 选择获胜项，只对 winner 发布统一的 `post_route.dcp`、
 `top.bit` 和 `top.ltx`。设置 `IMPL_FLOW=sequential` 可退回原有顺序 retry；
 `IMPL_FLOW=full_race` 保留为不筛选的诊断备选。Project run 已经保存综合 DCP，因此默认跳过重复的
@@ -135,9 +139,13 @@ timing 状态、WNS、WHS 选择获胜项，只对 winner 发布统一的 `post_
 `make resume TAG=tops_ila_ranked FROM=opt`，无需重新综合；也仍支持从单个
 `post_place.dcp` 或 `post_phys_opt.dcp` 继续调试。
 
-同一生产脚本已通过 `impl_rank_smoke` 小 RTL 实测：3 个 place 全部成功，top-2
-严格只启动2个 route，两个 route 均为 `WNS=+1.358 ns`、`WHS=+0.088 ns`，
-最终返回 `RANK_SMOKE_PASS` 并正确发布 winner DCP。复现方法见
+每次完成后还会生成 `build/lite/<tag>/summary/two_stage_impl_summary.md`：顶部直接
+给出推荐 winner、验收裕量和 `.bit/.ltx/.dcp` 链接，随后列出全部 place 和 route
+的 WNS/TNS/WHS/THS、失败端点和错误原因；同目录的两个 TSV 便于脚本继续处理。
+
+同一生产脚本已通过 `impl_rank_smoke` 小 RTL 实测：4 个 place 全部成功，top-2
+展开4种 route，严格启动8个 route；8个结果均为 `WNS=+1.358 ns`、
+`WHS=+0.088 ns`，最终正确发布 winner DCP 和 Markdown 汇总。复现方法见
 `TEST/tops/fpga/impl_rank_smoke/README.md`。
 
 最终8-Tile OOC预检结果保存在

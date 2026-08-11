@@ -18,12 +18,12 @@ RUN_TCL     = $(SCRIPT_DIR)/run.tcl
 
 FROM       ?=
 VIVADO_THREADS ?= 32
-PLACE_THREADS  ?= 32
-ROUTE_THREADS  ?= 32
+PLACE_THREADS  ?= 24
+ROUTE_THREADS  ?= 16
 SYNTH_JOBS     ?= 128
 IMPL_FLOW      ?= two_stage
-IMPL_ROUTE_TOP_K ?= 3
-IMPL_ROUTE_JOBS ?= 4
+IMPL_PLACE_TOP_N ?= 0
+IMPL_ROUTE_VARIANTS ?= 4
 IMPL_JOBS      ?= 8
 RACE_PLACE_THREADS ?= 16
 RACE_ROUTE_THREADS ?= 16
@@ -36,7 +36,7 @@ RACE_INCREMENTAL_ATTEMPTS ?= 4
 TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%y%m%d_%H%M)
 
 # BUILD_TAG 统一传入 Vivado（无论用户是否手动指定 TAG 都传入，保证 projPath 确定）
-_TAG_ENV = BUILD_TAG=$(TAG) VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(PLACE_THREADS) ROUTE_THREADS=$(ROUTE_THREADS) SYNTH_JOBS=$(SYNTH_JOBS) IMPL_FLOW=$(IMPL_FLOW) IMPL_JOBS=$(IMPL_JOBS) IMPL_ROUTE_TOP_K=$(IMPL_ROUTE_TOP_K) IMPL_ROUTE_JOBS=$(IMPL_ROUTE_JOBS) RACE_MIN_WNS_NS=$(RACE_MIN_WNS_NS) RACE_MIN_WHS_NS=$(RACE_MIN_WHS_NS)
+_TAG_ENV = BUILD_TAG=$(TAG) VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(PLACE_THREADS) ROUTE_THREADS=$(ROUTE_THREADS) SYNTH_JOBS=$(SYNTH_JOBS) IMPL_FLOW=$(IMPL_FLOW) IMPL_JOBS=$(IMPL_JOBS) IMPL_PLACE_TOP_N=$(IMPL_PLACE_TOP_N) IMPL_ROUTE_VARIANTS=$(IMPL_ROUTE_VARIANTS) RACE_MIN_WNS_NS=$(RACE_MIN_WNS_NS) RACE_MIN_WHS_NS=$(RACE_MIN_WHS_NS)
 
 _BUILD_DIR  = build/lite/$(TAG)
 _LOG_DIR    = $(_BUILD_DIR)/logs
@@ -138,19 +138,19 @@ help:
 	@echo ""
 	@echo "EdgeYOLO-FPGA-lite Build Targets"
 	@echo "================================="
-	@echo "  make synth              综合到 routing/bit/ltx 的完整流程（默认 place-rank-top3-route）"
+	@echo "  make synth              完整流程（默认 4-place→top-half→每个4-route）"
 	@echo "  make synth-to-opt       只跑到 post_opt.dcp，用于 impl-race"
 	@echo "  make synth TAG=foo      Project Mode，指定 tag"
 	@echo "  make synth-np TAG=foo   Non-Project Mode（需已有同 TAG 的 bd 产物）"
 	@echo "  make bd    TAG=foo      只跑 BD（1_build + 2_bd，为 nonproj 做准备）"
-	@echo "  make resume TAG=foo FROM=opt    从 post_opt 恢复 place-rank-top3-route"
-	@echo "      3 个唯一 place 并行，排名后只让 top-3 进入 route"
+	@echo "  make resume TAG=foo FROM=opt    从 post_opt 恢复 ranked implementation"
+	@echo "      4 个 place 并行，默认取前2名；每名4条 route，共8个16线程 worker"
 	@echo "  make resume TAG=foo FROM=place  从单个 post_place checkpoint 续跑"
 	@echo "  make impl-race TAG=foo IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16"
 	@echo "      IMPL_JOBS 最大为 8；可用 RACE_MIN_WNS_NS/RACE_MIN_WHS_NS 设置验收裕量"
 	@echo "    FROM 可选: opt | place | phys_opt"
-	@echo "  make synth PLACE_THREADS=32 ROUTE_THREADS=32 SYNTH_JOBS=128"
-	@echo "      place/route 各最多 3 个 Vivado 并行，约使用 96 个 CPU 线程"
+	@echo "  make synth PLACE_THREADS=24 ROUTE_THREADS=16 SYNTH_JOBS=128"
+	@echo "      place 阶段约96线程；route 阶段8x16，约128线程"
 	@echo ""
 	@echo "默认 TAG: git short sha"
 	@echo "唯一产物根目录: build/lite/<tag>/"
@@ -159,4 +159,5 @@ help:
 	@echo "  ImplOutputDir implementation checkpoints/reports/race attempts"
 	@echo "  bitstreams/   timing-met per-attempt bitstreams"
 	@echo "  summary/      impl-race TSV/Markdown summary"
+	@echo "                two-stage flow: two_stage_impl_summary.md + place/route TSV"
 	@echo ""
