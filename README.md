@@ -43,7 +43,7 @@ python run.py
 
 不需要填写模型、图片、编译产物或 XDMA 工具路径。`run.py` 会检查 bitstream 和八个
 PT/ONNX 输入的 SHA256；若 workload 尚不存在，会自动编译到
-`output/compiled/80832ec_attempt1/`，随后运行默认图片的四个 workload：
+`TEST/end2end/output/compiled/80832ec_attempt1/`，随后运行默认图片的四个 workload：
 
 | 网络 | `run.py` 选项 | 模型数值 | FPGA accumulator |
 | --- | --- | --- | --- |

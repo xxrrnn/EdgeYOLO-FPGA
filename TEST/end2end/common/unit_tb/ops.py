@@ -1,7 +1,7 @@
 """
 ops.py  ——  YOLOv5n FPGA 算子库（可拼接）
 
-所有算子均已通过片上硬件验证（见 TEST/end2end/HARDWARE_TESTS.md）：
+所有算子均已通过片上硬件验证（见 TEST/end2end/README.md）：
   - conv    : DCIM + im2col_unit + DQA + QA 全链路（L3~L4 PASS）
   - add     : VPU element-wise add INT8（L1 PASS）
   - concat  : channel-wise concat（host numpy，L1 PASS）

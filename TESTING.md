@@ -36,7 +36,8 @@ python run.py --verilator-only
 ```
 
 用例验证 8 个 Tile/DCIM 同时激活、32 个输出 word 与 golden 一致，并输出 VCD、SVG 和
-JSON/Markdown 报告到 `output/verilator_peak_int8/`。它不包含 XDMA/HBM/Xilinx 加密 IP，
+JSON/Markdown 报告到 `TEST/end2end/output/verilator_peak_int8/`。它不包含 XDMA/HBM/Xilinx
+加密 IP，
 所以不能替代上板或 VCS/route 验证。
 
 ## 4. 单图 FPGA 测试
@@ -48,9 +49,9 @@ JSON/Markdown 报告到 `output/verilator_peak_int8/`。它不包含 XDMA/HBM/Xi
 python run.py
 ```
 
-首次运行会自动将四套 workload 编译到 `output/compiled/80832ec_attempt1/`。每套 workload
-依次执行输入预处理、上传、decoder 执行、输出读回、compiler golden feature compare、
-host boundary 和结果绘制。
+首次运行会自动将四套 workload 编译到 `TEST/end2end/output/compiled/80832ec_attempt1/`。
+每套 workload 依次执行输入预处理、上传、decoder 执行、输出读回、compiler golden
+feature compare、host boundary 和结果绘制。
 
 默认判定：
 
@@ -89,9 +90,9 @@ python run.py --acceptance --vcs-server user@server --vcs-remote-repo /path/to/E
 20 ImageNet × (ResNet INT8 + widened INT16) = 40
 ```
 
-汇总写入 `output/acceptance/acceptance_report.json` 与 `.md`。YOLO 不以固定检测数量作为
-20 图通用硬门限；ResNet 也不以样例 Top-1 必须正确作为硬门限，硬件门禁是 FPGA feature
-与 compiler golden 的数值一致性。
+汇总写入 `TEST/end2end/output/acceptance/acceptance_report.json` 与 `.md`。YOLO 不以固定
+检测数量作为 20 图通用硬门限；ResNet 也不以样例 Top-1 必须正确作为硬门限，硬件门禁是
+FPGA feature 与 compiler golden 的数值一致性。
 
 ## 6. 峰值与时序口径
 
