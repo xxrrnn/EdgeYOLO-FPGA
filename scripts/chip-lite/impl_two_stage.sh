@@ -17,6 +17,7 @@ route_top_k="${IMPL_ROUTE_TOP_K:-3}"
 min_wns="${RACE_MIN_WNS_NS:-0.05}"
 min_whs="${RACE_MIN_WHS_NS:-0.02}"
 race_id="${RACE_ID:-$(date +%y%m%d_%H%M%S)}"
+resume_after_place="${RACE_RESUME_AFTER_PLACE:-0}"
 
 impl_dir="$repo_root/build/lite/$tag/ImplOutputDir"
 source_dcp="${SOURCE_DCP:-$impl_dir/post_opt.dcp}"
@@ -46,6 +47,10 @@ if (( route_top_k > 8 )); then
   echo "WARNING: limiting IMPL_ROUTE_TOP_K=$route_top_k to 8"
   route_top_k=8
 fi
+if [[ "$resume_after_place" != "0" && "$resume_after_place" != "1" ]]; then
+  echo "ERROR: RACE_RESUME_AFTER_PLACE must be 0 or 1" >&2
+  exit 1
+fi
 
 mkdir -p "$place_root" "$route_root" "$log_root" "$summary_root"
 
@@ -73,6 +78,7 @@ timing_summary_value() {
 echo "[two-stage] tag=$tag race_id=$race_id"
 echo "[two-stage] source=$source_dcp"
 echo "[two-stage] place=${#place_directives[@]}x${place_threads} threads; route_top_k=${route_top_k}x${route_threads} threads"
+echo "[two-stage] resume_after_place=$resume_after_place"
 
 # -----------------------------------------------------------------------------
 # Stage 1: unique place directives. Repeating the same directive from the same
@@ -84,6 +90,10 @@ for idx in "${!place_directives[@]}"; do
   directive="${place_directives[$idx]}"
   candidate="place${idx}_${directive}"
   candidate_dir="$place_root/$candidate"
+  place_names+=("$candidate")
+  if [[ "$resume_after_place" == "1" ]]; then
+    continue
+  fi
   mkdir -p "$candidate_dir"
   echo "[two-stage] launch place candidate $candidate"
   setsid env \
@@ -97,14 +107,17 @@ for idx in "${!place_directives[@]}"; do
       -log "$log_root/${candidate}.vivado.log" \
       >"$log_root/${candidate}.stdout.log" 2>&1 &
   place_pids+=("$!")
-  place_names+=("$candidate")
 done
 
-for pid in "${place_pids[@]}"; do
-  if ! wait "$pid"; then
-    echo "WARNING: a place worker exited non-zero; status files will decide eligibility"
-  fi
-done
+if [[ "$resume_after_place" == "1" ]]; then
+  echo "[two-stage] reusing completed post-place checkpoints from $place_root"
+else
+  for pid in "${place_pids[@]}"; do
+    if ! wait "$pid"; then
+      echo "WARNING: a place worker exited non-zero; status files will decide eligibility"
+    fi
+  done
+fi
 
 ranking="$summary_root/place_ranking.tsv"
 printf "candidate\twns\ttns\tfailing_endpoints\tdirective\tdcp\n" >"$ranking"
@@ -151,11 +164,8 @@ add_route_spec() {
   local rank="$1" variant="$2"
   (( rank < ${#ranked_lines[@]} )) || return 0
   (( variant < ${#route_variants[@]} )) || return 0
-  local key="${rank}|${variant}"
-  local existing
-  for existing in "${route_specs[@]}"; do
-    [[ "$existing" == "$key" ]] && return 0
-  done
+  # The portfolio below is intentionally unique. Avoid expanding an empty
+  # array here: Bash 4.x treats it as unbound under `set -u`.
   route_specs+=("$rank|$variant")
 }
 

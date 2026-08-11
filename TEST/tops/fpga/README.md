@@ -134,6 +134,10 @@ DCP 生成一次 DRC、功耗报告、bitstream 和 `.ltx`。设置 `IMPL_FLOW=s
 分钟重读完整网表约束。如果刻意使用旧 DCP 验证新版 `chip_timing.xdc`，设置
 `RACE_RELOAD_XDC=1`。
 
+如果 place 已全部完成而调度进程在 routing 前中断，可复用原 race 目录继续，避免
+重新布局：设置原来的 `RACE_ID`，并加 `RACE_RESUME_AFTER_PLACE=1` 后再次执行
+`RESUME_FROM=opt` 流程。
+
 最终8-Tile OOC预检结果保存在
 `output/tops/fpga/dcim_stream_ooc_timingopt5/`：0 error、0 critical warning，
 `WNS=+1.741 ns @ 250 MHz`，最大普通信号扇出748。与repeat功能基线相比，CLB LUT
