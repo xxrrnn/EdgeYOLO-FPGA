@@ -134,6 +134,41 @@ module DCIM_Activation_Stream #(
 
     integer word_lane;
     integer nibble_lane;
+    // The ping-pong payload is qualified by buffer_valid, which is reset and
+    // cleared below.  Keep the 2048 data bits out of the asynchronous-reset
+    // tree; otherwise synthesis creates a 4084-load reset net in every Tile.
+    always_ff @(posedge clk) begin
+        if (active && ibuf0_data_valid && ibuf1_data_valid) begin
+            if (is_int16) begin
+                for (word_lane = 0; word_lane < BUF_DATA_WIDTH/16; word_lane = word_lane + 1) begin
+                    for (nibble_lane = 0; nibble_lane < 4; nibble_lane = nibble_lane + 1) begin
+                        phase_buffer[fill_index][nibble_lane]
+                            [((response_pair*2)*(BUF_DATA_WIDTH/16)+word_lane)*WD1 +: WD1]
+                            <= ibuf0_data[word_lane*16 + (3-nibble_lane)*WD1 +: WD1];
+                        phase_buffer[fill_index][nibble_lane]
+                            [(((response_pair*2+1)*(BUF_DATA_WIDTH/16)+word_lane)*WD1) +: WD1]
+                            <= ibuf1_data[word_lane*16 + (3-nibble_lane)*WD1 +: WD1];
+                    end
+                end
+            end else begin
+                for (word_lane = 0; word_lane < BUF_DATA_WIDTH/8; word_lane = word_lane + 1) begin
+                    phase_buffer[fill_index][0]
+                        [((response_pair*2)*(BUF_DATA_WIDTH/8)+word_lane)*WD1 +: WD1]
+                        <= ibuf0_data[word_lane*8 + 4 +: WD1];
+                    phase_buffer[fill_index][1]
+                        [((response_pair*2)*(BUF_DATA_WIDTH/8)+word_lane)*WD1 +: WD1]
+                        <= ibuf0_data[word_lane*8 +: WD1];
+                    phase_buffer[fill_index][0]
+                        [(((response_pair*2+1)*(BUF_DATA_WIDTH/8)+word_lane)*WD1) +: WD1]
+                        <= ibuf1_data[word_lane*8 + 4 +: WD1];
+                    phase_buffer[fill_index][1]
+                        [(((response_pair*2+1)*(BUF_DATA_WIDTH/8)+word_lane)*WD1) +: WD1]
+                        <= ibuf1_data[word_lane*8 +: WD1];
+                end
+            end
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             active <= 1'b0;
@@ -145,9 +180,6 @@ module DCIM_Activation_Stream #(
             consume_phase <= '0;
             consume_job <= '0;
             consume_repeat <= '0;
-            for (int b = 0; b < 2; b = b + 1)
-                for (int p = 0; p < 4; p = p + 1)
-                    phase_buffer[b][p] <= '0;
         end else if (clear) begin
             active <= 1'b0;
             issue_done <= 1'b0;
@@ -172,34 +204,6 @@ module DCIM_Activation_Stream #(
             issue_done <= 1'b0;
 
             if (active && ibuf0_data_valid && ibuf1_data_valid) begin
-                if (is_int16) begin
-                    for (word_lane = 0; word_lane < BUF_DATA_WIDTH/16; word_lane = word_lane + 1) begin
-                        for (nibble_lane = 0; nibble_lane < 4; nibble_lane = nibble_lane + 1) begin
-                            phase_buffer[fill_index][nibble_lane]
-                                [((response_pair*2)*(BUF_DATA_WIDTH/16)+word_lane)*WD1 +: WD1]
-                                <= ibuf0_data[word_lane*16 + (3-nibble_lane)*WD1 +: WD1];
-                            phase_buffer[fill_index][nibble_lane]
-                                [(((response_pair*2+1)*(BUF_DATA_WIDTH/16)+word_lane)*WD1) +: WD1]
-                                <= ibuf1_data[word_lane*16 + (3-nibble_lane)*WD1 +: WD1];
-                        end
-                    end
-                end else begin
-                    for (word_lane = 0; word_lane < BUF_DATA_WIDTH/8; word_lane = word_lane + 1) begin
-                        phase_buffer[fill_index][0]
-                            [((response_pair*2)*(BUF_DATA_WIDTH/8)+word_lane)*WD1 +: WD1]
-                            <= ibuf0_data[word_lane*8 + 4 +: WD1];
-                        phase_buffer[fill_index][1]
-                            [((response_pair*2)*(BUF_DATA_WIDTH/8)+word_lane)*WD1 +: WD1]
-                            <= ibuf0_data[word_lane*8 +: WD1];
-                        phase_buffer[fill_index][0]
-                            [(((response_pair*2+1)*(BUF_DATA_WIDTH/8)+word_lane)*WD1) +: WD1]
-                            <= ibuf1_data[word_lane*8 + 4 +: WD1];
-                        phase_buffer[fill_index][1]
-                            [(((response_pair*2+1)*(BUF_DATA_WIDTH/8)+word_lane)*WD1) +: WD1]
-                            <= ibuf1_data[word_lane*8 +: WD1];
-                    end
-                end
-
                 if ({1'b0, response_pair} + 1'b1 >= pairs_per_job) begin
                     buffer_valid[fill_index] <= 1'b1;
                     fill_index <= ~fill_index;

@@ -228,6 +228,20 @@ module DCIM_Result_Stream #(
         end
     end
 
+    // Payload registers are protected by their corresponding valid bits.
+    // Separating them from the asynchronous-reset process removes another
+    // Tile-local reset tree without changing any externally visible state.
+    always_ff @(posedge clk) begin
+        if (scratch_rd_valid)
+            partial_data <= scratch_rd_data;
+        if (core_out_fire)
+            sum_data <= accumulated_core;
+        if (writer_accept) begin
+            second_word0 <= sum_data[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+            second_word1 <= sum_data[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             first_row_reg <= 1'b1;
@@ -243,16 +257,12 @@ module DCIM_Result_Stream #(
             for (delay_i = 0; delay_i < READ_DELAY; delay_i = delay_i + 1)
                 read_job_pipe[delay_i] <= '0;
             partial_valid <= 1'b0;
-            partial_data <= '0;
             partial_job <= '0;
             partial_rsp_count <= '0;
             core_result_count <= '0;
             sum_valid <= 1'b0;
-            sum_data <= '0;
             sum_job <= '0;
             second_half_valid <= 1'b0;
-            second_word0 <= '0;
-            second_word1 <= '0;
             second_base <= '0;
             second_is_last <= 1'b0;
             row_done <= 1'b0;
@@ -296,7 +306,6 @@ module DCIM_Result_Stream #(
 
                 if (scratch_rd_valid) begin
                     partial_valid <= 1'b1;
-                    partial_data <= scratch_rd_data;
                     partial_job <= partial_rsp_count;
                     partial_rsp_count <= partial_rsp_count + 1'b1;
                 end else if (partial_consume) begin
@@ -306,7 +315,6 @@ module DCIM_Result_Stream #(
                 if (sum_in_ready) begin
                     sum_valid <= core_out_fire;
                     if (core_out_fire) begin
-                        sum_data <= accumulated_core;
                         sum_job <= core_result_count;
                         core_result_count <= core_result_count + 1'b1;
                     end
@@ -325,8 +333,6 @@ module DCIM_Result_Stream #(
 
                 if (writer_accept) begin
                     second_half_valid <= 1'b1;
-                    second_word0 <= sum_data[2*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
-                    second_word1 <= sum_data[3*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
                     second_base <= next_out_base + 2;
                     second_is_last <= writer_job_last && writer_repeat_last;
                     if (writer_job_last && benchmark_repeat_reg &&
