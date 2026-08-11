@@ -115,12 +115,18 @@ puts "INFO: synth_1 completed: $_synth_status"
 
 open_run synth_1 -name synth_1
 
-write_checkpoint -force [file normalize "$SynOutputDir/post_synth.dcp"]
 reload_xdc
-report_timing_summary -file [file normalize "$SynOutputDir/post_synth_timing_summary.rpt"]
-report_utilization -file [file normalize "$SynOutputDir/post_synth_util.rpt"]
-report_utilization -hierarchical -hierarchical_depth 5 \
-    -file [file normalize "$SynOutputDir/area_report_hierarchical.rpt"]
+if {$fullSynthReports} {
+    # synth_1 already owns a project-run DCP. These duplicate diagnostic
+    # artifacts are optional because they add substantial serialization time.
+    write_checkpoint -force [file normalize "$SynOutputDir/post_synth.dcp"]
+    report_timing_summary -file [file normalize "$SynOutputDir/post_synth_timing_summary.rpt"]
+    report_utilization -file [file normalize "$SynOutputDir/post_synth_util.rpt"]
+    report_utilization -hierarchical -hierarchical_depth 5 \
+        -file [file normalize "$SynOutputDir/area_report_hierarchical.rpt"]
+} else {
+    puts "INFO: skipping duplicate post-synth DCP/reports (set FULL_SYNTH_REPORTS=1 to enable)."
+}
 
 set _dsp_total [llength [get_cells -hierarchical -filter {REF_NAME == DSP48E2}]]
 puts "INFO: Synthesis complete. DSP48E2 total: $_dsp_total"
@@ -155,6 +161,27 @@ if {[info exists stopAfter] && $stopAfter eq "opt"} {
 puts "\n========== Step 3-6: Implementation with Retry =========="
 
 set optDcp [file normalize "$ImplOutputDir/post_opt.dcp"]
+
+# Linux project-mode defaults to a two-stage parallel race. Three unique place
+# directives run first; only the best-ranked placements proceed to a compact
+# routing portfolio. Set IMPL_FLOW=sequential to retain the legacy retry loop.
+set _implFlow "two_stage"
+if {[info exists ::env(IMPL_FLOW)] && [string trim $::env(IMPL_FLOW)] ne ""} {
+    set _implFlow [string tolower [string trim $::env(IMPL_FLOW)]]
+}
+if {$_implFlow eq "two_stage" && $::tcl_platform(platform) eq "unix"} {
+    source [file normalize "$thisScriptDir/impl_two_stage_driver.tcl"]
+    lassign [run_two_stage_impl $optDcp] wns whs
+    if {$wns < 0.0 || $whs < 0.0} {
+        error "\[two_stage_impl\] Best routed result misses timing: WNS=${wns}ns WHS=${whs}ns"
+    }
+    puts "INFO: 3_synth_project complete — two-stage implementation successful."
+    return
+}
+if {$_implFlow eq "two_stage"} {
+    puts "WARNING: two-stage flow is unavailable on this platform; using sequential retry."
+}
+
 set bestWns -999.0
 set bestStrategy ""
 set timingMet 0

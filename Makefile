@@ -18,9 +18,11 @@ RUN_TCL     = $(SCRIPT_DIR)/run.tcl
 
 FROM       ?=
 VIVADO_THREADS ?= 32
-PLACE_THREADS  ?= 8
+PLACE_THREADS  ?= 32
 ROUTE_THREADS  ?= 32
 SYNTH_JOBS     ?= 128
+IMPL_FLOW      ?= two_stage
+IMPL_ROUTE_TOP_K ?= 3
 IMPL_JOBS      ?= 4
 RACE_PLACE_THREADS ?= 16
 RACE_ROUTE_THREADS ?= 16
@@ -35,7 +37,7 @@ RACE_INCREMENTAL_ATTEMPTS ?= 4
 TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%y%m%d_%H%M)
 
 # BUILD_TAG 统一传入 Vivado（无论用户是否手动指定 TAG 都传入，保证 projPath 确定）
-_TAG_ENV = BUILD_TAG=$(TAG) VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(PLACE_THREADS) ROUTE_THREADS=$(ROUTE_THREADS) SYNTH_JOBS=$(SYNTH_JOBS)
+_TAG_ENV = BUILD_TAG=$(TAG) VIVADO_THREADS=$(VIVADO_THREADS) PLACE_THREADS=$(PLACE_THREADS) ROUTE_THREADS=$(ROUTE_THREADS) SYNTH_JOBS=$(SYNTH_JOBS) IMPL_FLOW=$(IMPL_FLOW) IMPL_ROUTE_TOP_K=$(IMPL_ROUTE_TOP_K)
 
 _BUILD_DIR  = build/lite/$(TAG)
 _LOG_DIR    = $(_BUILD_DIR)/logs
@@ -143,12 +145,14 @@ help:
 	@echo "  make synth TAG=foo      Project Mode，指定 tag"
 	@echo "  make synth-np TAG=foo   Non-Project Mode（需已有同 TAG 的 bd 产物）"
 	@echo "  make bd    TAG=foo      只跑 BD（1_build + 2_bd，为 nonproj 做准备）"
-	@echo "  make resume TAG=foo FROM=place  从 checkpoint 续跑"
+	@echo "  make resume TAG=foo FROM=opt    从 post_opt 启动两阶段实现竞速"
+	@echo "      默认 3 个 place 并行、筛选后只跑 3 个 route；IMPL_ROUTE_TOP_K 可调整"
+	@echo "  make resume TAG=foo FROM=place  从单个 post_place checkpoint 续跑"
 	@echo "  make impl-race TAG=foo IMPL_JOBS=8 RACE_PLACE_THREADS=16 RACE_ROUTE_THREADS=16"
 	@echo "      IMPL_JOBS 最大为 8；可用 RACE_MIN_WNS_NS/RACE_MIN_WHS_NS 设置验收裕量"
 	@echo "    FROM 可选: opt | place | phys_opt"
-	@echo "  make synth VIVADO_THREADS=32 PLACE_THREADS=8 ROUTE_THREADS=32 SYNTH_JOBS=128"
-	@echo "      Vivado 单进程线程上限通常为 32；SYNTH_JOBS 用于 OOC/IP 并行"
+	@echo "  make synth VIVADO_THREADS=32 PLACE_THREADS=32 ROUTE_THREADS=32 SYNTH_JOBS=128"
+	@echo "      两阶段流程最多并行 3 个 Vivado 进程，约使用 96 个 CPU 线程"
 	@echo ""
 	@echo "默认 TAG: git short sha"
 	@echo "唯一产物根目录: build/lite/<tag>/"

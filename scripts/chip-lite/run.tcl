@@ -73,6 +73,13 @@ if {$flowMode ne "project" && $flowMode ne "nonproj"} {
 }
 puts "INFO: FLOW_MODE = $flowMode"
 
+# Implementation policy is parsed before project opening so a two-stage
+# RESUME_FROM=opt can operate directly on the DCP without taking the .xpr lock.
+set implFlow "two_stage"
+if {[info exists ::env(IMPL_FLOW)] && [string trim $::env(IMPL_FLOW)] ne ""} {
+    set implFlow [string tolower [string trim $::env(IMPL_FLOW)]]
+}
+
 # --- 解析 RESUME_FROM ---
 set resumeFrom ""
 if {[info exists ::env(RESUME_FROM)]} {
@@ -101,7 +108,9 @@ if {[catch {
 
 if {$resumeFrom ne ""} {
     # 加载已有 checkpoint 继续实现
-    if {$flowMode eq "project"} {
+    set _dcpOnlyResume [expr {$resumeFrom eq "opt" && $implFlow eq "two_stage" &&
+                              $::tcl_platform(platform) eq "unix"}]
+    if {$flowMode eq "project" && !$_dcpOnlyResume} {
         set xpr [file normalize "$sourceProjPath/${projName}.xpr"]
         if {![file exists $xpr]} { error "Project not found: $xpr — run full flow first (or set SOURCE_TAG)." }
         open_project $xpr
@@ -122,7 +131,14 @@ if {$resumeFrom ne ""} {
     # - 未设置则按 config.tcl 中的 retryStrategies 依次尝试，直到 timing 收敛
     set _singlePassMode [info exists ::env(PLACE_DIRECTIVE)]
 
-    if {$resumeFrom eq "opt" && !$_singlePassMode} {
+    set _implFlow $implFlow
+
+    if {$resumeFrom eq "opt" && !$_singlePassMode &&
+        $_implFlow eq "two_stage" && $::tcl_platform(platform) eq "unix"} {
+        source [file normalize "$thisScriptDir/impl_two_stage_driver.tcl"]
+        lassign [run_two_stage_impl $dcp] wns whs
+
+    } elseif {$resumeFrom eq "opt" && !$_singlePassMode} {
         # ── 多策略 Retry 循环（从 post_opt.dcp 重复 place→phys_opt→route）──
         puts "INFO: RESUME_FROM=opt — entering retry loop ([llength $retryStrategies] strategies)"
         set _best_wns -9999
@@ -261,10 +277,16 @@ if {$resumeFrom ne ""} {
         if {$wns < 0} {
             puts "WARNING: Forcing bitstream despite WNS=${wns}ns (FORCE_BITSTREAM=1, threshold=${_forceThresh}ns)"
         }
-        set_property CONFIG_MODE SPIx4 [current_design]
-        set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
-        write_bitstream -verbose -force -bin_file [file normalize "$ImplOutputDir/top.bit"]
-        puts "INFO: Bitstream written."
+        set _topBit [file normalize "$ImplOutputDir/top.bit"]
+        if {[file exists $_topBit]} {
+            puts "INFO: Bitstream already written by selected two-stage winner."
+        } else {
+            set_property CONFIG_MODE SPIx4 [current_design]
+            set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
+            write_bitstream -verbose -force -bin_file $_topBit
+            write_debug_probes -force [file normalize "$ImplOutputDir/top.ltx"]
+            puts "INFO: Bitstream written."
+        }
     } else {
         puts "ERROR: Timing not met (WNS=${wns}ns) — bitstream skipped."
     }

@@ -149,6 +149,17 @@ proc env_int_or_default {name default} {
     return $default
 }
 
+proc env_bool_or_default {name default} {
+    if {![info exists ::env($name)] || [string trim $::env($name)] eq ""} {
+        return $default
+    }
+    set value [string tolower [string trim $::env($name)]]
+    if {$value in {1 true yes on}} { return 1 }
+    if {$value in {0 false no off}} { return 0 }
+    puts "WARNING: $name='$value' is invalid; using $default."
+    return $default
+}
+
 proc clamp_vivado_threads {name value} {
     if {$value > 32} {
         puts "WARNING: $name=$value exceeds Vivado 2024.2 limit; using 32."
@@ -158,8 +169,10 @@ proc clamp_vivado_threads {name value} {
 }
 
 set synthJobs [env_int_or_default SYNTH_JOBS 128]
+set fullSynthReports [env_bool_or_default FULL_SYNTH_REPORTS 0]
+set raceReloadXdc [env_bool_or_default RACE_RELOAD_XDC 0]
 set vivadoThreads [clamp_vivado_threads VIVADO_THREADS [env_int_or_default VIVADO_THREADS 32]]
-set placeThreads  [clamp_vivado_threads PLACE_THREADS  [env_int_or_default PLACE_THREADS 8]]
+set placeThreads  [clamp_vivado_threads PLACE_THREADS  [env_int_or_default PLACE_THREADS 32]]
 set routeThreads  [clamp_vivado_threads ROUTE_THREADS  [env_int_or_default ROUTE_THREADS 32]]
 
 proc use_vivado_threads {} {
@@ -183,6 +196,8 @@ catch {set_param place.ILREnabled false}
 puts "INFO: config.tcl loaded — project: $projName  tag: $runTag  part: $part"
 puts "INFO: projPath = $projPath"
 puts "INFO: Vivado parallelism — VIVADO_THREADS=$vivadoThreads  PLACE_THREADS=$placeThreads  ROUTE_THREADS=$routeThreads  SYNTH_JOBS=$synthJobs"
+puts "INFO: FULL_SYNTH_REPORTS=$fullSynthReports (project run DCP is always retained)"
+puts "INFO: RACE_RELOAD_XDC=$raceReloadXdc (normally use constraints embedded in post_opt.dcp)"
 
 # ==============================================================================
 # 邮件通知配置（126邮箱，留空则不启用）

@@ -109,20 +109,30 @@ vivado -mode batch -source TEST/tops/fpga/synth_dcim_stream_ooc.tcl
 ```
 
 需要交互检查 OOC 网表时才加 `DCIM_OOC_WRITE_DCP=1`。完整设计推荐先只生成共享
-`post_opt.dcp`，随后从同一 checkpoint 只跑默认的强时序路线：
+`post_opt.dcp`，随后从同一 checkpoint 启动两阶段实现竞速：
 
 ```bash
 BUILD_TAG=tops_ila_timing_hardened STOP_AFTER=opt FLOW_MODE=project \
 vivado -mode batch -source scripts/chip-lite/run.tcl
 
 BUILD_TAG=tops_ila_timing_hardened SOURCE_TAG=tops_ila_timing_hardened \
-RESUME_FROM=opt PLACE_DIRECTIVE=ExtraTimingOpt FLOW_MODE=project \
+RESUME_FROM=opt FLOW_MODE=project PLACE_THREADS=32 ROUTE_THREADS=32 \
+IMPL_ROUTE_TOP_K=3 \
 vivado -mode batch -source scripts/chip-lite/run.tcl
 ```
 
-该单路线使用 `ExtraTimingOpt → AggressiveExplore → NoTimingRelaxation`，route 后再做
-增量 `AggressiveExplore` 与 hold fix。`config.tcl` 中的多策略 retry 仍作为兜底保留，
-但不再是正常构建的前提。
+第一阶段从相同 `post_opt.dcp` 并行运行 `ExtraTimingOpt`、`Explore`、`Default`
+三个不重复的 place，按 post-place WNS/TNS/失败端点排序；第二阶段默认只并行运行
+三个 routing 任务：最佳 place 的主路线、次佳 place 的主路线、最佳 place 的备选
+route。每个进程最多 32 线程，因此两阶段各约使用 96 个 CPU 线程。最终只对获胜
+DCP 生成一次 DRC、功耗报告、bitstream 和 `.ltx`。设置 `IMPL_FLOW=sequential`
+可退回原有顺序 retry。Project run 已经保存综合 DCP，因此默认跳过重复的
+`SynOutputDir/post_synth.dcp` 和完整 post-synth 诊断报告；仅在需要这些中间产物时
+设置 `FULL_SYNTH_REPORTS=1`。
+
+两阶段 worker 默认复用 `post_opt.dcp` 内嵌的 XDC/Pblock，避免每个 place 再花约数
+分钟重读完整网表约束。如果刻意使用旧 DCP 验证新版 `chip_timing.xdc`，设置
+`RACE_RELOAD_XDC=1`。
 
 最终8-Tile OOC预检结果保存在
 `output/tops/fpga/dcim_stream_ooc_timingopt5/`：0 error、0 critical warning，
