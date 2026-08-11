@@ -1,7 +1,8 @@
 """EdgeYOLO-FPGA 的自包含运行入口。
 
 新克隆的仓库已经包含唯一发布 bitstream、当前 PT/ONNX/解析模型以及 20+20 张
-测试图片，不需要另外下载或填写文件路径。编译产物会按需生成到 ``output/``。
+测试图片，不需要另外下载或填写文件路径。编译与推理产物会按需生成到
+``TEST/end2end/output/``。
 
 常用命令::
 
@@ -41,7 +42,7 @@ REPO_ROOT = TEST_ROOT.parent
 COMMON_ROOT = END2END_ROOT / "common"
 UTILS_ROOT = TEST_ROOT / "utils"
 UNIT_TB = COMMON_ROOT / "unit_tb"
-OUT_DIR = REPO_ROOT / "output"
+OUT_DIR = END2END_ROOT / "output"
 INFERENCE_OUT_DIR = OUT_DIR / "inference"
 WORK_DIR_ENV = "EDGEYOLO_RUNS_BASE"
 
@@ -80,7 +81,9 @@ YOLO_ONE_SHOT_PROFILES = {
             "int8": COMPILED_DIR / "yolo_coco_int8",
             "int16": COMPILED_DIR / "yolo_coco_int16_native",
         },
-        "expect_detections": 3,
+        # Default COCO smoke image 000000000139.jpg @ conf=0.15 / iou=0.45
+        # yields 5 boxes (3 chair + 2 tv) on both Python golden and FPGA.
+        "expect_detections": 5,
         "output_group": "yolo_coco",
     },
 }
@@ -200,7 +203,7 @@ def run_one_shot_fpga(
     recompile: bool,
     yolo_parsed_dir: Path | None = None,
     yolo_expect_detections: int | None = 1,
-    resnet_expect_top1: int | None = 1,
+    resnet_expect_top1: int | None = None,
     result_group: str | None = None,
 ) -> Path:
     """Run a full one-shot FPGA workload, compare features, and run the host boundary."""
@@ -214,7 +217,11 @@ def run_one_shot_fpga(
         # max_abs <= 0.00930. Other maintained paths pass the strict 1e-3 gate.
         compare_atol = 1e-2 if network == "yolo" and precision == "int16" else 1e-3
     out_dir = out_root / output_group / f"one_shot_{tag}"
-    feat_dir = out_dir / "features"
+    img_path = Path(img_path).resolve()
+    stem = img_path.stem
+    # Isolate named features per image so a later smoke/acceptance image cannot
+    # accidentally compare against a previous image's leftover PAN blobs.
+    feat_dir = out_dir / "features" / stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if recompile or not (build_dir / "plan.json").exists():
@@ -222,7 +229,6 @@ def run_one_shot_fpga(
         print(f"  [compile] {reason}, compiling {label} full one-shot", flush=True)
         _compile_one_shot_artifact(network, precision, build_dir, yolo_parsed_dir if network == "yolo" else None)
 
-    stem = img_path.stem
     file_prefix = f"{stem}_{net_dir}_{tag}_fpga_oneshot"
     primary = out_dir / f"{file_prefix}.bin"
     timing_json = out_dir / f"{file_prefix}_timing.json"
@@ -233,6 +239,8 @@ def run_one_shot_fpga(
     named_outputs = bool(plan.get("host_io", {}).get("outputs"))
     if named_outputs:
         feat_dir.mkdir(parents=True, exist_ok=True)
+
+    resnet_parsed_dir = ONE_SHOT_COMPILE_PARSED.get((network, precision)) if network == "resnet" else None
 
     run_cmd = [
         sys.executable, str(runtime / "hw_runner_win.py"),
@@ -264,6 +272,8 @@ def run_one_shot_fpga(
         compare_cmd.extend(["--output-dir", str(feat_dir)])
     if network == "yolo" and yolo_parsed_dir is not None:
         compare_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
+    if network == "resnet" and resnet_parsed_dir is not None:
+        compare_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
     _run_checked(compare_cmd)
 
     head_cmd = [
@@ -284,6 +294,8 @@ def run_one_shot_fpga(
         if yolo_parsed_dir is not None:
             head_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
     else:
+        if resnet_parsed_dir is not None:
+            head_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
         if resnet_expect_top1 is not None:
             head_cmd.extend(["--expect-top1", str(resnet_expect_top1)])
     _run_checked(head_cmd)
@@ -698,7 +710,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--conf", type=float, default=0.15)
     ap.add_argument("--iou", type=float, default=0.45)
     ap.add_argument("--out-dir", default=None,
-                    help="output root; default is output/inference")
+                    help="output root; default is TEST/end2end/output/inference")
     ap.add_argument("--one-shot", action="store_true",
                     help="run full one-shot FPGA path for selected networks/precisions, then compare and run host heads")
     ap.add_argument("--one-shot-yolo-int8", action="store_true",
@@ -714,7 +726,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--one-shot-no-soft-reset", action="store_true",
                     help="do not issue decoder soft reset before one-shot execution")
     ap.add_argument("--one-shot-recompile", action="store_true",
-                    help="rebuild the selected workload under output/ before FPGA execution")
+                    help="rebuild the selected workload under TEST/end2end/output/ before FPGA execution")
     ap.add_argument("--one-shot-yolo-parsed-dir", default=None,
                     help="override YOLO parsed dir for one-shot compile/input/host head")
     ap.add_argument("--one-shot-yolo-expect-detections", type=int, default=None,

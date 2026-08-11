@@ -168,9 +168,10 @@ def _yolo_class_name(class_id: int, parsed_dir: Path) -> str:
 def _resnet_parsed_dir(mode: str, override: str | None) -> Path:
     if override:
         return Path(override)
+    base = REPO / "TEST" / "end2end" / "resnet" / "model"
     if mode == "int16":
-        return REPO / "model" / "resnet18" / "parsed_vai_int16_widened"
-    return REPO / "model" / "resnet18" / "parsed_vai"
+        return base / "parsed_vai_int16_widened"
+    return base / "parsed_vai"
 
 
 def _run_resnet(plan: dict, image_path: Path, output: Path | None,
@@ -248,7 +249,11 @@ def main() -> None:
             raise SystemExit("YOLO host head needs --output-dir with PAN_P3/PAN_P4/PAN_P5 blobs")
         result = _run_yolo(
             plan, Path(args.image), Path(args.output_dir),
-            Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else REPO / "model" / "yolov5n" / "parsed",
+            Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else (
+                REPO / "TEST" / "end2end" / "yolo" / "model" / (
+                    "parsed_int16" if str(mode) == "int16" else "parsed_int8"
+                )
+            ),
             args.conf, args.iou, args.expect_detections,
         )
     elif "resnet" in network:

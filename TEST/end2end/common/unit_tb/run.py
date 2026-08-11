@@ -36,7 +36,7 @@ sys.path.insert(0, str(END2END_ROOT / "resnet"))
 sys.path.insert(0, str(REPO_ROOT / "rtl" / "tb" / "lite_bd" / "module_tb"))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
-RUNS_BASE = REPO_ROOT / "output" / "e2e"
+RUNS_BASE = END2END_ROOT / "output" / "e2e"
 IMG_SIZE_YOLO = 320
 IMG_SIZE_RESNET = 224
 
