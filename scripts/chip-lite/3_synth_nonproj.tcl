@@ -190,6 +190,10 @@ set chipRtlFiles [list \
     [file normalize "$srcDir/chip/DCIM_Array.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Activation_Stream.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Weight_Cache.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Partial_Sum_RAM.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Result_Stream.sv"] \
     [file normalize "$srcDir/chip/tile_ibuf.v"] \
     [file normalize "$srcDir/chip/tile_obuf.v"] \
 ]

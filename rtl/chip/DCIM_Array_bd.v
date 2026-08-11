@@ -133,6 +133,8 @@ module DCIM_Array_bd #(
     // and all existing address/data mappings remain unchanged.
     output wire [NUM_TILES-1:0]          peak_compute_mask,
     output wire [31:0]                   peak_dcim_input,
+    output wire [5:0]                    peak_job,
+    output wire [1:0]                    peak_phase,
     output wire                          peak_result_valid,
     output wire [31:0]                   peak_result_data
 );
@@ -173,12 +175,18 @@ module DCIM_Array_bd #(
     end
 
     reg                                  cfg_start;
+    reg                                  cfg_batch_enable;
+    reg                                  cfg_benchmark_repeat;
     reg [2:0]                            cfg_mode;
     reg [ACC_UBD_WD-1:0]                 cfg_acc_depth;
     reg [IBUF_ADDR_WIDTH-1:0]            cfg_act_base_addr;
     reg [NUM_TILES*IBUF_ADDR_WIDTH-1:0]  cfg_wei_base_addrs;
     reg [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] cfg_out_base_addrs;
     reg [NUM_TILES-1:0]                  cfg_tile_mask;
+    reg [31:0]                           cfg_batch_count;
+    reg [31:0]                           cfg_repeat_count;
+    reg [IBUF_ADDR_WIDTH-1:0]            cfg_act_stride_words;
+    reg [TILE_OBUF_ADDR_WIDTH-1:0]       cfg_out_stride_words;
 
     wire cfg_wr_wei_range = (cfg_wr_addr_d >= `DCIM_REG_WEI_BASE) &&
                             (cfg_wr_addr_d < (`DCIM_REG_WEI_BASE + (NUM_TILES << 2)));
@@ -192,10 +200,16 @@ module DCIM_Array_bd #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             cfg_start         <= 1'b0;
+            cfg_batch_enable  <= 1'b0;
+            cfg_benchmark_repeat <= 1'b0;
             cfg_mode          <= `MODE_INT8;
             cfg_acc_depth     <= {ACC_UBD_WD{1'b0}};
             cfg_act_base_addr <= {IBUF_ADDR_WIDTH{1'b0}};
             cfg_tile_mask     <= {NUM_TILES{1'b1}};
+            cfg_batch_count   <= 32'd1;
+            cfg_repeat_count  <= 32'd1;
+            cfg_act_stride_words <= {IBUF_ADDR_WIDTH{1'b0}};
+            cfg_out_stride_words <= {TILE_OBUF_ADDR_WIDTH{1'b0}};
             for (_i = 0; _i < NUM_TILES; _i = _i + 1) begin
                 cfg_wei_base_addrs[_i*IBUF_ADDR_WIDTH +: IBUF_ADDR_WIDTH] <= {IBUF_ADDR_WIDTH{1'b0}};
                 cfg_out_base_addrs[_i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH] <= {TILE_OBUF_ADDR_WIDTH{1'b0}};
@@ -205,11 +219,21 @@ module DCIM_Array_bd #(
             if (cfg_wr_en_d) begin
                 if (cfg_wr_addr_d == `DCIM_REG_CTRL) begin
                     if (cfg_wr_data_d[0]) cfg_start <= 1'b1;
+                    cfg_batch_enable <= cfg_wr_data_d[1];
+                    cfg_benchmark_repeat <= cfg_wr_data_d[2];
                 end else if (cfg_wr_addr_d == `DCIM_REG_MODE) begin
                     cfg_mode      <= cfg_wr_data_d[2:0];
                     cfg_acc_depth <= cfg_wr_data_d[8 +: ACC_UBD_WD];
                 end else if (cfg_wr_addr_d == `DCIM_REG_ACT_BASE) begin
                     cfg_act_base_addr <= cfg_wr_data_d[IBUF_ADDR_WIDTH-1:0];
+                end else if (cfg_wr_addr_d == `DCIM_REG_BATCH_COUNT) begin
+                    cfg_batch_count <= cfg_wr_data_d;
+                end else if (cfg_wr_addr_d == `DCIM_REG_ACT_STRIDE) begin
+                    cfg_act_stride_words <= cfg_wr_data_d[IBUF_ADDR_WIDTH-1:0];
+                end else if (cfg_wr_addr_d == `DCIM_REG_OUT_STRIDE) begin
+                    cfg_out_stride_words <= cfg_wr_data_d[TILE_OBUF_ADDR_WIDTH-1:0];
+                end else if (cfg_wr_addr_d == `DCIM_REG_REPEAT_COUNT) begin
+                    cfg_repeat_count <= (cfg_wr_data_d == 0) ? 32'd1 : cfg_wr_data_d;
                 end else if (cfg_wr_wei_range) begin
                     cfg_wei_base_addrs[cfg_wr_wei_tile_idx*IBUF_ADDR_WIDTH +: IBUF_ADDR_WIDTH]
                         <= cfg_wr_data_d[IBUF_ADDR_WIDTH-1:0];
@@ -311,6 +335,12 @@ module DCIM_Array_bd #(
         .wei_base_addrs  (cfg_wei_base_addrs),
         .out_base_addrs  (cfg_out_base_addrs),
         .tile_mask       (cfg_tile_mask),
+        .batch_enable    (cfg_batch_enable),
+        .batch_count     (cfg_batch_count),
+        .benchmark_repeat(cfg_benchmark_repeat),
+        .repeat_count    (cfg_repeat_count),
+        .act_stride_words(cfg_act_stride_words),
+        .out_stride_words(cfg_out_stride_words),
         .tile_ibuf_ext_wea    (ibuf_wea_vec),
         .tile_ibuf_ext_ena    (ibuf_ena_vec),
         .tile_ibuf_ext_addra  (ibuf_addra_vec),
@@ -324,6 +354,8 @@ module DCIM_Array_bd #(
         .tile_obuf_ext_douta_valid (),
         .peak_compute_mask         (peak_compute_mask),
         .peak_dcim_input           (peak_dcim_input),
+        .peak_job                  (peak_job),
+        .peak_phase                (peak_phase),
         .peak_result_valid         (peak_result_valid),
         .peak_result_data          (peak_result_data)
     );

@@ -26,7 +26,7 @@
 //   0x6 - DCIM_EXEC  : 触发 DCIM 启动 (写 CTRL 寄存器, 无 body)
 //   0x7 - WAIT_DCIM  : 等待 DCIM Array 完成
 //   0x8 - DCIM_CFG   : 批量寄存器写入 DCIM (N pairs of addr/data)
-//   0x9 - DCIM_LAYER : DCIM layer-level loop (mode/weights once, per-pixel act/out update)
+//   0x9 - DCIM_LAYER : one streamed layer launch (all pixels handled in DCIM Tile)
 //   0xF - END        : 指令序列结束
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -149,7 +149,11 @@ module INST_Decoder #(
         S_CDMA_STRIDE_ISSUE      = 6'd55,
         S_CDMA_STRIDE_WAIT       = 6'd56,
         S_CDMA_STRIDE_DONE       = 6'd57,
-        S_CDMA_STRIDE_NEXT       = 6'd58
+        S_CDMA_STRIDE_NEXT       = 6'd58,
+        S_DCIM_LAYER_CFG_COUNT   = 6'd59,
+        S_DCIM_LAYER_CFG_ASTRIDE = 6'd60,
+        S_DCIM_LAYER_CFG_OSTRIDE = 6'd61,
+        S_DCIM_LAYER_CFG_REPEAT  = 6'd62
     } state_t;
 
     localparam int DCIM_NUM_TILES_L = `DCIM_NUM_TILES;
@@ -189,6 +193,7 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_act_base;
     reg [31:0] dcim_layer_act_stride;
     reg [31:0] dcim_layer_out_stride;
+    reg [31:0] dcim_layer_repeat_count;
 
     // OP_CDMA_STRIDE internal registers
     reg [31:0] cstride_src_msb;
@@ -471,9 +476,25 @@ module INST_Decoder #(
 
             S_DCIM_LAYER_CFG_OUT: begin
                 if (dcim_layer_tile_idx >= DCIM_NUM_TILES_L[DCIM_TILE_IDX_W-1:0] - 1'b1)
-                    next_state = S_DCIM_LAYER_START;
+                    next_state = S_DCIM_LAYER_CFG_COUNT;
                 else
                     next_state = S_DCIM_LAYER_CFG_OUT;
+            end
+
+            S_DCIM_LAYER_CFG_COUNT: begin
+                next_state = S_DCIM_LAYER_CFG_ASTRIDE;
+            end
+
+            S_DCIM_LAYER_CFG_ASTRIDE: begin
+                next_state = S_DCIM_LAYER_CFG_OSTRIDE;
+            end
+
+            S_DCIM_LAYER_CFG_OSTRIDE: begin
+                next_state = S_DCIM_LAYER_CFG_REPEAT;
+            end
+
+            S_DCIM_LAYER_CFG_REPEAT: begin
+                next_state = S_DCIM_LAYER_START;
             end
 
             S_DCIM_LAYER_START: begin
@@ -481,17 +502,15 @@ module INST_Decoder #(
             end
 
             S_DCIM_LAYER_WAIT: begin
-                if (dcim_layer_wait_count >= DCIM_LAYER_WAIT_TIMEOUT)
+                if ((dcim_layer_repeat_count <= 1) &&
+                    (dcim_layer_wait_count >= DCIM_LAYER_WAIT_TIMEOUT))
                     next_state = S_ERROR;
                 else if (dcim_layer_seen_busy && dcim_ready)
                     next_state = S_DCIM_LAYER_NEXT;
             end
 
             S_DCIM_LAYER_NEXT: begin
-                if (dcim_layer_pixel_idx + 1 >= dcim_layer_num_pixels)
-                    next_state = S_NEXT_INST;
-                else
-                    next_state = S_DCIM_LAYER_CFG_ACT;
+                next_state = S_NEXT_INST;
             end
             
             S_NEXT_INST: begin
@@ -585,6 +604,7 @@ module INST_Decoder #(
             cstride_idx <= '0;
             dcim_layer_out_offset <= '0;
             dcim_layer_out_stride <= '0;
+            dcim_layer_repeat_count <= 32'd1;
             dcim_layer_tile_idx <= '0;
             dcim_layer_seen_busy <= 1'b0;
             dcim_layer_wait_count <= '0;
@@ -848,6 +868,8 @@ module INST_Decoder #(
                     dcim_layer_act_base <= body_buffer[4];
                     dcim_layer_act_stride <= body_buffer[5];
                     dcim_layer_out_stride <= body_buffer[6];
+                    dcim_layer_repeat_count <= (body_buffer[7] == 0) ?
+                                               32'd1 : body_buffer[7];
                     for (int i = 0; i < DCIM_NUM_TILES_L; i++) begin
                         dcim_layer_wei_base[i] <= body_buffer[8 + i];
                         dcim_layer_out_base[i] <= body_buffer[8 + DCIM_NUM_TILES_L + i];
@@ -904,14 +926,41 @@ module INST_Decoder #(
                         dcim_layer_out_current <= dcim_layer_out_base[dcim_layer_tile_idx + 1'b1] + dcim_layer_out_offset;
                 end
 
+                S_DCIM_LAYER_CFG_COUNT: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= `DCIM_REG_BATCH_COUNT;
+                    dcim_cfg_wr_data <= dcim_layer_num_pixels;
+                end
+
+                S_DCIM_LAYER_CFG_ASTRIDE: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= `DCIM_REG_ACT_STRIDE;
+                    dcim_cfg_wr_data <= dcim_layer_act_stride;
+                end
+
+                S_DCIM_LAYER_CFG_OSTRIDE: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= `DCIM_REG_OUT_STRIDE;
+                    dcim_cfg_wr_data <= dcim_layer_out_stride;
+                end
+
+                S_DCIM_LAYER_CFG_REPEAT: begin
+                    dcim_cfg_wr_en <= 1'b1;
+                    dcim_cfg_wr_addr <= `DCIM_REG_REPEAT_COUNT;
+                    dcim_cfg_wr_data <= dcim_layer_repeat_count;
+                end
+
                 S_DCIM_LAYER_START: begin
                     dcim_cfg_wr_en <= 1'b1;
                     dcim_cfg_wr_addr <= `DCIM_REG_CTRL;
-                    dcim_cfg_wr_data <= 32'h1;
+                    dcim_cfg_wr_data <= (dcim_layer_repeat_count > 1) ?
+                                        32'h7 : 32'h3;
                     dcim_layer_seen_busy <= 1'b0;
                     dcim_layer_wait_count <= '0;
 `ifdef PROBE_DCIM_LAYER
-                    $display("[%0t] DCIM_LAYER start pixel=%0d/%0d", $time, dcim_layer_pixel_idx, dcim_layer_num_pixels);
+                    $display("[%0t] DCIM_LAYER streamed start pixels=%0d repeats=%0d",
+                             $time, dcim_layer_num_pixels,
+                             dcim_layer_repeat_count);
 `endif
                 end
 
@@ -921,14 +970,11 @@ module INST_Decoder #(
                         dcim_layer_seen_busy <= 1'b1;
 `ifdef PROBE_DCIM_LAYER
                     if (dcim_layer_seen_busy && dcim_ready)
-                        $display("[%0t] DCIM_LAYER pixel done pixel=%0d", $time, dcim_layer_pixel_idx);
+                        $display("[%0t] DCIM_LAYER streamed layer done pixels=%0d", $time, dcim_layer_num_pixels);
 `endif
                 end
 
                 S_DCIM_LAYER_NEXT: begin
-                    dcim_layer_pixel_idx <= dcim_layer_pixel_idx + 1'b1;
-                    dcim_layer_act_current <= dcim_layer_act_current + dcim_layer_act_stride;
-                    dcim_layer_out_offset <= dcim_layer_out_offset + dcim_layer_out_stride;
                     dcim_layer_wait_count <= '0;
                 end
 

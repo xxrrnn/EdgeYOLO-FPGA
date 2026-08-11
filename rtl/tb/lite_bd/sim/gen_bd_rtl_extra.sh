@@ -54,6 +54,10 @@ $REPO_ROOT/rtl/common/uram_tdp_bytewrite.v
 $REPO_ROOT/rtl/chip/tile_ibuf.v
 $REPO_ROOT/rtl/chip/tile_obuf.v
 $REPO_ROOT/rtl/vpu/vpu_buf.v
+$REPO_ROOT/rtl/chip/DCIM_Activation_Stream.sv
+$REPO_ROOT/rtl/chip/DCIM_Weight_Cache.sv
+$REPO_ROOT/rtl/chip/DCIM_Partial_Sum_RAM.sv
+$REPO_ROOT/rtl/chip/DCIM_Result_Stream.sv
 $REPO_ROOT/rtl/chip/DCIM_Tile.sv
 $REPO_ROOT/rtl/chip/ibuf_rd_arbiter.sv
 $REPO_ROOT/rtl/chip/DCIM_Array.sv
@@ -72,6 +76,7 @@ $REPO_ROOT/rtl/vpu/global_buffer_bram.v
 $REPO_ROOT/rtl/vpu/fp_array/fp_mac_array.v
 $REPO_ROOT/rtl/vpu/fp_array/fp_add_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/int32_2_fp32_array.sv
+$REPO_ROOT/rtl/vpu/fp_array/int64_2_fp32_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/fp32_2_int8_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/fp32_2_int16_array.sv
 $REPO_ROOT/rtl/vpu/fp_array/int32_2_fp16_array.sv
@@ -89,6 +94,7 @@ $LITE_GEN/fp32_compare_leq/sim/fp32_compare_leq.v
 $LITE_GEN/fp32_to_int8/sim/fp32_to_int8.v
 $LITE_GEN/fp32_to_fixed8/sim/fp32_to_fixed8.v
 $LITE_GEN/int32_2_fp32/sim/int32_2_fp32.v
+$LITE_GEN/int64_2_fp32/sim/int64_2_fp32.v
 $LITE_GEN/fp32_mult_lane/sim/fp32_mult_lane.v
 $LITE_GEN/fp32_add_lane/sim/fp32_add_lane.v
 $LITE_GEN/fixed32_to_fp32/sim/fixed32_to_fp32.v

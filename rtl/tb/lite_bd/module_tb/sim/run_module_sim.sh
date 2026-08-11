@@ -142,7 +142,10 @@ compile_simv() {
     vcs_elab_opts+=(-debug_access+all)
   fi
   if [[ "$FSDB" == "1" ]]; then
-    vcs_elab_opts+=(-kdb -lca -debug_region+cell+encrypt +vcs+fsdbon)
+    # Novas PLI is already linked explicitly through -P above. Adding
+    # +vcs+fsdbon loads a second, phase-out PLI implementation and can produce
+    # a header-only FSDB (duplicate task definitions, no dumped signals).
+    vcs_elab_opts+=(-kdb -lca -debug_region+cell+encrypt)
   fi
 
   inc=(

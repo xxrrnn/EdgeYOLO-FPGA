@@ -94,6 +94,19 @@ puts "INFO: generate_target simulation for $bdName"
 generate_target {simulation} [get_files $bdFile]
 export_ip_user_files -of_objects [get_files $bdFile] -no_script -sync -force
 
+# The module-reference IP may also carry a synthesized simulation netlist.
+# It is nearly 1 GB for the 8-Tile DCIM and makes VCS export spend tens of
+# minutes scanning a duplicate implementation.  module_tb intentionally
+# compiles the current DCIM_Array_bd RTL and the small module-ref sim wrapper,
+# so the synthesized netlist must not participate in the VCS export.
+if {$simulator eq "vcs"} {
+    set dcimSynthNetlists [get_files -all -quiet "*lite_dcim_array_0_0_sim_netlist.*"]
+    foreach dcimNetlist $dcimSynthNetlists {
+        set_property USED_IN_SIMULATION false $dcimNetlist
+        puts "INFO: VCS export excludes duplicate DCIM synth sim netlist: $dcimNetlist"
+    }
+}
+
 # --- 导出仿真脚本；catch 是必要的，部分 Vivado 版本会打印 ERROR 却返回批处理成功 ---
 puts "INFO: export_simulation → $exportDir"
 set exportArgs [list \

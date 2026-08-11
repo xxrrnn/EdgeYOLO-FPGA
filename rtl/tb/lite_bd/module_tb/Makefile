@@ -67,6 +67,9 @@ DCIM_MODREF_SIM     := $(REPO_ROOT)/bd/lite/ip/lite_dcim_array_0_0/sim/lite_dcim
 #   shell 展开：取 build/lite/ 下最新含 lite.xpr 的目录，组合成 ALT 路径
 _LATEST_BUILD := $(shell ls -dt $(REPO_ROOT)/build/lite/*/lite.xpr 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
 DCIM_MODREF_SIM_ALT := $(if $(_LATEST_BUILD),$(_LATEST_BUILD)/lite.ip_user_files/bd/lite/ip/lite_dcim_array_0_0/sim/lite_dcim_array_0_0.v,)
+# Vivado 2024.2 export_simulation 的 module-ref wrapper 位于 build/<tag>/bd/...，
+# 不一定复制到 lite.ip_user_files。VCS file_info.txt 也直接引用此路径。
+DCIM_MODREF_SIM_BUILD := $(if $(_LATEST_BUILD),$(_LATEST_BUILD)/bd/lite/ip/lite_dcim_array_0_0/sim/lite_dcim_array_0_0.v,)
 SIM_DIR       := $(MODULE_TB_DIR)/sim
 RUN_SCRIPT    := $(SIM_DIR)/run_module_sim.sh
 GOLDEN_PY     := $(MODULE_TB_DIR)/golden_module_tb.py
@@ -175,10 +178,11 @@ check-export:
 		echo "ERROR: 缺少 export（无 $(EXPORT_VCS_DIR)/lite.sh）"; \
 		echo "  → cd $(REPO_ROOT) && vivado -mode batch -source scripts/chip-lite/export_sim.tcl"; \
 		exit 1; }
-	@test -f "$(DCIM_MODREF_SIM)" || test -f "$(DCIM_MODREF_SIM_ALT)" || { \
+	@test -f "$(DCIM_MODREF_SIM)" || test -f "$(DCIM_MODREF_SIM_ALT)" || test -f "$(DCIM_MODREF_SIM_BUILD)" || { \
 		echo "ERROR: 缺少 lite_dcim_array_0_0 仿真 wrapper"; \
 		echo "  → 期望: $(DCIM_MODREF_SIM)"; \
 		echo "  → 或:   $(DCIM_MODREF_SIM_ALT)"; \
+		echo "  → 或:   $(DCIM_MODREF_SIM_BUILD)"; \
 		echo "  → make export（与改 chip_defines/BD 后必须做）"; \
 		exit 1; }
 

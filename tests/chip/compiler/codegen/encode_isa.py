@@ -126,7 +126,8 @@ def encode_dcim_layer(op: Dict[str, Any]) -> List[int]:
 
     Body layout:
       num_pixels, mode_reg, tile_mask_lo, tile_mask_hi,
-      act_base_word, act_stride_words, out_stride_words, reserved,
+      act_base_word, act_stride_words, out_stride_words,
+      benchmark_repeat_count,
       wei_base_words[DCIM_NUM_TILES], out_base_words[DCIM_NUM_TILES]
     """
     wei = list(op["wei_base_words"])
@@ -144,7 +145,7 @@ def encode_dcim_layer(op: Dict[str, Any]) -> List[int]:
         int(op["act_base_word"]),
         int(op["act_stride_words"]),
         int(op["out_stride_words"]),
-        int(op.get("reserved", 0)),
+        int(op.get("benchmark_repeat_count", op.get("reserved", 1))),
     ] + [int(x) for x in wei] + [int(x) for x in out]
     return [header(OP_DCIM_LAYER, len(body) * 4)] + [w & 0xFFFFFFFF for w in body]
 

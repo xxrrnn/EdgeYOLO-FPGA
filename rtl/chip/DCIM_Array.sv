@@ -1,15 +1,11 @@
 `timescale 1ns / 1ns
 `include "chip_defines.vh"
 
-// ============================================================================
-// DCIM_Array - Tile-Array 结构 (chip-v3)
-// ============================================================================
-// chip-v3 变更（在 chip-v2 基础上）：
-//   - 共享 IBUF 拆分为 per-tile tile_ibuf（512KB XPM）
-//   - 删除 ibuf_rd_arbiter（每 Tile 直读本地 tile_ibuf Port B，零仲裁延迟）
-//   - 外部接口：4 个独立 tile_ibuf_ext_* AXI BRAM 端口（CDMA/XDMA 写入各 Tile IBUF）
-// ============================================================================
-
+// Eight independently placed DCIM Tiles with private IBUF/OBUF memories.
+// Both physical ports are reused only while a Tile is active:
+//   IBUF: 2 x 128-bit reads/cycle = the exact DCIM phase demand.
+//   OBUF: 2 x 128-bit writes/cycle = one 512-bit result in two cycles.
+// The host-visible memory map remains pixel-major and unchanged.
 module DCIM_Array #(
     parameter NUM_TILES            = `DCIM_NUM_TILES,
     parameter WD1                  = `DCIM_WD1,
@@ -23,213 +19,220 @@ module DCIM_Array #(
     parameter TILE_IBUF_ADDR_WIDTH = `DCIM_TILE_IBUF_ADDR_WIDTH,
     parameter TILE_OBUF_ADDR_WIDTH = `DCIM_TILE_OBUF_ADDR_WIDTH,
 
-    localparam ACC_UBD_WD = $clog2(ACC+1),
-    localparam STRB_WIDTH = BUF_DATA_WIDTH / 8
+    localparam ACC_UBD_WD = $clog2(ACC + 1),
+    localparam STRB_WIDTH = BUF_DATA_WIDTH / 8,
+    localparam PEAK_JOB_W = $clog2(64)
 )(
-    input  wire                          clk,
-    input  wire                          rst_n,
+    input  wire                              clk,
+    input  wire                              rst_n,
+    input  wire                              start,
+    output wire                              done,
+    output wire                              ready,
 
-    input  wire                          start,
-    output wire                          done,
-    output wire                          ready,
-
-    input  wire [2:0]                    mode,
-    input  wire [ACC_UBD_WD-1:0]         acc_depth,
-    input  wire [BUF_ADDR_WIDTH-1:0]     act_base_addr,
+    input  wire [2:0]                        mode,
+    input  wire [ACC_UBD_WD-1:0]             acc_depth,
+    input  wire [BUF_ADDR_WIDTH-1:0]         act_base_addr,
     input  wire [NUM_TILES*BUF_ADDR_WIDTH-1:0] wei_base_addrs,
     input  wire [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] out_base_addrs,
-    input  wire [NUM_TILES-1:0]          tile_mask,
+    input  wire [NUM_TILES-1:0]              tile_mask,
+    input  wire                              batch_enable,
+    input  wire [31:0]                       batch_count,
+    input  wire                              benchmark_repeat,
+    input  wire [31:0]                       repeat_count,
+    input  wire [BUF_ADDR_WIDTH-1:0]         act_stride_words,
+    input  wire [TILE_OBUF_ADDR_WIDTH-1:0]   out_stride_words,
 
-    // tile_ibuf[0..3] 外部端口（CDMA/XDMA 写入各 Tile IBUF）
-    input  wire [NUM_TILES*STRB_WIDTH-1:0]               tile_ibuf_ext_wea,
-    input  wire [NUM_TILES-1:0]                          tile_ibuf_ext_ena,
-    input  wire [NUM_TILES*TILE_IBUF_ADDR_WIDTH-1:0]     tile_ibuf_ext_addra,
-    input  wire [NUM_TILES*BUF_DATA_WIDTH-1:0]           tile_ibuf_ext_dina,
-    output wire [NUM_TILES*BUF_DATA_WIDTH-1:0]           tile_ibuf_ext_douta,
+    input  wire [NUM_TILES*STRB_WIDTH-1:0]   tile_ibuf_ext_wea,
+    input  wire [NUM_TILES-1:0]              tile_ibuf_ext_ena,
+    input  wire [NUM_TILES*TILE_IBUF_ADDR_WIDTH-1:0] tile_ibuf_ext_addra,
+    input  wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_ibuf_ext_dina,
+    output wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_ibuf_ext_douta,
 
-    // tile_obuf[0..3] 外部端口（CDMA 读取 Tile 结果）
-    input  wire [NUM_TILES*STRB_WIDTH-1:0]              tile_obuf_ext_wea,
-    input  wire [NUM_TILES-1:0]                         tile_obuf_ext_ena,
-    input  wire [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0]    tile_obuf_ext_addra,
-    input  wire [NUM_TILES*BUF_DATA_WIDTH-1:0]          tile_obuf_ext_dina,
-    output wire [NUM_TILES*BUF_DATA_WIDTH-1:0]          tile_obuf_ext_douta,
-    output wire [NUM_TILES-1:0]                         tile_obuf_ext_douta_valid,
+    input  wire [NUM_TILES*STRB_WIDTH-1:0]   tile_obuf_ext_wea,
+    input  wire [NUM_TILES-1:0]              tile_obuf_ext_ena,
+    input  wire [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] tile_obuf_ext_addra,
+    input  wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_obuf_ext_dina,
+    output wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_obuf_ext_douta,
+    output wire [NUM_TILES-1:0]              tile_obuf_ext_douta_valid,
 
-    // Minimal peak-TOPS evidence exported to the BD-level ILA.
-    output wire [NUM_TILES-1:0]                         peak_compute_mask,
-    output wire [31:0]                                  peak_dcim_input,
-    output wire                                         peak_result_valid,
-    output wire [31:0]                                  peak_result_data
+    output wire [NUM_TILES-1:0]              peak_compute_mask,
+    output wire [31:0]                       peak_dcim_input,
+    output wire [PEAK_JOB_W-1:0]             peak_job,
+    output wire [1:0]                        peak_phase,
+    output wire                              peak_result_valid,
+    output wire [31:0]                       peak_result_data
 );
 
     wire [NUM_TILES-1:0] tile_done;
     wire [NUM_TILES-1:0] tile_ready;
 
-    // -----------------------------------------------------------------------
-    // SLR 穿越流水寄存器（ready 上行 + start 下行）
-    // -----------------------------------------------------------------------
+    // One register at the array boundary keeps the existing SLR crossing
+    // strategy and makes start/config arrive at every Tile on the same edge.
     (* shreg_extract = "no", KEEP = "TRUE" *) reg ready_r;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) ready_r <= 1'b1;
-        else        ready_r <= &tile_ready;
-    end
-
     (* shreg_extract = "no", KEEP = "TRUE" *) reg start_r;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) start_r <= 1'b0;
-        else        start_r <= start;
-    end
-
-    // cfg_* pipeline: 与 start_r 同拍到达 Tile（替代 MCP 4.3b）
-    (* shreg_extract = "no" *) reg [2:0]                             mode_r;
-    (* shreg_extract = "no" *) reg [ACC_UBD_WD-1:0]                  acc_depth_r;
-    (* shreg_extract = "no" *) reg [BUF_ADDR_WIDTH-1:0]              act_base_addr_r;
-    (* shreg_extract = "no" *) reg [NUM_TILES*BUF_ADDR_WIDTH-1:0]    wei_base_addrs_r;
+    (* shreg_extract = "no" *) reg [2:0] mode_r;
+    (* shreg_extract = "no" *) reg [ACC_UBD_WD-1:0] acc_depth_r;
+    (* shreg_extract = "no" *) reg [BUF_ADDR_WIDTH-1:0] act_base_addr_r;
+    (* shreg_extract = "no" *) reg [NUM_TILES*BUF_ADDR_WIDTH-1:0] wei_base_addrs_r;
     (* shreg_extract = "no" *) reg [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] out_base_addrs_r;
-    (* shreg_extract = "no" *) reg [NUM_TILES-1:0]                   tile_mask_r;
+    (* shreg_extract = "no" *) reg [NUM_TILES-1:0] tile_mask_r;
+    (* shreg_extract = "no" *) reg batch_enable_r;
+    (* shreg_extract = "no" *) reg [31:0] batch_count_r;
+    (* shreg_extract = "no" *) reg benchmark_repeat_r;
+    (* shreg_extract = "no" *) reg [31:0] repeat_count_r;
+    (* shreg_extract = "no" *) reg [BUF_ADDR_WIDTH-1:0] act_stride_words_r;
+    (* shreg_extract = "no" *) reg [TILE_OBUF_ADDR_WIDTH-1:0] out_stride_words_r;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            mode_r           <= 3'b0;
-            acc_depth_r      <= {ACC_UBD_WD{1'b0}};
-            act_base_addr_r  <= {BUF_ADDR_WIDTH{1'b0}};
-            wei_base_addrs_r <= {(NUM_TILES*BUF_ADDR_WIDTH){1'b0}};
-            out_base_addrs_r <= {(NUM_TILES*TILE_OBUF_ADDR_WIDTH){1'b0}};
-            tile_mask_r      <= {NUM_TILES{1'b1}};
+            ready_r <= 1'b1;
+            start_r <= 1'b0;
+            mode_r <= `MODE_INT8;
+            acc_depth_r <= '0;
+            act_base_addr_r <= '0;
+            wei_base_addrs_r <= '0;
+            out_base_addrs_r <= '0;
+            tile_mask_r <= {NUM_TILES{1'b1}};
+            batch_enable_r <= 1'b0;
+            batch_count_r <= 32'd1;
+            benchmark_repeat_r <= 1'b0;
+            repeat_count_r <= 32'd1;
+            act_stride_words_r <= '0;
+            out_stride_words_r <= '0;
         end else begin
-            mode_r           <= mode;
-            acc_depth_r      <= acc_depth;
-            act_base_addr_r  <= act_base_addr;
+            ready_r <= &(tile_ready | ~tile_mask_r);
+            start_r <= start;
+            mode_r <= mode;
+            acc_depth_r <= acc_depth;
+            act_base_addr_r <= act_base_addr;
             wei_base_addrs_r <= wei_base_addrs;
             out_base_addrs_r <= out_base_addrs;
-            tile_mask_r      <= tile_mask;
+            tile_mask_r <= tile_mask;
+            batch_enable_r <= batch_enable;
+            batch_count_r <= batch_count;
+            benchmark_repeat_r <= benchmark_repeat;
+            repeat_count_r <= repeat_count;
+            act_stride_words_r <= act_stride_words;
+            out_stride_words_r <= out_stride_words;
         end
     end
 
-    assign done  = &(tile_done | ~tile_mask_r);
+    assign done = &(tile_done | ~tile_mask_r);
     assign ready = ready_r;
 
-    // -----------------------------------------------------------------------
-    // Tile + tile_ibuf + tile_obuf 实例化
-    // -----------------------------------------------------------------------
-    // Tile 写 tile_obuf：直连，无仲裁器
-    wire [NUM_TILES-1:0]                tile_obuf_wr_valid;
-    wire [NUM_TILES*TILE_OBUF_ADDR_WIDTH-1:0] tile_obuf_wr_addr;
-    wire [NUM_TILES*BUF_DATA_WIDTH-1:0] tile_obuf_wr_data;
-    wire [NUM_TILES*STRB_WIDTH-1:0]     tile_obuf_wr_strb;
-
-    // The result probe is output channel 0 of Tile 0, exactly as it is packed
-    // into the first host-visible INT8/INT32 OBUF word.
-    assign peak_result_valid = tile_obuf_wr_valid[0] &&
-                               (tile_obuf_wr_addr[0 +: TILE_OBUF_ADDR_WIDTH] ==
-                                out_base_addrs_r[0 +: TILE_OBUF_ADDR_WIDTH]);
-    assign peak_result_data  = tile_obuf_wr_data[31:0];
-
     generate
-        genvar i;
-        for (i = 0; i < NUM_TILES; i = i + 1) begin : gen_tiles
+        genvar tile_i;
+        for (tile_i = 0; tile_i < NUM_TILES; tile_i = tile_i + 1) begin : gen_tiles
             localparam TILE_DSP_COL = `DCIM_DSP_COL_NUM;
             localparam TILE_DSP_PARTIAL = `DCIM_DSP_PARTIAL_SUBCOL;
 
-            // Tile 写信号
-            wire                          t_wr_valid;
-            wire [BUF_ADDR_WIDTH-1:0]     t_wr_addr_full;
-            wire [BUF_DATA_WIDTH-1:0]     t_wr_data;
-            wire [STRB_WIDTH-1:0]         t_wr_strb;
-            wire                          t_peak_compute_fire;
-            wire [31:0]                   t_peak_dcim_input;
+            wire t_ibuf0_rd_en;
+            wire [BUF_ADDR_WIDTH-1:0] t_ibuf0_rd_addr;
+            wire t_ibuf0_data_valid;
+            wire [BUF_DATA_WIDTH-1:0] t_ibuf0_data;
+            wire t_ibuf1_rd_en;
+            wire [BUF_ADDR_WIDTH-1:0] t_ibuf1_rd_addr;
+            wire t_ibuf1_data_valid;
+            wire [BUF_DATA_WIDTH-1:0] t_ibuf1_data;
 
-            assign tile_obuf_wr_valid[i] = t_wr_valid;
-            assign tile_obuf_wr_addr[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH] = t_wr_addr_full[TILE_OBUF_ADDR_WIDTH-1:0];
-            assign tile_obuf_wr_data[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH] = t_wr_data;
-            assign tile_obuf_wr_strb[i*STRB_WIDTH +: STRB_WIDTH] = t_wr_strb;
-            assign peak_compute_mask[i] = t_peak_compute_fire;
+            wire t_obuf0_wr_valid;
+            wire [TILE_OBUF_ADDR_WIDTH-1:0] t_obuf0_wr_addr;
+            wire [BUF_DATA_WIDTH-1:0] t_obuf0_wr_data;
+            wire [STRB_WIDTH-1:0] t_obuf0_wr_strb;
+            wire t_obuf1_wr_valid;
+            wire [TILE_OBUF_ADDR_WIDTH-1:0] t_obuf1_wr_addr;
+            wire [BUF_DATA_WIDTH-1:0] t_obuf1_wr_data;
+            wire [STRB_WIDTH-1:0] t_obuf1_wr_strb;
 
-            if (i == 0) begin : gen_peak_tile0
+            wire t_peak_compute_fire;
+            wire [31:0] t_peak_dcim_input;
+            wire [PEAK_JOB_W-1:0] t_peak_job;
+            wire [1:0] t_peak_phase;
+            wire t_peak_result_valid;
+            wire [31:0] t_peak_result_data;
+
+            assign peak_compute_mask[tile_i] = t_peak_compute_fire;
+            if (tile_i == 0) begin : gen_peak_tile0
                 assign peak_dcim_input = t_peak_dcim_input;
+                assign peak_job = t_peak_job;
+                assign peak_phase = t_peak_phase;
+                assign peak_result_valid = t_peak_result_valid;
+                assign peak_result_data = t_peak_result_data;
             end
-
-            // tile_ibuf Port B → Tile IBUF 读接口（无仲裁器，直连）
-            wire                      t_ibuf_rd_valid;  // Tile → tile_ibuf: 读请求
-            wire [BUF_ADDR_WIDTH-1:0] t_ibuf_rd_addr;   // Tile → tile_ibuf: 读地址
-            wire                      t_ibuf_rd_data_valid; // tile_ibuf → Tile: 数据有效
-            wire [BUF_DATA_WIDTH-1:0] t_ibuf_rd_data;   // tile_ibuf → Tile: 读数据
 
             (* keep_hierarchy = "yes" *)
             DCIM_Tile #(
-                .WD1(WD1),
-                .CH_IN(CH_IN),
-                .CH_OUT(CH_OUT),
-                .SRAM_DP(SRAM_DP),
-                .CYCLE(CYCLE),
-                .ACC(ACC),
+                .WD1(WD1), .CH_IN(CH_IN), .CH_OUT(CH_OUT),
+                .SRAM_DP(SRAM_DP), .CYCLE(CYCLE), .ACC(ACC),
                 .BUF_ADDR_WIDTH(BUF_ADDR_WIDTH),
-                .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
-                .TILE_IDX(i),
-                .MULT_DSP_EN(1),
-                .DSP_COL_NUM(TILE_DSP_COL),
+                .BUF_DATA_WIDTH(BUF_DATA_WIDTH), .TILE_IDX(tile_i),
+                .MULT_DSP_EN(1), .DSP_COL_NUM(TILE_DSP_COL),
                 .DSP_PARTIAL_SUBCOL(TILE_DSP_PARTIAL)
             ) u_tile (
-                .clk(clk),
-                .rst_n(rst_n),
-                .start(start_r),
-                .tile_enable(tile_mask_r[i]),
-                .done(tile_done[i]),
-                .ready(tile_ready[i]),
-                .mode(mode_r),
-                .acc_depth(acc_depth_r),
-                .wei_base_addr(wei_base_addrs_r[i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
+                .clk(clk), .rst_n(rst_n), .start(start_r),
+                .tile_enable(tile_mask_r[tile_i]),
+                .done(tile_done[tile_i]), .ready(tile_ready[tile_i]),
+                .mode(mode_r), .acc_depth(acc_depth_r),
+                .wei_base_addr(wei_base_addrs_r[tile_i*BUF_ADDR_WIDTH +: BUF_ADDR_WIDTH]),
                 .act_base_addr(act_base_addr_r),
-                .out_base_addr({{(BUF_ADDR_WIDTH-TILE_OBUF_ADDR_WIDTH){1'b0}}, out_base_addrs_r[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]}),
-                .ibuf_rd_en(t_ibuf_rd_valid),
-                .ibuf_rd_addr(t_ibuf_rd_addr),
-                .ibuf_rd_data_valid(t_ibuf_rd_data_valid),
-                .ibuf_rd_data(t_ibuf_rd_data),
-                .obuf_wr_valid(t_wr_valid),
-                .obuf_wr_ready(1'b1),
-                .obuf_wr_addr(t_wr_addr_full),
-                .obuf_wr_data(t_wr_data),
-                .obuf_wr_strb(t_wr_strb),
+                .out_base_addr({{(BUF_ADDR_WIDTH-TILE_OBUF_ADDR_WIDTH){1'b0}},
+                    out_base_addrs_r[tile_i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]}),
+                .batch_enable(batch_enable_r), .batch_count(batch_count_r),
+                .benchmark_repeat(benchmark_repeat_r),
+                .repeat_count(repeat_count_r),
+                .act_stride_words(act_stride_words_r),
+                .out_stride_words({{(BUF_ADDR_WIDTH-TILE_OBUF_ADDR_WIDTH){1'b0}},
+                    out_stride_words_r}),
+                .ibuf0_rd_en(t_ibuf0_rd_en), .ibuf0_rd_addr(t_ibuf0_rd_addr),
+                .ibuf0_data_valid(t_ibuf0_data_valid), .ibuf0_data(t_ibuf0_data),
+                .ibuf1_rd_en(t_ibuf1_rd_en), .ibuf1_rd_addr(t_ibuf1_rd_addr),
+                .ibuf1_data_valid(t_ibuf1_data_valid), .ibuf1_data(t_ibuf1_data),
+                .obuf0_wr_valid(t_obuf0_wr_valid), .obuf0_wr_addr(t_obuf0_wr_addr),
+                .obuf0_wr_data(t_obuf0_wr_data), .obuf0_wr_strb(t_obuf0_wr_strb),
+                .obuf1_wr_valid(t_obuf1_wr_valid), .obuf1_wr_addr(t_obuf1_wr_addr),
+                .obuf1_wr_data(t_obuf1_wr_data), .obuf1_wr_strb(t_obuf1_wr_strb),
                 .peak_compute_fire(t_peak_compute_fire),
-                .peak_dcim_input(t_peak_dcim_input)
+                .peak_dcim_input(t_peak_dcim_input), .peak_job(t_peak_job),
+                .peak_phase(t_peak_phase), .peak_result_valid(t_peak_result_valid),
+                .peak_result_data(t_peak_result_data)
             );
 
-            // Per-tile tile_ibuf 实例（chip-v3: 512KB XPM, Port B 直连 Tile）
+            // Port B is stream 0. Port A is stream 1 while computing and
+            // returns to the host interface automatically when idle.
             (* keep_hierarchy = "yes" *)
             tile_ibuf u_tile_ibuf (
                 .clk(clk),
-                // Port A: 外部 CDMA/XDMA 写入
-                .wea(tile_ibuf_ext_wea[i*STRB_WIDTH +: STRB_WIDTH]),
-                .mem_ena(tile_ibuf_ext_ena[i]),
-                .dina(tile_ibuf_ext_dina[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
-                .addra(tile_ibuf_ext_addra[i*TILE_IBUF_ADDR_WIDTH +: TILE_IBUF_ADDR_WIDTH]),
-                .douta(tile_ibuf_ext_douta[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
-                .douta_valid(),  // 外部读验证未使用
-                // Port B: Tile 内部读（直连，无仲裁器）
-                .web({STRB_WIDTH{1'b0}}),
-                .mem_enb(t_ibuf_rd_valid),
-                .dinb({BUF_DATA_WIDTH{1'b0}}),
-                .addrb(t_ibuf_rd_addr[TILE_IBUF_ADDR_WIDTH-1:0]),
-                .doutb(t_ibuf_rd_data),
-                .doutb_valid(t_ibuf_rd_data_valid)
+                .wea(t_ibuf1_rd_en ? {STRB_WIDTH{1'b0}} :
+                    tile_ibuf_ext_wea[tile_i*STRB_WIDTH +: STRB_WIDTH]),
+                .mem_ena(t_ibuf1_rd_en | tile_ibuf_ext_ena[tile_i]),
+                .dina(t_ibuf1_rd_en ? '0 :
+                    tile_ibuf_ext_dina[tile_i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .addra(t_ibuf1_rd_en ? t_ibuf1_rd_addr[TILE_IBUF_ADDR_WIDTH-1:0] :
+                    tile_ibuf_ext_addra[tile_i*TILE_IBUF_ADDR_WIDTH +: TILE_IBUF_ADDR_WIDTH]),
+                .douta(tile_ibuf_ext_douta[tile_i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .douta_valid(t_ibuf1_data_valid),
+                .web({STRB_WIDTH{1'b0}}), .mem_enb(t_ibuf0_rd_en), .dinb('0),
+                .addrb(t_ibuf0_rd_addr[TILE_IBUF_ADDR_WIDTH-1:0]),
+                .doutb(t_ibuf0_data), .doutb_valid(t_ibuf0_data_valid)
             );
+            assign t_ibuf1_data =
+                tile_ibuf_ext_douta[tile_i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH];
 
-            // Per-tile tile_obuf 实例
+            // Result stream 0 uses Port B; stream 1 temporarily owns Port A.
             (* keep_hierarchy = "yes" *)
             tile_obuf u_tile_obuf (
                 .clk(clk),
-                // Port A: 外部 CDMA 读/写
-                .wea(tile_obuf_ext_wea[i*STRB_WIDTH +: STRB_WIDTH]),
-                .mem_ena(tile_obuf_ext_ena[i]),
-                .dina(tile_obuf_ext_dina[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
-                .addra(tile_obuf_ext_addra[i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]),
-                .douta(tile_obuf_ext_douta[i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
-                .douta_valid(tile_obuf_ext_douta_valid[i]),
-                // Port B: Tile 写入（直连，无仲裁）
-                .web(t_wr_strb),
-                .mem_enb(t_wr_valid),
-                .dinb(t_wr_data),
-                .addrb(t_wr_addr_full[TILE_OBUF_ADDR_WIDTH-1:0])
+                .wea(t_obuf1_wr_valid ? t_obuf1_wr_strb :
+                    tile_obuf_ext_wea[tile_i*STRB_WIDTH +: STRB_WIDTH]),
+                .mem_ena(t_obuf1_wr_valid | tile_obuf_ext_ena[tile_i]),
+                .dina(t_obuf1_wr_valid ? t_obuf1_wr_data :
+                    tile_obuf_ext_dina[tile_i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .addra(t_obuf1_wr_valid ? t_obuf1_wr_addr :
+                    tile_obuf_ext_addra[tile_i*TILE_OBUF_ADDR_WIDTH +: TILE_OBUF_ADDR_WIDTH]),
+                .douta(tile_obuf_ext_douta[tile_i*BUF_DATA_WIDTH +: BUF_DATA_WIDTH]),
+                .douta_valid(tile_obuf_ext_douta_valid[tile_i]),
+                .web(t_obuf0_wr_strb), .mem_enb(t_obuf0_wr_valid),
+                .dinb(t_obuf0_wr_data), .addrb(t_obuf0_wr_addr)
             );
         end
     endgenerate

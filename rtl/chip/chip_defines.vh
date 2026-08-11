@@ -244,9 +244,13 @@
 `define DCIM_OBUF_EXT_ADDR_BITS `DCIM_TILE_OBUF_ADDR_WIDTH  // = 14 bits
 
 // ── DCIM 配置寄存器地址（与 INST_Decoder OP_DCIM_CFG 一致）─────────────────
-`define DCIM_REG_CTRL           12'h000  // [0] start (W1S, 自清)
+`define DCIM_REG_CTRL           12'h000  // [0] start, [1] batch, [2] seamless repeat benchmark
 `define DCIM_REG_MODE           12'h008  // [15:8] acc_depth | [2:0] mode
 `define DCIM_REG_ACT_BASE       12'h010  // 全局激活基址（广播到所有 Tile）
+`define DCIM_REG_BATCH_COUNT    12'h018  // batch 内 pixel/job 数；OP_DCIM_LAYER 原 num_pixels
+`define DCIM_REG_ACT_STRIDE     12'h01C  // 相邻 pixel activation 的 128-bit word 步长
+`define DCIM_REG_OUT_STRIDE     12'h020  // 相邻 pixel result 的 128-bit word 步长
+`define DCIM_REG_REPEAT_COUNT   12'h024  // benchmark 轮数；0 归一化为 1
 `define DCIM_REG_WEI_BASE       12'h040  // WEI_BASE[0..63]: 每 Tile 权重基址 (+4 per tile)
 `define DCIM_REG_OUT_BASE       12'h140  // OUT_BASE[0..63]: 每 Tile 输出基址 (+4 per tile)
 `define DCIM_REG_TILE_MASK      12'h240  // TILE_MASK[31:0]: 低 32 个 Tile 使能

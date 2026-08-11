@@ -181,11 +181,13 @@ DCIM_REG_TILE_MASK_HI = 0x244
 
 # Curated dcim_matmul cases (optional in_hw override for fast smoke tests).
 DCIM_MATMUL_CURATED = [
-    # Peak-compute acceptance case: one exact-fit output vector, K=64, all 8 tiles active.
-    # INT8 needs two nibble phases per logical MAC.  At 250 MHz this case must
-    # expose 4096 logical MAC/cycle = 2.048 TOPS (counting mul+add as 2 ops).
-    {'name': 'peak_int8_all_tiles',       'layer': 'model.9.cv2.conv',       'in_hw': (1, 1),
+    # Peak-compute acceptance case: a full 64-job micro-batch, K=64, all 8
+    # tiles active.  Its 128 consecutive phase cycles make II=2 explicit.
+    {'name': 'peak_int8_all_tiles',       'layer': 'model.9.cv2.conv',       'in_hw': (1, 64),
      'synthetic_in_ch': 64, 'synthetic_out_ch': 128, 'peak_int8': True},
+    {'name': 'peak_int8_repeat4',         'layer': 'model.9.cv2.conv',       'in_hw': (1, 64),
+     'synthetic_in_ch': 64, 'synthetic_out_ch': 128, 'peak_int8': True,
+     'benchmark_repeat_count': 4},
     # INT8 smoke（各 kernel/stride/channel 覆盖）
     {'name': 'dcim_tiny_1x1',       'layer': 'model.2.cv1.conv',      'in_hw': (2, 2)},
     {'name': 'conv6_s2_c3_to16',    'layer': 'model.0.conv',           'in_hw': (12, 12)},
@@ -1412,7 +1414,8 @@ def dcim_cfg(pairs: Sequence[Tuple[int, int]]) -> List[int]:
 
 def dcim_layer_op(num_pixels: int, mode_reg: int, tile_mask: int, act_base_word: int,
                   act_stride_words: int, out_stride_words: int,
-                  wei_base_words: Sequence[int], out_base_words: Sequence[int]) -> List[int]:
+                  wei_base_words: Sequence[int], out_base_words: Sequence[int],
+                  benchmark_repeat_count: int = 1) -> List[int]:
     assert len(wei_base_words) == NUM_TILES
     assert len(out_base_words) == NUM_TILES
     tile_mask_lo = tile_mask & 0xFFFFFFFF
@@ -1425,7 +1428,7 @@ def dcim_layer_op(num_pixels: int, mode_reg: int, tile_mask: int, act_base_word:
         act_base_word,
         act_stride_words,
         out_stride_words,
-        0,
+        benchmark_repeat_count,
     ] + list(wei_base_words) + list(out_base_words)
     return [header(OP_DCIM_LAYER, 0, len(body) * 4)] + [w & 0xFFFFFFFF for w in body]
 
@@ -1499,7 +1502,8 @@ def ibuf_preload_per_tile(
 def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_obuf: int,
                     ibuf_act: int, ibuf_wei: int, skip_cdma: bool = False,
                     int16: bool = False, acc_override: int = None,
-                    collect_to_vpubuf: bool = False) -> List[int]:
+                    collect_to_vpubuf: bool = False,
+                    benchmark_repeat_count: int = 1) -> List[int]:
     """生成 DCIM 指令序列。
 
     Per-tile IBUF: CDMA broadcasts activation to all active tile_ibufs.
@@ -1522,6 +1526,11 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
       调用方须使用 tile_seq_dqa_insts() 生成对应的 tiles_out 次 DQA 调用。
     """
     inst = []
+    if benchmark_repeat_count > 1:
+        if num_pixels != 64:
+            raise ValueError("benchmark repeat requires exactly 64 pixels/jobs")
+        if collect_to_vpubuf:
+            raise ValueError("benchmark repeat overwrites tile OBUF and cannot collect every round")
     if acc_override is not None:
         acc = acc_override
     else:
@@ -1535,7 +1544,7 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
     mode_reg = ((acc & 0xFF) << 8) | mode_val
     tiles_out = meta.num_tiles
     words_per_tile_per_px = DCIM_INT16_OUT_WORDS_PER_TILE if int16 else DCIM_INT8_OUT_WORDS_PER_TILE
-    wpt_bytes = words_per_tile_per_px * OBUF_WORD_BYTES  # 8*16=128 B per tile per pixel (INT8)
+    wpt_bytes = words_per_tile_per_px * OBUF_WORD_BYTES  # 4*16=64 B per tile per pixel
     wei_base_words = [
         ibuf_wei // IBUF_WORD_BYTES
         for t in range(NUM_TILES)
@@ -1556,6 +1565,7 @@ def dcim_layer_inst(meta: ConvMeta, num_pixels: int, im2col_obuf: int, dcim_out_
         out_stride_words=words_per_tile_per_px,
         wei_base_words=wei_base_words,
         out_base_words=out_base_words,
+        benchmark_repeat_count=benchmark_repeat_count,
     )
     inst += [header(OP_NOP, 0, 0)] * 16
     if collect_to_vpubuf:
@@ -1727,8 +1737,10 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         act_words = bytes_to_128_words(cols16.astype(np.int16).tobytes())
         exp_words = dcim_accum_words_int16(accum, meta.num_tiles)
         write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
-        fast_inst = dcim_layer_inst(meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI,
-                                    skip_cdma=True, int16=True)
+        fast_inst = dcim_layer_inst(
+            meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI,
+            skip_cdma=True, int16=True,
+            benchmark_repeat_count=int(spec.get('benchmark_repeat_count', 1)))
         mode_tag = 'int16'
         acc_info = acc
 
@@ -1750,7 +1762,10 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         act_words = bytes_to_128_words(cols.astype(np.int8).tobytes())
         exp_words = dcim_accum_words(accum, meta.num_tiles)
         write_hex(os.path.join(out_dir, 'expected.hex'), exp_words)
-        fast_inst = dcim_layer_inst(meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI, skip_cdma=True)
+        fast_inst = dcim_layer_inst(
+            meta, matmul_m, 0, DCIM_OUT_BASE, IBUF_ACT, IBUF_WEI,
+            skip_cdma=True,
+            benchmark_repeat_count=int(spec.get('benchmark_repeat_count', 1)))
         mode_tag = 'int8'
         acc_info = acc
         weight_words_per_tile: List[List[str]] = []
@@ -1781,6 +1796,7 @@ def make_dcim_case(out_dir: str, net: Dict[str, dict], spec: dict, rng: np.rando
         ),
         'wpt': DCIM_INT16_OUT_WORDS_PER_TILE if use_int16 else DCIM_INT8_OUT_WORDS_PER_TILE,
         'peak_int8': bool(spec.get('peak_int8', False)),
+        'benchmark_repeat_count': int(spec.get('benchmark_repeat_count', 1)),
     }
 
 
@@ -2829,6 +2845,7 @@ def write_manifest(out_dir: str, meta: dict, verify_words: int) -> None:
             for k in ('matmul_m', 'matmul_k', 'matmul_n', 'acc_depth', 'in_hw', 'in_hw_note', 'network_in_hw'):
                 f.write(f'{k}: {meta[k]}\n')
             f.write(f'peak_int8: {1 if meta.get("peak_int8", False) else 0}\n')
+            f.write(f'benchmark_repeat_count: {meta.get("benchmark_repeat_count", 1)}\n')
         if meta.get('layer') not in ('cdma_concat', 'cdma_memtest', ''):
             f.write(f'weight_npz_sha256_16: {meta.get("npz_sha256_16", "unknown")}\n')
             f.write('golden_numeric_semantics: network.json + parsed/weights npz; DQA_RELU=max(accum*scale+bias,0); QA=round(x/act_scale) clamp int8\n')
@@ -2935,6 +2952,12 @@ def generate(args: argparse.Namespace) -> None:
 
     # apply --quant and --dim overrides
     spec = _apply_dim_overrides(spec, args, module)
+    if args.benchmark_repeat is not None:
+        if module != 'dcim_matmul':
+            raise SystemExit('--benchmark-repeat is valid only for dcim_matmul')
+        if args.benchmark_repeat < 1:
+            raise SystemExit('--benchmark-repeat must be >= 1')
+        spec['benchmark_repeat_count'] = args.benchmark_repeat
     effective_module = spec.get('module', module)
 
     out_dir = args.out_dir
@@ -3007,6 +3030,8 @@ def main() -> int:
                    help='筛选精度：int8=INT32 accumulator/DQA 等；int16=act16/int16 命名或 spec 用例；不匹配则写 skipped.txt')
     p.add_argument('--dim', default='',
                    help='维度覆盖，格式：C=N 或 H=N,W=N,C=N 或 HW=HxW,C=N；不指定则用 case 默认值')
+    p.add_argument('--benchmark-repeat', type=int, default=None,
+                   help='dcim_matmul only: seamless 64-job benchmark repeat count')
     args = p.parse_args()
     generate(args)
     return 0

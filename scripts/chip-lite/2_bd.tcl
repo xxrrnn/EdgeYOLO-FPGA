@@ -44,6 +44,10 @@ set chipRtlFiles [list \
     [file normalize "$srcDir/chip/DCIM_Array.sv"] \
     [file normalize "$srcDir/chip/DCIM_Array_bd.v"] \
     [file normalize "$srcDir/chip/DCIM_Tile.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Activation_Stream.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Weight_Cache.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Partial_Sum_RAM.sv"] \
+    [file normalize "$srcDir/chip/DCIM_Result_Stream.sv"] \
     [file normalize "$srcDir/chip/tile_ibuf.v"] \
     [file normalize "$srcDir/chip/tile_obuf.v"] \
 ]
@@ -142,6 +146,15 @@ make_wrapper -files [get_files $bdFile] -top
 add_files -norecurse [file normalize "$bdDir/$bdName/hdl/${bdName}_wrapper.v"]
 set_property top $topName [current_fileset]
 update_compile_order -fileset sources_1
+
+# Lightweight integration check used by TEST/tops/fpga/validate_stream_bd.tcl.
+# At this point module references, all BD connections, address assignment and
+# the generated wrapper have already been validated. Skip the expensive OOC
+# IP synthesis when only the streamed-DCIM interface contract is under test.
+if {[info exists ::env(BD_VALIDATE_ONLY)] && $::env(BD_VALIDATE_ONLY) eq "1"} {
+    puts "INFO: BD_VALIDATE_ONLY=1 - BD validation and wrapper generation complete."
+    return
+}
 
 # ==============================================================================
 # OOC 综合（IP 独立综合 → 生成 DCP/stub）

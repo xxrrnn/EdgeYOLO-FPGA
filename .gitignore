@@ -31,6 +31,7 @@
 !rtl/**/
 !rtl/**/*.v
 !rtl/**/*.sv
+!rtl/**/*.svh
 !rtl/**/*.vh
 !rtl/**/*.vhd
 !rtl/**/*.cpp
@@ -57,6 +58,14 @@
 !tests/**/*.yaml
 !tests/**/*.yml
 !tests/bin/*.exe
+
+# Reproducible TEST harness sources and configuration files.
+!TEST/**/*.sv
+!TEST/**/*.py
+!TEST/**/*.sh
+!TEST/**/*.tcl
+!TEST/**/*.md
+!TEST/**/*.cfg
 
 !xdc/
 !xdc/**/

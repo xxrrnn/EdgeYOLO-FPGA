@@ -210,13 +210,17 @@ connect_bd_net [get_bd_pins dcim_array_0/ready]            [get_bd_pins inst_dec
 # Peak-TOPS ILA
 #   probe0: all-Tile compute fire mask (trigger on 8'hFF)
 #   probe1: Tile 0 actual DCIM nibble input [31:0]
-#   probe2: Tile 0 final OBUF result valid
-#   probe3: Tile 0 final host-visible INT32 result [31:0]
+#   probe2: Tile 0 pixel job index (0..63)
+#   probe3: Tile 0 INT8/INT16 phase index (0..1 / 0..3)
+#   probe4: Tile 0 final result valid
+#   probe5: Tile 0 final host-visible result lane [31:0]
 # ==============================================================================
 connect_bd_net [get_bd_pins dcim_array_0/peak_compute_mask] [get_bd_pins peak_tops_ila/probe0]
 connect_bd_net [get_bd_pins dcim_array_0/peak_dcim_input]   [get_bd_pins peak_tops_ila/probe1]
-connect_bd_net [get_bd_pins dcim_array_0/peak_result_valid] [get_bd_pins peak_tops_ila/probe2]
-connect_bd_net [get_bd_pins dcim_array_0/peak_result_data]  [get_bd_pins peak_tops_ila/probe3]
+connect_bd_net [get_bd_pins dcim_array_0/peak_job]          [get_bd_pins peak_tops_ila/probe2]
+connect_bd_net [get_bd_pins dcim_array_0/peak_phase]        [get_bd_pins peak_tops_ila/probe3]
+connect_bd_net [get_bd_pins dcim_array_0/peak_result_valid] [get_bd_pins peak_tops_ila/probe4]
+connect_bd_net [get_bd_pins dcim_array_0/peak_result_data]  [get_bd_pins peak_tops_ila/probe5]
 
 # ==============================================================================
 # INST_Decoder <-> VPU_AXI_Regs (vpu_regs)

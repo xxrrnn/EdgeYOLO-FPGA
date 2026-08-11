@@ -44,14 +44,30 @@ module tb_lite_bd_module;
 
     // Peak INT8 acceptance probes. These are testbench-only hierarchical
     // taps; no synthesizable RTL is modified by the peak-compute test.
-    wire [`DCIM_NUM_TILES-1:0] peak_int8_compute_fire;
-    genvar peak_tile_i;
-    generate
-        for (peak_tile_i = 0; peak_tile_i < `DCIM_NUM_TILES; peak_tile_i = peak_tile_i + 1) begin : gen_peak_int8_probe
-            assign peak_int8_compute_fire[peak_tile_i] =
-                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[peak_tile_i].u_tile.compute_phase_fire;
-        end
-    endgenerate
+    wire [`DCIM_NUM_TILES-1:0] peak_int8_compute_fire =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.peak_compute_mask;
+
+    // Compact Verdi evidence set.  It contains the four implementation-ILA
+    // signals plus clock/start/done and Tile-0 state/phase context.  Keeping
+    // these aliases at TB top level makes the FSDB view stable across builds.
+    wire        peak_int8_array_start =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.start;
+    wire        peak_int8_array_done =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.done;
+    wire [3:0]  peak_int8_tile0_state =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.state;
+    wire [1:0]  peak_int8_tile0_phase =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.peak_phase;
+    wire [5:0]  peak_int8_tile0_job =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.peak_job;
+    wire [31:0] peak_int8_tile0_round =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.u_activation_stream.consume_repeat;
+    wire [31:0] peak_int8_tile0_input =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.peak_dcim_input;
+    wire        peak_int8_result_valid =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.peak_result_valid;
+    wire [31:0] peak_int8_result_data =
+        dut.lite_i.dcim_array_0.inst.u_dcim_array.peak_result_data;
 
     reg tb_aclk;
     bit sim_axi_ready;
@@ -61,8 +77,10 @@ module tb_lite_bd_module;
     initial begin : fsdb_dump_control
         if ($test$plusargs("FSDB")) begin
             $fsdbDumpfile("tb_lite_bd_module.fsdb");
-            $fsdbDumpvars(0, tb_lite_bd_module, "+mda");
-            $fsdbDumpMDA();
+            // Peak proof signals are intentionally aliased at TB top. Dump one
+            // level only: compact FSDB, stable names, no BD/IP hierarchy noise.
+            $fsdbDumpvars(1, tb_lite_bd_module);
+            $fsdbDumpon();
             $display("[%0t] MODULE_TB: FSDB dump enabled: tb_lite_bd_module.fsdb", $time);
         end
     end
@@ -230,10 +248,15 @@ module tb_lite_bd_module;
                     peak_int8_all_cycles = peak_int8_all_cycles + 1;
                 else
                     peak_int8_skew_cycles = peak_int8_skew_cycles + 1;
-                $display("PEAK_INT8_EVENT cycle=%0d time_ns=%0t mask=0x%0h",
+                $display("PEAK_INT8_EVENT cycle=%0d time_ns=%0t mask=0x%0h round=%0d job=%0d phase=%0d input=0x%08h",
                          peak_int8_clock_cycles - peak_int8_start_cycle,
-                         $time, peak_int8_compute_fire);
+                         $time, peak_int8_compute_fire,
+                         peak_int8_tile0_round, peak_int8_tile0_job,
+                         peak_int8_tile0_phase, peak_int8_tile0_input);
             end
+            if (peak_int8_result_valid)
+                $display("PEAK_INT8_RESULT time_ns=%0t valid=1 data=0x%08h",
+                         $time, peak_int8_result_data);
             if (peak_int8_transaction_active &&
                 dut.lite_i.dcim_array_0.inst.u_dcim_array.done) begin
                 peak_int8_transaction_cycles = peak_int8_clock_cycles - peak_int8_start_cycle;
@@ -883,10 +906,10 @@ module tb_lite_bd_module;
 
     // Debug: Monitor DCIM tile[0] obuf_wr_valid
     always @(posedge dut.lite_i.dcim_array_0.inst.clk) begin
-        if (dut.lite_i.dcim_array_0.inst.u_dcim_array.tile_obuf_wr_valid[0]) begin
-            $display("[%0t] DCIM_ARRAY tile_obuf_wr_valid[0] fired: addr=%0h",
+        if (dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].t_obuf0_wr_valid) begin
+            $display("[%0t] DCIM_ARRAY Tile0 OBUF0 write fired: addr=%0h",
                 $time,
-                dut.lite_i.dcim_array_0.inst.u_dcim_array.tile_obuf_wr_addr[0 +: 14]);
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].t_obuf0_wr_addr);
         end
         if (dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.mem_enb &&
             |dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile_obuf.web) begin
@@ -908,11 +931,10 @@ module tb_lite_bd_module;
                 dut.lite_i.dcim_array_0.inst.u_dcim_array.out_base_addrs[0 +: 14]);
         end
         if (dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.start_pulse) begin
-            $display("[%0t] DCIM_TILE[0] start_pulse, out_base=%0h state=%0d save_state=%0d",
+            $display("[%0t] DCIM_TILE[0] start_pulse, out_base=%0h state=%0d",
                 $time,
-                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.out_base_addr_reg,
-                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.state,
-                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.save_state);
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.out_base_reg,
+                dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.state);
         end
         // Monitor DCIM_Tile state changes
         if (dut.lite_i.dcim_array_0.inst.u_dcim_array.gen_tiles[0].u_tile.state ==

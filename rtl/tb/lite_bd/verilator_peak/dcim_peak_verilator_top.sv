@@ -72,6 +72,12 @@ module dcim_peak_verilator_top (
         .wei_base_addrs(wei_base_addrs),
         .out_base_addrs(out_base_addrs),
         .tile_mask(8'hff),
+        .batch_enable(1'b0),
+        .batch_count(32'd1),
+        .benchmark_repeat(1'b0),
+        .repeat_count(32'd1),
+        .act_stride_words(15'd4),
+        .out_stride_words(14'd4),
         .tile_ibuf_ext_wea(ibuf_wea),
         .tile_ibuf_ext_ena(ibuf_ena),
         .tile_ibuf_ext_addra(ibuf_addra),
@@ -85,6 +91,8 @@ module dcim_peak_verilator_top (
         .tile_obuf_ext_douta_valid(obuf_douta_valid),
         .peak_compute_mask(compute_fire),
         .peak_dcim_input(peak_dcim_input),
+        .peak_job(),
+        .peak_phase(),
         .peak_result_valid(peak_result_valid),
         .peak_result_data(peak_result_data)
     );
