@@ -166,6 +166,10 @@ if {[catch {
         set_property CONFIG_MODE SPIx4 [current_design]
         set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
         write_bitstream -verbose -force -bin_file [file normalize "$attemptDir/top.bit"]
+        # Hardware Manager needs an LTX generated from the exact same routed
+        # design as the BIT.  Keeping it per-attempt prevents accidental probe
+        # mismatches when several timing-met results are preserved.
+        write_debug_probes -force [file normalize "$attemptDir/top.ltx"]
         if {$routeWns >= $minWns && $routeWhs >= $minWhs} {
             race_write_status "SUCCESS" "timing met with requested setup/hold margin"
         } else {

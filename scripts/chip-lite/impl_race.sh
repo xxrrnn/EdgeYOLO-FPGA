@@ -183,7 +183,7 @@ timing_summary_value() {
 }
 
 copy_timing_met_bitstreams() {
-  local dir status_file attempt bit bin out_base
+  local dir status_file attempt bit bin ltx out_base
   for dir in "${attempt_dirs[@]}"; do
     status_file="$dir/status.txt"
     [[ -f "$status_file" ]] || continue
@@ -195,12 +195,16 @@ copy_timing_met_bitstreams() {
     attempt="$(status_value "$status_file" ATTEMPT)"
     bit="$dir/top.bit"
     bin="$dir/top.bin"
+    ltx="$dir/top.ltx"
     out_base="$bitstream_dir/${tag}_${attempt}"
     if [[ -f "$bit" ]]; then
       cp -f "$bit" "${out_base}.bit"
     fi
     if [[ -f "$bin" ]]; then
       cp -f "$bin" "${out_base}.bin"
+    fi
+    if [[ -f "$ltx" ]]; then
+      cp -f "$ltx" "${out_base}.ltx"
     fi
   done
 }

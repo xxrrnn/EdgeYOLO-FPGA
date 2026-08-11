@@ -144,14 +144,28 @@ foreach slr_idx {0 1 2} {
   if {[llength $tiles] == 0} continue
   set pblock_name "pblock_tiles_slr${slr_idx}"
   create_pblock $pblock_name
+  set pblock_roots {}
   foreach t $tiles {
-    add_cells_to_pblock $pblock_name [get_cells -quiet -hier -filter "NAME =~ */gen_tiles[$t].*"]
-    add_cells_to_pblock $pblock_name [get_cells -quiet -hier -filter "NAME =~ */u_tile_ibuf_gen[$t].*"]
-    add_cells_to_pblock $pblock_name [get_cells -quiet -hier -filter "NAME =~ */u_tile_obuf_gen[$t].*"]
+    # Square brackets in generate-block names are literal hierarchy
+    # characters.  The old glob treated them as a character class and matched
+    # no cells, leaving all three Tile pblocks empty.  Match the three preserved
+    # module roots explicitly with a regexp so adding a root also adds all of
+    # its descendants without collecting hundreds of thousands of primitives.
+    set tile_roots {}
+    foreach tile_inst {u_tile u_tile_ibuf u_tile_obuf} {
+      set tile_re [format {^.*/gen_tiles\[%d\]\.%s$} $t $tile_inst]
+      set matched [get_cells -quiet -hierarchical -regexp $tile_re]
+      if {[llength $matched] != 1} {
+        error "Tile $t pblock match failed for $tile_inst: regexp=$tile_re matches=[llength $matched]"
+      }
+      lappend tile_roots [lindex $matched 0]
+    }
+    add_cells_to_pblock [get_pblocks $pblock_name] $tile_roots
+    set pblock_roots [concat $pblock_roots $tile_roots]
   }
   resize_pblock $pblock_name -add "SLR${slr_idx}"
   set_property IS_SOFT TRUE [get_pblocks $pblock_name]
-  puts "INFO: $pblock_name -> SLR${slr_idx} (tiles: $tiles)"
+  puts "INFO: $pblock_name -> SLR${slr_idx} (tiles: $tiles, roots: [llength $pblock_roots])"
 }
 
 # AXI 互连 + VPU + INST_Decoder + CDMA + vpu_buf_ctrl -> SLR0 (PCIe 物理引脚在 SLR0)
