@@ -41,18 +41,20 @@ module accumulateArray#(
 	reg [CH_OUT*WD2-1: 0]  up_data_r;
 	reg                    ena_r;
 
+	// The wide data register is observed only when ena_r is asserted.
+	always @(posedge clk) begin
+		up_data_r <= up_data;
+	end
+
 	always @(posedge clk or negedge rstn) begin
 		if (~rstn) begin
 			refresh_r <= 1'b0;
-			up_data_r <= {(CH_OUT*WD2){1'b0}};
 			ena_r     <= 1'b0;
 		end else if (clr) begin
 			refresh_r <= 1'b0;
-			up_data_r <= {(CH_OUT*WD2){1'b0}};
 			ena_r     <= 1'b0;
 		end else begin
 			refresh_r <= w_accu_cnt_zero;
-			up_data_r <= up_data;
 			ena_r     <= w_accu_ena;
 		end
 	end
@@ -214,29 +216,14 @@ module accumulate#(
 	end
 
 
-	always@(posedge clk or negedge rstn) begin
-		if(~rstn) begin
-			temp3 <= 0;
-			temp2 <= 0;
-			temp1 <= 0;
-			temp0 <= 0;
-		end else begin
-			if(clr) begin
-				temp3 <= 0;
-				temp2 <= 0;
-				temp1 <= 0;
-				temp0 <= 0;
-			end else if(ena&acc_ena) begin
-				temp3 <= n_temp3;
-				temp2 <= n_temp2;
-				temp1 <= n_temp1;
-				temp0 <= n_temp0;
-			end else begin
-				temp3 <= temp3;
-				temp2 <= temp2;
-				temp1 <= temp1;
-				temp0 <= temp0;
-			end
+	// refresh initializes every active accumulation sequence; valid control is
+	// reset separately by accumulate_controller.
+	always@(posedge clk) begin
+		if(ena&acc_ena) begin
+			temp3 <= n_temp3;
+			temp2 <= n_temp2;
+			temp1 <= n_temp1;
+			temp0 <= n_temp0;
 		end
 	end
 
@@ -335,4 +322,3 @@ module accumulate_controller#(
 	assign cnt_zero = ena & (w_cnt==0);
 
 endmodule
-

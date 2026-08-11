@@ -160,9 +160,32 @@ foreach slr_idx {0 1 2} {
       }
       lappend tile_roots [lindex $matched 0]
     }
+    # The AXI BRAM controllers directly drive the Tile IBUF/OBUF URAM address,
+    # enable and write pins.  They were previously unconstrained; in a measured
+    # route, Tile0's controller landed in SLR1 while its URAM was in SLR0 and
+    # created a 2.9 ns route-only path.  Keep both controllers with their Tile.
+    foreach ctrl_kind {tile_ibuf_ctrl tile_obuf_ctrl} {
+      set ctrl_re [format {^.*/%s_%d$} $ctrl_kind $t]
+      set ctrl_match [get_cells -quiet -hierarchical -regexp $ctrl_re]
+      if {[llength $ctrl_match] != 1} {
+        error "Tile $t $ctrl_kind pblock match failed: regexp=$ctrl_re matches=[llength $ctrl_match]"
+      }
+      lappend tile_roots [lindex $ctrl_match 0]
+      set_property USER_SLR_ASSIGNMENT SLR${slr_idx} [lindex $ctrl_match 0]
+    }
     add_cells_to_pblock [get_pblocks $pblock_name] $tile_roots
     set pblock_roots [concat $pblock_roots $tile_roots]
   }
+  # Local reset release for all controllers in this SLR.  This replaces the
+  # measured 3.2 ns XDMA-reset route across an SLR boundary.
+  set rst_re [format {^.*/tile_rst_slr%d$} $slr_idx]
+  set rst_match [get_cells -quiet -hierarchical -regexp $rst_re]
+  if {[llength $rst_match] != 1} {
+    error "SLR$slr_idx Tile reset pblock match failed: regexp=$rst_re matches=[llength $rst_match]"
+  }
+  add_cells_to_pblock [get_pblocks $pblock_name] [lindex $rst_match 0]
+  set_property USER_SLR_ASSIGNMENT SLR${slr_idx} [lindex $rst_match 0]
+  lappend pblock_roots [lindex $rst_match 0]
   resize_pblock $pblock_name -add "SLR${slr_idx}"
   set_property IS_SOFT TRUE [get_pblocks $pblock_name]
   puts "INFO: $pblock_name -> SLR${slr_idx} (tiles: $tiles, roots: [llength $pblock_roots])"

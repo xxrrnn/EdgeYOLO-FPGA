@@ -124,33 +124,26 @@ module merge#(
 	reg refresh_d;
 	reg ena_d;
 
+	// Arithmetic data is qualified by ena_d/valid.  Keep it out of the reset
+	// tree; only the two control bits below require deterministic reset/clear.
+	always @(posedge clk) begin
+		psum1_s_ext_d[0] <= psum1_s_ext_WD_TEMP[0];
+		psum1_s_ext_d[1] <= psum1_s_ext_WD_TEMP[1];
+		psum1_u_ext_d[0] <= psum1_u_ext_WD_TEMP[0];
+		psum1_u_ext_d[1] <= psum1_u_ext_WD_TEMP[1];
+		psum2_s_ext_d    <= psum2_s_ext_2WD_TEMP;
+		psum2_u_ext_d    <= psum2_u_ext_2WD_TEMP;
+	end
+
 	always @(posedge clk or negedge rstn) begin
 		if (~rstn) begin
-			psum1_s_ext_d[0] <= 0;
-			psum1_s_ext_d[1] <= 0;
-			psum1_u_ext_d[0] <= 0;
-			psum1_u_ext_d[1] <= 0;
-			psum2_s_ext_d    <= 0;
-			psum2_u_ext_d    <= 0;
 			refresh_d        <= 0;
 			ena_d            <= 0;
 		end else begin
 			if (clr) begin
-				psum1_s_ext_d[0] <= 0;
-				psum1_s_ext_d[1] <= 0;
-				psum1_u_ext_d[0] <= 0;
-				psum1_u_ext_d[1] <= 0;
-				psum2_s_ext_d    <= 0;
-				psum2_u_ext_d    <= 0;
 				refresh_d        <= 0;
 				ena_d            <= 0;
 			end else begin
-				psum1_s_ext_d[0] <= psum1_s_ext_WD_TEMP[0];
-				psum1_s_ext_d[1] <= psum1_s_ext_WD_TEMP[1];
-				psum1_u_ext_d[0] <= psum1_u_ext_WD_TEMP[0];
-				psum1_u_ext_d[1] <= psum1_u_ext_WD_TEMP[1];
-				psum2_s_ext_d    <= psum2_s_ext_2WD_TEMP;
-				psum2_u_ext_d    <= psum2_u_ext_2WD_TEMP;
 				refresh_d        <= refresh;
 				ena_d            <= ena;
 			end
@@ -208,21 +201,12 @@ module merge#(
 		endcase
 	end
 
-	always@(posedge clk or negedge rstn) begin
-		if(~rstn) begin
-			tempH <= 0;
-			tempL <= 0;
-		end else begin
-			if(clr) begin
-				tempH <= 0;
-				tempL <= 0;
-			end else if(ena_d) begin
-				tempH <= n_tempH;
-				tempL <= n_tempL;
-			end else begin
-				tempH <= tempH;
-				tempL <= tempL;
-			end
+	// refresh_d initializes the accumulator on the first valid phase, so an
+	// asynchronous reset on the wide arithmetic state is redundant.
+	always@(posedge clk) begin
+		if(ena_d) begin
+			tempH <= n_tempH;
+			tempL <= n_tempL;
 		end
 	end
 

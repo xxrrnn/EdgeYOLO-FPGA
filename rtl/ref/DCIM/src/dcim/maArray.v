@@ -177,21 +177,15 @@ module maSubcolumn#(
 	// 本级 reg 仅负责扇出分发 + 打断跨 SLR 路径
 	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data1_reg;
 	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data2_reg;
-	reg s1_reg;
+	(* max_fanout = 32 *) reg s1_reg;
 	(* max_fanout = 16 *) reg s2_reg;
 
-	always @(posedge clk or negedge rstn) begin
-		if (!rstn) begin
-			data1_reg <= 0;
-			data2_reg <= 0;
-			s1_reg <= 0;
-			s2_reg <= 0;
-		end else if (clr) begin
-			data1_reg <= 0;
-			data2_reg <= 0;
-			s1_reg <= 0;
-			s2_reg <= 0;
-		end else if (ena) begin
+	// Pure data/sign distribution registers.  The control pipeline is cleared
+	// separately, so stale values can never be observed as a valid result.
+	// Removing reset/clear here avoids a Tile-wide reset net and lets the placer
+	// keep each copy beside its local multiplier bank.
+	always @(posedge clk) begin
+		if (ena) begin
 			data1_reg <= data1;
 			data2_reg <= data2;
 			s1_reg <= s1;
@@ -235,12 +229,8 @@ module maSubcolumn#(
 	endgenerate
 
 	// s_pipe: 与 multiplier 内部 AREG/BREG 对齐（同 cycle latch）
-	always @(posedge clk or negedge rstn) begin
-		if (!rstn)
-			s_pipe <= 1'b0;
-		else if (clr)
-			s_pipe <= 1'b0;
-		else if (ena)
+	always @(posedge clk) begin
+		if (ena)
 			s_pipe <= s1_reg | s2_reg;
 	end
 
@@ -255,12 +245,8 @@ module maSubcolumn#(
 		.sum(sum_out)
 	);
 
-	always @(posedge clk or negedge rstn) begin
-		if (!rstn)
-			result <= {WD2{1'b0}};
-		else if (clr)
-			result <= {WD2{1'b0}};
-		else if (ena)
+	always @(posedge clk) begin
+		if (ena)
 			result <= sum_out;
 	end
 

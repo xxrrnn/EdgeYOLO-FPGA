@@ -81,9 +81,9 @@ chip_defines_load $localDir
 # --- 综合/实现 directives ---
 set synDirective        Default
 set optDirective        ExploreWithRemap
-set placeDirective      Default
+set placeDirective      ExtraTimingOpt
 set physOptDirective    AggressiveExplore
-set routeDirective      AggressiveExplore
+set routeDirective      NoTimingRelaxation
 
 # --- Timing Retry 策略集 ---
 # run.tcl 在 post-route timing 失败时，从 post_opt.dcp 重新尝试下一组 directive。
@@ -103,11 +103,12 @@ set retryStrategies {
 
 # --- DSP 用量说明 ---
 # DCIM DSP 用量由 RTL 层精确控制：
-#   chip_defines.vh: DCIM_DSP_TILES=4（所有 Tile 参与）, DCIM_DSP_COL_NUM=5
-#   每 Tile: 5 col × 4 subcol × 64 ch = 1280 DSP48E2
-#   4 Tile 总: 5120 + VPU(57) = 5177 < 9024（设备容量）
-#   每 SLR: 2 Tile = 2560 < 3008（SLR 容量）
-# 无需 synth_design -max_dsp 或 OOC patch。
+#   chip_defines.vh: 8 Tile, 3 full DSP columns + 3 partial subcolumns
+#   每 Tile: (3*4+3) subcol × 64 ch = 960 DSP48E2
+#   8 Tile 总: 7680 + VPU(约57) = 7737 < 9024（设备容量）
+#   SLR0: 2 Tile = 1920；SLR1/2: 3 Tile = 2880 < 3008
+# 2+3+3 是兼顾 SLR0 PCIe/VPU 负载后的唯一均衡分配；无需全局
+# synth_design -max_dsp 或后处理 DSP patch。
 
 # --- 时序门控阈值 ---
 # post-place: 超过阈值 → 中止（不浪费 route 时间）

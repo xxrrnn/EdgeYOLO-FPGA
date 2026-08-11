@@ -51,7 +51,6 @@ synth_design -mode out_of_context -top DCIM_Array -part xcvu37p-fsvh2892-2L-e \
     -flatten_hierarchy rebuilt -directive Default
 create_clock -name dcim_clk -period 4.000 [get_ports clk]
 
-write_checkpoint -force "$out_dir/dcim_array_post_synth.dcp"
 report_utilization -file "$out_dir/utilization.rpt"
 report_utilization -hierarchical -hierarchical_depth 4 \
     -file "$out_dir/utilization_hier.rpt"
@@ -59,5 +58,13 @@ report_timing_summary -delay_type max -max_paths 20 \
     -file "$out_dir/timing_summary.rpt"
 report_high_fanout_nets -max_nets 50 \
     -file "$out_dir/high_fanout.rpt"
+
+# A checkpoint for this 8-Tile OOC netlist is roughly 300 MB and takes several
+# minutes to serialize.  Reports are the normal preflight product; request the
+# DCP explicitly only when an interactive netlist investigation needs it.
+if {[info exists ::env(DCIM_OOC_WRITE_DCP)] &&
+    $::env(DCIM_OOC_WRITE_DCP) eq "1"} {
+    write_checkpoint -force "$out_dir/dcim_array_post_synth.dcp"
+}
 
 puts "DCIM_STREAM_OOC_DONE=$out_dir"

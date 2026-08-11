@@ -20,27 +20,18 @@ module dff#(
 	generate
 		for(k=0; k<DP; k=k+1) begin: gen_dff
 			if (k == 0) begin: gen_first
-				always@(posedge clk or negedge rstn) begin
-					if(~rstn) begin
-						r_dff[k] <= 0;
-					end else if(clr) begin
-						r_dff[k] <= 0;
-					end else if(ena) begin
+				// This delay line carries data-side sign metadata; validity is
+				// tracked by pipe_stage.  Resetting it would recreate the same
+				// high-fanout reset tree as the arithmetic data registers.
+				always@(posedge clk) begin
+					if(ena) begin
 						r_dff[k] <= up_data;
-					end else begin
-						r_dff[k] <= r_dff[k];
 					end
 				end
 			end else begin: gen_rest
-				always@(posedge clk or negedge rstn) begin
-					if(~rstn) begin
-						r_dff[k] <= 0;
-					end else if(clr) begin
-						r_dff[k] <= 0;
-					end else if(ena) begin
+				always@(posedge clk) begin
+					if(ena) begin
 						r_dff[k] <= r_dff[k-1];
-					end else begin
-						r_dff[k] <= r_dff[k];
 					end
 				end
 			end

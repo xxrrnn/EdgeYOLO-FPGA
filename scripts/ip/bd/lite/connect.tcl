@@ -112,18 +112,32 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins main_rst/slowest_sync_
 connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins main_rst/ext_reset_in]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins main_rst/dcm_locked]
 
+# Per-SLR reset synchronizers for the distributed IBUF/OBUF AXI controllers.
+# Assertion follows the board/XDMA reset; deassertion is synchronized locally
+# to the same 250 MHz AXI clock in each SLR.
+foreach slr_idx {0 1 2} {
+  connect_bd_net [get_bd_pins xdma_0/axi_aclk] \
+                 [get_bd_pins tile_rst_slr${slr_idx}/slowest_sync_clk]
+  connect_bd_net [get_bd_ports cpu_reset] \
+                 [get_bd_pins tile_rst_slr${slr_idx}/ext_reset_in]
+  connect_bd_net [get_bd_pins xdma_0/axi_aresetn] \
+                 [get_bd_pins tile_rst_slr${slr_idx}/dcm_locked]
+}
+
 # ==============================================================================
 # tile_ibuf[0..N-1]: AXI BRAM Controller → dcim_array_0
 #   N = $::DCIM_NUM_TILES
 # ==============================================================================
 for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
+  set tile_slr [expr {$t < 2 ? 0 : ($t < 5 ? 1 : 2)}]
   connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_en_a]     [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_ena]
   connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_we_a]     [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_wea]
   connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_addr_a]   [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_addra]
   connect_bd_net [get_bd_pins tile_ibuf_ctrl_${t}/bram_wrdata_a] [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_dina]
   connect_bd_net [get_bd_pins dcim_array_0/tile_ibuf${t}_ext_douta] [get_bd_pins tile_ibuf_ctrl_${t}/bram_rddata_a]
   connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aclk]
-  connect_bd_net [get_bd_pins xdma_0/axi_aresetn]         [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aresetn]
+  connect_bd_net [get_bd_pins tile_rst_slr${tile_slr}/peripheral_aresetn] \
+                 [get_bd_pins tile_ibuf_ctrl_${t}/s_axi_aresetn]
 }
 
 # ==============================================================================
@@ -131,13 +145,15 @@ for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
 #   N = $::DCIM_NUM_TILES
 # ==============================================================================
 for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
+  set tile_slr [expr {$t < 2 ? 0 : ($t < 5 ? 1 : 2)}]
   connect_bd_net [get_bd_pins tile_obuf_ctrl_${t}/bram_en_a]     [get_bd_pins dcim_array_0/tile_obuf${t}_ext_ena]
   connect_bd_net [get_bd_pins tile_obuf_ctrl_${t}/bram_we_a]     [get_bd_pins dcim_array_0/tile_obuf${t}_ext_wea]
   connect_bd_net [get_bd_pins tile_obuf_ctrl_${t}/bram_addr_a]   [get_bd_pins dcim_array_0/tile_obuf${t}_ext_addra]
   connect_bd_net [get_bd_pins tile_obuf_ctrl_${t}/bram_wrdata_a] [get_bd_pins dcim_array_0/tile_obuf${t}_ext_dina]
   connect_bd_net [get_bd_pins dcim_array_0/tile_obuf${t}_ext_douta] [get_bd_pins tile_obuf_ctrl_${t}/bram_rddata_a]
   connect_bd_net [get_bd_pins xdma_0/axi_aclk]            [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aclk]
-  connect_bd_net [get_bd_pins xdma_0/axi_aresetn]         [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aresetn]
+  connect_bd_net [get_bd_pins tile_rst_slr${tile_slr}/peripheral_aresetn] \
+                 [get_bd_pins tile_obuf_ctrl_${t}/s_axi_aresetn]
 }
 
 # ==============================================================================

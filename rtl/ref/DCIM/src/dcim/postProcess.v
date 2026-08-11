@@ -44,12 +44,10 @@ module postProcess#(
 		.dn_valid(pipe_valid),  .dn_ready(pipe_ready)
 	);
 
-	always @(posedge clk or negedge rstn) begin
-		if (~rstn)
-			pipe_data <= {(WD2*CH_OUT){1'b0}};
-		else if (clr)
-			pipe_data <= {(WD2*CH_OUT){1'b0}};
-		else if (merge_valid & merge_ready)
+	// Data is consumed only with pipe_valid, which is reset/cleared by the
+	// adjacent pipe_stage.  Avoid placing reset on this wide data register.
+	always @(posedge clk) begin
+		if (merge_valid & merge_ready)
 			pipe_data <= merge_data;
 	end
 

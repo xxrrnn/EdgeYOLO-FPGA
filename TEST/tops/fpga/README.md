@@ -89,3 +89,37 @@ BUILD_TAG=dcim_stream_bdcheck vivado -mode batch \
 
 该检查会执行 BD 校验并生成 wrapper，但不会启动各 IP 的 OOC 综合。日志末尾出现
 `STREAM_BD_VALIDATE_PASS` 即表示接口集成通过。
+
+## 时序预检与单路线实现
+
+本分支在进入实现前做了三类结构性硬化：
+
+- 乘法、加法树、merge/accumulate 等纯数据寄存器不再承载 Tile 级异步复位；
+  valid/状态寄存器仍保持确定复位，功能边界不变；
+- 权重 BRAM 输出增加一级寄存，双 bank 选择改为每个 128-bit word 的本地副本，
+  避免 BRAM cascade 长路径和单个 8194-load 选择网；
+- 16 个 Tile IBUF/OBUF AXI BRAM controller 与三个本地 reset synchronizer 按
+  `2+3+3` 固定到对应 SLR，避免 controller、URAM 与复位源跨 SLR。
+
+先运行 8-Tile DCIM OOC 综合；默认只写报告，避免每轮序列化约 300 MB DCP：
+
+```bash
+DCIM_OOC_DIR=output/tops/fpga/dcim_stream_ooc_timingopt \
+vivado -mode batch -source TEST/tops/fpga/synth_dcim_stream_ooc.tcl
+```
+
+需要交互检查 OOC 网表时才加 `DCIM_OOC_WRITE_DCP=1`。完整设计推荐先只生成共享
+`post_opt.dcp`，随后从同一 checkpoint 只跑默认的强时序路线：
+
+```bash
+BUILD_TAG=tops_ila_timing_hardened STOP_AFTER=opt FLOW_MODE=project \
+vivado -mode batch -source scripts/chip-lite/run.tcl
+
+BUILD_TAG=tops_ila_timing_hardened SOURCE_TAG=tops_ila_timing_hardened \
+RESUME_FROM=opt PLACE_DIRECTIVE=ExtraTimingOpt FLOW_MODE=project \
+vivado -mode batch -source scripts/chip-lite/run.tcl
+```
+
+该单路线使用 `ExtraTimingOpt → AggressiveExplore → NoTimingRelaxation`，route 后再做
+增量 `AggressiveExplore` 与 hold fix。`config.tcl` 中的多策略 retry 仍作为兜底保留，
+但不再是正常构建的前提。

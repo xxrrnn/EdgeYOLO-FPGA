@@ -124,7 +124,7 @@ report_utilization -hierarchical -hierarchical_depth 5 \
 
 set _dsp_total [llength [get_cells -hierarchical -filter {REF_NAME == DSP48E2}]]
 puts "INFO: Synthesis complete. DSP48E2 total: $_dsp_total"
-foreach _tidx {0 1 2 3} {
+for {set _tidx 0} {$_tidx < $::DCIM_NUM_TILES} {incr _tidx} {
     set _tdsp [llength [get_cells -hierarchical -filter "REF_NAME == DSP48E2 && NAME =~ *gen_tiles\[$_tidx\]*"]]
     puts "INFO:   Tile $_tidx: $_tdsp DSP48E2"
 }

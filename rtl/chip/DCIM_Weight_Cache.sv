@@ -56,8 +56,11 @@ module DCIM_Weight_Cache #(
     reg [CYCLE_AW-1:0] load_req_word;
     reg                 load_rsp_valid;
     reg [CYCLE_AW-1:0] load_rsp_word;
+    reg                 load_data_valid;
+    reg [CYCLE_AW-1:0]  load_data_word;
+    reg [WORD_WIDTH-1:0] load_data;
 
-    assign row_load_busy = load_active | load_rsp_valid;
+    assign row_load_busy = load_active | load_rsp_valid | load_data_valid;
 
     wire [STORE_AW-1:0] load_mem_addr = load_base + load_req_word;
     wire mem_enable = store_wr_valid | load_active;
@@ -83,8 +86,17 @@ module DCIM_Weight_Cache #(
     genvar word_i;
     generate
         for (word_i = 0; word_i < CYCLE; word_i = word_i + 1) begin : gen_weight_bus
+            // One select register per 128-bit word is enough to preserve the
+            // atomic bank swap while replacing an 8194-load global mux select
+            // with short local nets.  It need not be reset: weight_valid remains
+            // low until row_activate initializes every copy.
+            (* keep = "true", max_fanout = 32 *) reg active_bank_sel;
+            always_ff @(posedge clk) begin
+                if (row_activate)
+                    active_bank_sel <= ~active_bank;
+            end
             assign weight_data[word_i*WORD_WIDTH +: WORD_WIDTH] =
-                active_bank ? cache1[word_i] : cache0[word_i];
+                active_bank_sel ? cache1[word_i] : cache0[word_i];
         end
     endgenerate
 
@@ -98,6 +110,8 @@ module DCIM_Weight_Cache #(
             load_req_word <= '0;
             load_rsp_valid <= 1'b0;
             load_rsp_word <= '0;
+            load_data_valid <= 1'b0;
+            load_data_word <= '0;
             row_load_done <= 1'b0;
             weight_valid <= 1'b0;
         end else if (clear) begin
@@ -109,6 +123,8 @@ module DCIM_Weight_Cache #(
             load_req_word <= '0;
             load_rsp_valid <= 1'b0;
             load_rsp_word <= '0;
+            load_data_valid <= 1'b0;
+            load_data_word <= '0;
             row_load_done <= 1'b0;
             weight_valid <= 1'b0;
         end else begin
@@ -141,15 +157,25 @@ module DCIM_Weight_Cache #(
             if (load_active)
                 load_rsp_word <= load_req_word;
 
+            // The additional response register is deliberately outside the wide
+            // cache write.  Vivado can merge it into the memory output register,
+            // breaking the four-RAMB cascade-to-cache timing path.  Only preload
+            // latency grows by one clock; compute throughput is unchanged.
+            load_data_valid <= load_rsp_valid;
             if (load_rsp_valid) begin
-                if (load_bank)
-                    cache1[load_rsp_word] <= mem_q;
-                else
-                    cache0[load_rsp_word] <= mem_q;
+                load_data_word <= load_rsp_word;
+                load_data <= mem_q;
+            end
 
-                if (load_rsp_word == CYCLE-1)
+            if (load_data_valid) begin
+                if (load_bank)
+                    cache1[load_data_word] <= load_data;
+                else
+                    cache0[load_data_word] <= load_data;
+
+                if (load_data_word == CYCLE-1)
                     row_load_done <= 1'b1;
-                if (load_rsp_word == CYCLE-1)
+                if (load_data_word == CYCLE-1)
                     standby_valid <= 1'b1;
             end
         end

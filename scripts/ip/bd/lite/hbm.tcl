@@ -14,6 +14,14 @@
 # ==============================================================================
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 main_rst
 
+# The 16 per-Tile AXI BRAM controllers are physically distributed over all
+# three SLRs.  Give each SLR a local reset synchronizer so reset release does
+# not become a high-fanout, route-only path from the XDMA in SLR0.  The XDC
+# places these three tiny blocks beside the controllers that they reset.
+foreach slr_idx {0 1 2} {
+  create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 tile_rst_slr${slr_idx}
+}
+
 # ==============================================================================
 # 2. HBM IP (1 stack, 4GB, interleaved via SAXI_00 + internal switch)
 # ==============================================================================

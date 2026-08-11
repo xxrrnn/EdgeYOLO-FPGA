@@ -45,12 +45,10 @@ module adderTreePipe#(
     generate
         if (CH_IN == 1) begin: gen_one
             reg [WD_OUT-1:0] r_sum;
-            always @(posedge clk or negedge rstn) begin
-                if (!rstn) begin
-                    r_sum <= 0;
-                end else if (clr) begin
-                    r_sum <= 0;
-                end else if (ena) begin
+            // Data state is qualified by maArray's valid pipeline.  Do not
+            // distribute reset/clear through every node of the wide tree.
+            always @(posedge clk) begin
+                if (ena) begin
                     r_sum <= s ? {{(WD_OUT-WD_IN){d[WD_IN-1]}}, d[WD_IN-1:0]} : {{(WD_OUT-WD_IN){1'b0}}, d[WD_IN-1:0]};
                 end
             end
@@ -101,12 +99,8 @@ module adderTreePipe#(
                 .sum(psum1)
             );
 
-            always @(posedge clk or negedge rstn) begin
-                if (!rstn) begin
-                    r_sum <= 0;
-                end else if (clr) begin
-                    r_sum <= 0;
-                end else if (ena) begin
+            always @(posedge clk) begin
+                if (ena) begin
                     if (s_aligned)
                         r_sum <= {{(WD_OUT-PSUM_W){psum0[PSUM_W-1]}}, psum0} + {{(WD_OUT-PSUM_W){psum1[PSUM_W-1]}}, psum1};
                     else

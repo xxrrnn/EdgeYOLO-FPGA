@@ -60,7 +60,7 @@ module DCIM_Result_Stream #(
 
     function automatic [PACKED_WIDTH-1:0] pack_core_result(
         input [CORE_WIDTH-1:0] data,
-        input [2:0] pack_mode
+        input pack_int16
     );
         reg [PACKED_WIDTH-1:0] packed_value;
         reg signed [WD3-1:0] physical_value;
@@ -69,7 +69,7 @@ module DCIM_Result_Stream #(
         integer physical_lane;
         begin
             packed_value = '0;
-            if (pack_mode == `MODE_INT16) begin
+            if (pack_int16) begin
                 for (logical_lane = 0; logical_lane < CH_OUT/4; logical_lane = logical_lane + 1) begin
                     physical_lane = logical_lane * 4;
                     raw_int16 = {
@@ -95,7 +95,7 @@ module DCIM_Result_Stream #(
     function automatic [PACKED_WIDTH-1:0] add_partial_sum(
         input [PACKED_WIDTH-1:0] current_value,
         input [PACKED_WIDTH-1:0] partial_value,
-        input [2:0] add_mode
+        input add_int16
     );
         reg [PACKED_WIDTH-1:0] sum_value;
         reg signed [31:0] a32, b32;
@@ -103,7 +103,7 @@ module DCIM_Result_Stream #(
         integer lane;
         begin
             sum_value = '0;
-            if (add_mode == `MODE_INT16) begin
+            if (add_int16) begin
                 for (lane = 0; lane < PACKED_WIDTH/64; lane = lane + 1) begin
                     a64 = current_value[lane*64 +: 64];
                     b64 = partial_value[lane*64 +: 64];
@@ -120,7 +120,11 @@ module DCIM_Result_Stream #(
         end
     endfunction
 
-    reg [2:0] mode_reg;
+    // Packing and accumulation each expand one INT16 select into a wide lane
+    // mux.  Independent directly-registered copies allow synthesis/placement to
+    // replicate them locally; a shared mode comparator previously had 1184 loads.
+    (* keep = "true", max_fanout = 32 *) reg pack_int16_reg;
+    (* keep = "true", max_fanout = 32 *) reg add_int16_reg;
     reg first_row_reg;
     reg last_row_reg;
     reg [JOB_COUNT_W-1:0] pixel_count_reg;
@@ -182,9 +186,11 @@ module DCIM_Result_Stream #(
     assign core_out_ready = sum_in_ready && partial_available;
     wire core_out_fire = core_out_valid && core_out_ready;
 
-    wire [PACKED_WIDTH-1:0] packed_core = pack_core_result(core_out_data, mode_reg);
+    wire [PACKED_WIDTH-1:0] packed_core =
+        pack_core_result(core_out_data, pack_int16_reg);
     wire [PACKED_WIDTH-1:0] accumulated_core =
-        first_row_reg ? packed_core : add_partial_sum(packed_core, partial_data, mode_reg);
+        first_row_reg ? packed_core :
+        add_partial_sum(packed_core, partial_data, add_int16_reg);
 
     wire writer_accept = sum_valid && last_row_reg && writer_ready;
     wire intermediate_accept = sum_valid && !last_row_reg;
@@ -210,9 +216,20 @@ module DCIM_Result_Stream #(
 
     wire partial_consume = core_out_fire && !first_row_reg;
 
+    // Keep these registers entirely outside the asynchronous-reset process.
+    // Their values are observed only after row_start initializes them and the
+    // corresponding valid token arrives.  An unreset register left inside an
+    // async-reset always_ff is otherwise inferred as FDCP replicas whose setup
+    // timing cannot be analyzed reliably.
+    always_ff @(posedge clk) begin
+        if (row_start) begin
+            pack_int16_reg <= (mode == `MODE_INT16);
+            add_int16_reg <= (mode == `MODE_INT16);
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            mode_reg <= `MODE_INT8;
             first_row_reg <= 1'b1;
             last_row_reg <= 1'b1;
             pixel_count_reg <= '0;
@@ -251,7 +268,6 @@ module DCIM_Result_Stream #(
             row_done <= 1'b0;
 
             if (row_start) begin
-                mode_reg <= mode;
                 first_row_reg <= first_acc_row;
                 last_row_reg <= last_acc_row;
                 pixel_count_reg <= pixel_count;

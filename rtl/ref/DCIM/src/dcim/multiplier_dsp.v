@@ -31,11 +31,13 @@ module multiplier_dsp #(
 	reg signed [WD_OUT-1:0] a_reg;
 	reg signed [WD_OUT-1:0] b_reg;
 
-	always @(posedge clk or negedge rstn) begin
-		if (!rstn) begin
-			a_reg <= {WD_OUT{1'b0}};
-			b_reg <= {WD_OUT{1'b0}};
-		end else if (ena) begin
+	// These are data-only pipeline registers.  Their contents are ignored until
+	// the matching valid token reaches the output, so resetting them adds no
+	// functional protection.  In particular, an asynchronous reset prevents
+	// Vivado from packing these registers into DSP48E2 AREG/BREG and creates a
+	// very large reset tree across every Tile.
+	always @(posedge clk) begin
+		if (ena) begin
 			a_reg <= ext_a;
 			b_reg <= ext_b;
 		end
