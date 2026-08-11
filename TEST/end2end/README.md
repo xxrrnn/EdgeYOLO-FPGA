@@ -10,6 +10,7 @@
 TEST/end2end/
 ├── run.py                 统一 E2E 入口
 ├── model_inputs_manifest.json
+├── EXAMPLES.md            COCO/ImageNet 样例来源与验收边界
 ├── yolo/
 │   ├── model/             INT8 与原生 W16A16 PT/ONNX、解析权重
 │   ├── examples/          COCO 输入及 manifest

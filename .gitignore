@@ -39,6 +39,7 @@
 
 # Final project documents (render intermediates remain under ignored tmp/).
 !docs/**/*.docx
+docs/~$*.docx
 
 # Source trees
 !rtl/
@@ -64,35 +65,9 @@
 !tools/**/*.tcl
 !tools/Makefile
 
-!tests/
-!tests/**/
-!tests/**/*.py
-!tests/**/*.sh
-!tests/**/*.yaml
-!tests/**/*.yml
-!tests/bin/*.exe
-
 !xdc/
 !xdc/**/
 !xdc/**/*.xdc
-
-# Model metadata and checked-in parsed weights used by current flows.
-!model/
-!model/**/
-!model/**/*.md
-!model/**/*.json
-!model/**/*.yaml
-!model/**/*.yml
-!model/model_inputs_manifest.json
-!model/resnet18/parsed_vai/weights/*.npz
-!model/resnet18/parsed_vai_int16_widened/weights/*.npz
-
-!examples/
-!examples/**/
-!examples/**/*.md
-!examples/**/*.json
-!examples/**/*.jpg
-!examples/**/*.JPEG
 
 # ==============================================================================
 # Generated Vivado/build artifacts
@@ -144,33 +119,6 @@ model/algorithm/Infrared-Object-Detection/
 model/algorithm/Resnet18-quantization/
 model/algorithm/quantized-yolov5/
 model/algorithm/quantized-yolov5_arcive/
-
-# Self-contained 80832ec attempt1 release.  Keep the one deployment image and
-# offline model inputs; compiler/runtime outputs remain ignored under output/.
-!bitstream/
-!bitstream/*.bit
-!bitstream/*.json
-!bitstream/*.md
-!model/yolov5n_coco50k_qat/
-!model/yolov5n_coco50k_qat/**/
-!model/yolov5n_coco50k_qat/README.txt
-!model/yolov5n_coco50k_qat/parse_quant_export.py
-!model/yolov5n_coco50k_qat/int8/
-!model/yolov5n_coco50k_qat/int8/best.pt
-!model/yolov5n_coco50k_qat/int8/best.onnx
-!model/yolov5n_coco50k_qat/int8/best.quant.onnx
-!model/yolov5n_coco50k_qat/int16/
-!model/yolov5n_coco50k_qat/int16/best.pt
-!model/yolov5n_coco50k_qat/int16/best.onnx
-!model/yolov5n_coco50k_qat/int16/best.quant.onnx
-!model/yolov5n_coco50k_qat/parsed_int8/network.json
-!model/yolov5n_coco50k_qat/parsed_int8/activation_scales.json
-!model/yolov5n_coco50k_qat/parsed_int8/weights/*.npz
-!model/yolov5n_coco50k_qat/parsed_int16/network.json
-!model/yolov5n_coco50k_qat/parsed_int16/activation_scales.json
-!model/yolov5n_coco50k_qat/parsed_int16/weights/*.npz
-!model/resnet18/resnet18_fp32.onnx
-!model/resnet18/resnet18_w8a8.onnx
 
 # Files moved into TEST/end2end and TEST/utils.  Keep the explicit binary
 # allow-list narrow so generated artifacts under TEST remain ignored.

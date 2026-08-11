@@ -17,6 +17,6 @@ from TEST.utils.paths import OUTPUT_ROOT, RTL_CASE_GENERATOR
 from TEST.utils.xdma_win import ChipRunnerWin
 ```
 
-不要再从 `tests/chip/unit-tb` 复制 `xdma_win.py`，也不要在每个分支重复定义仓库层级、
-TOPS 公式或 JSON 写入逻辑。旧 `tests/chip/unit-tb/{xdma_win,hbm_flow}.py` 只保留兼容
-转发，不是第二份实现；各分支合并本次目录变更后应逐步改为上面的包导入。
+不要再从旧 `tests/chip/unit-tb` 路径复制 `xdma_win.py`，也不要在每个分支重复定义
+仓库层级、TOPS 公式或 JSON 写入逻辑。旧 `tests/` 树已删除；各分支合并本次目录
+变更后必须使用上面的 `TEST.utils` 包导入。
