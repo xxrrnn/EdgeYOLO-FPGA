@@ -123,3 +123,8 @@ vivado -mode batch -source scripts/chip-lite/run.tcl
 该单路线使用 `ExtraTimingOpt → AggressiveExplore → NoTimingRelaxation`，route 后再做
 增量 `AggressiveExplore` 与 hold fix。`config.tcl` 中的多策略 retry 仍作为兜底保留，
 但不再是正常构建的前提。
+
+最终8-Tile OOC预检结果保存在
+`output/tops/fpga/dcim_stream_ooc_timingopt5/`：0 error、0 critical warning，
+`WNS=+1.741 ns @ 250 MHz`，最大普通信号扇出748。与repeat功能基线相比，CLB LUT
+减少19.37%、CLB Register减少23.83%，DSP/BRAM/URAM数量不变。

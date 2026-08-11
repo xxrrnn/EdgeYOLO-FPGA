@@ -84,16 +84,21 @@ TOPS = 8192 OP/cycle × 250,000,000 cycle/s / 1e12 = 2.048
 
 ## OOC 综合预检
 
-在完整布局布线前对8-Tile `DCIM_Array` 做250 MHz OOC综合。与加入repeat控制前相比：
+在完整布局布线前对8-Tile `DCIM_Array` 做250 MHz OOC综合。下表以加入repeat后的
+功能网表为基线，对比最终时序硬化网表：
 
-| 资源 | repeat前 | repeat后 | 增量 |
+| 资源 | repeat基线 | timing hardened | 变化 |
 |---|---:|---:|---:|
-| CLB LUT | 660,123 | 661,499 | +1,376 |
-| CLB Register | 715,817 | 717,218 | +1,401 |
+| CLB LUT | 661,499 | 533,387 | -128,112 (-19.37%) |
+| CLB Register | 717,218 | 546,290 | -170,928 (-23.83%) |
 | BRAM Tile | 208 | 208 | 0 |
 | URAM | 192 | 192 | 0 |
 | DSP | 7,680 | 7,680 | 0 |
 
-未布局OOC的setup WNS仍为 `+1.605 ns @ 4.000 ns`，与repeat前相同。该结果说明
-repeat只增加少量计数/回卷控制，没有增加乘加阵列和存储资源；它不能替代完整布局
-布线的最终时序结论。
+未布局 OOC setup WNS 从 `+1.605 ns` 提升到 `+1.741 ns @ 4.000 ns`。综合为
+0 error、0 critical warning；DSP 异步复位打包 warning 和权重 BRAM 输出级 warning
+均为0。原先72,702-load核心复位、8,194-load权重bank选择以及4,084-load activation
+payload复位均已消失，最终最大普通信号扇出为748。
+
+该结果说明时序硬化没有减少8-Tile乘加规模，也没有增加片上存储；它仍是未布局的
+网表预检，不能替代完整 post-route timing 结论。
