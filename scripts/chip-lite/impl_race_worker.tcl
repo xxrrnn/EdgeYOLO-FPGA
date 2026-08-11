@@ -88,9 +88,13 @@ puts "INFO: strategy place=$placeDirectiveWorker phys_opt=$physDirectiveWorker r
 if {[catch {
     open_checkpoint $sourceDcp
 
-    set pbs [get_pblocks -quiet]
-    if {[llength $pbs]} { delete_pblocks $pbs }
-    read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+    if {$raceReloadXdc} {
+        set pbs [get_pblocks -quiet]
+        if {[llength $pbs]} { delete_pblocks $pbs }
+        read_xdc -unmanaged [file normalize "$xdcDir/chip/chip_timing.xdc"]
+    } else {
+        puts "INFO: using timing constraints and Pblocks embedded in post_opt.dcp"
+    }
     if {$implMode eq "incremental"} {
         puts "INFO: applying stable routed checkpoint as incremental placement reference"
         read_checkpoint -incremental [file normalize $incrementalDcp]

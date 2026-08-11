@@ -155,9 +155,9 @@ echo "[two-stage] post-place ranking:"
 column -t -s $'\t' "$ranking" 2>/dev/null || cat "$ranking"
 
 # -----------------------------------------------------------------------------
-# Stage 2: construct a compact route portfolio.
-# Default order is best-place/base-route, second-place/base-route, then
-# best-place/alternate-route. This avoids routing all eight legacy combinations.
+# Stage 2: route the top-N placements first. Only after every available ranked
+# placement has received the base route do additional slots explore alternate
+# routes. Therefore IMPL_ROUTE_TOP_K=3 means exactly rank0/rank1/rank2 -> route.
 # -----------------------------------------------------------------------------
 declare -a route_specs=()
 add_route_spec() {
@@ -171,12 +171,12 @@ add_route_spec() {
 
 add_route_spec 0 0
 add_route_spec 1 0
-add_route_spec 0 1
 add_route_spec 2 0
-add_route_spec 0 2
+add_route_spec 0 1
 add_route_spec 1 1
-add_route_spec 0 3
 add_route_spec 2 1
+add_route_spec 0 2
+add_route_spec 0 3
 if (( ${#route_specs[@]} > route_top_k )); then
   route_specs=("${route_specs[@]:0:route_top_k}")
 fi

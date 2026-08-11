@@ -108,35 +108,37 @@ DCIM_OOC_DIR=output/tops/fpga/dcim_stream_ooc_timingopt \
 vivado -mode batch -source TEST/tops/fpga/synth_dcim_stream_ooc.tcl
 ```
 
-需要交互检查 OOC 网表时才加 `DCIM_OOC_WRITE_DCP=1`。完整设计推荐先只生成共享
-`post_opt.dcp`，随后从同一 checkpoint 启动两阶段实现竞速：
+需要交互检查 OOC 网表时才加 `DCIM_OOC_WRITE_DCP=1`。完整设计直接用一个命令从
+工程创建和综合开始，一直运行到 routing、bitstream 和 `.ltx`：
 
 ```bash
-BUILD_TAG=tops_ila_timing_hardened STOP_AFTER=opt FLOW_MODE=project \
-vivado -mode batch -source scripts/chip-lite/run.tcl
-
-BUILD_TAG=tops_ila_timing_hardened SOURCE_TAG=tops_ila_timing_hardened \
-RESUME_FROM=opt FLOW_MODE=project PLACE_THREADS=32 ROUTE_THREADS=32 \
-IMPL_ROUTE_TOP_K=3 \
+BUILD_TAG=tops_ila_ranked FLOW_MODE=project IMPL_FLOW=two_stage \
+IMPL_ROUTE_TOP_K=3 PLACE_THREADS=32 ROUTE_THREADS=32 SYNTH_JOBS=128 \
 vivado -mode batch -source scripts/chip-lite/run.tcl
 ```
 
-第一阶段从相同 `post_opt.dcp` 并行运行 `ExtraTimingOpt`、`Explore`、`Default`
-三个不重复的 place，按 post-place WNS/TNS/失败端点排序；第二阶段默认只并行运行
-三个 routing 任务：最佳 place 的主路线、次佳 place 的主路线、最佳 place 的备选
-route。每个进程最多 32 线程，因此两阶段各约使用 96 个 CPU 线程。最终只对获胜
-DCP 生成一次 DRC、功耗报告、bitstream 和 `.ltx`。设置 `IMPL_FLOW=sequential`
-可退回原有顺序 retry。Project run 已经保存综合 DCP，因此默认跳过重复的
+`run.tcl` 先完成 OOC/IP 综合、顶层综合和 `opt_design`，随后从本轮自动生成的
+`post_opt.dcp` 并行运行 `ExtraTimingOpt`、`Explore`、`Default` 三个唯一 place，
+按 WNS、TNS 和失败端点数排序。默认排名前三的 place 各自进入一次主
+phys_opt/route；只有 `IMPL_ROUTE_TOP_K>3` 时才追加高排名候选的备选路线。最终按
+timing 状态、WNS、WHS 选择获胜项，只对 winner 发布统一的 `post_route.dcp`、
+`top.bit` 和 `top.ltx`。设置 `IMPL_FLOW=sequential` 可退回原有顺序 retry；
+`IMPL_FLOW=full_race` 保留为不筛选的诊断备选。Project run 已经保存综合 DCP，因此默认跳过重复的
 `SynOutputDir/post_synth.dcp` 和完整 post-synth 诊断报告；仅在需要这些中间产物时
 设置 `FULL_SYNTH_REPORTS=1`。
 
-两阶段 worker 默认复用 `post_opt.dcp` 内嵌的 XDC/Pblock，避免每个 place 再花约数
-分钟重读完整网表约束。如果刻意使用旧 DCP 验证新版 `chip_timing.xdc`，设置
+各 attempt 默认复用 `post_opt.dcp` 内嵌的 XDC/Pblock，避免重复读取约束。如果
+刻意使用旧 DCP 验证新版 `chip_timing.xdc`，设置
 `RACE_RELOAD_XDC=1`。
 
-如果 place 已全部完成而调度进程在 routing 前中断，可复用原 race 目录继续，避免
-重新布局：设置原来的 `RACE_ID`，并加 `RACE_RESUME_AFTER_PLACE=1` 后再次执行
-`RESUME_FROM=opt` 流程。
+若综合后 implementation 中断，可使用同一 tag 执行
+`make resume TAG=tops_ila_ranked FROM=opt`，无需重新综合；也仍支持从单个
+`post_place.dcp` 或 `post_phys_opt.dcp` 继续调试。
+
+同一生产脚本已通过 `impl_rank_smoke` 小 RTL 实测：3 个 place 全部成功，top-2
+严格只启动2个 route，两个 route 均为 `WNS=+1.358 ns`、`WHS=+0.088 ns`，
+最终返回 `RANK_SMOKE_PASS` 并正确发布 winner DCP。复现方法见
+`TEST/tops/fpga/impl_rank_smoke/README.md`。
 
 最终8-Tile OOC预检结果保存在
 `output/tops/fpga/dcim_stream_ooc_timingopt5/`：0 error、0 critical warning，

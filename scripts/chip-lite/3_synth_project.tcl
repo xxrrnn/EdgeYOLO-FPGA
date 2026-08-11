@@ -162,12 +162,21 @@ puts "\n========== Step 3-6: Implementation with Retry =========="
 
 set optDcp [file normalize "$ImplOutputDir/post_opt.dcp"]
 
-# Linux project-mode defaults to a two-stage parallel race. Three unique place
-# directives run first; only the best-ranked placements proceed to a compact
-# routing portfolio. Set IMPL_FLOW=sequential to retain the legacy retry loop.
+# Linux project-mode defaults to the validated place-rank-top-N-route flow.
+# Three unique placements run in parallel; only the most promising checkpoints
+# proceed to routing. Set IMPL_FLOW=full_race or sequential for alternatives.
 set _implFlow "two_stage"
 if {[info exists ::env(IMPL_FLOW)] && [string trim $::env(IMPL_FLOW)] ne ""} {
     set _implFlow [string tolower [string trim $::env(IMPL_FLOW)]]
+}
+if {$_implFlow eq "full_race" && $::tcl_platform(platform) eq "unix"} {
+    source [file normalize "$thisScriptDir/impl_full_race_driver.tcl"]
+    lassign [run_full_race_impl $optDcp] wns whs
+    if {$wns < 0.0 || $whs < 0.0} {
+        error "\[full_race_impl\] Best routed result misses timing: WNS=${wns}ns WHS=${whs}ns"
+    }
+    puts "INFO: 3_synth_project complete — full-space implementation race successful."
+    return
 }
 if {$_implFlow eq "two_stage" && $::tcl_platform(platform) eq "unix"} {
     source [file normalize "$thisScriptDir/impl_two_stage_driver.tcl"]
@@ -178,8 +187,8 @@ if {$_implFlow eq "two_stage" && $::tcl_platform(platform) eq "unix"} {
     puts "INFO: 3_synth_project complete — two-stage implementation successful."
     return
 }
-if {$_implFlow eq "two_stage"} {
-    puts "WARNING: two-stage flow is unavailable on this platform; using sequential retry."
+if {$_implFlow in {full_race two_stage}} {
+    puts "WARNING: parallel implementation flow is unavailable on this platform; using sequential retry."
 }
 
 set bestWns -999.0

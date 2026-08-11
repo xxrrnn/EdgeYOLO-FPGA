@@ -108,7 +108,7 @@ if {[catch {
 
 if {$resumeFrom ne ""} {
     # 加载已有 checkpoint 继续实现
-    set _dcpOnlyResume [expr {$resumeFrom eq "opt" && $implFlow eq "two_stage" &&
+    set _dcpOnlyResume [expr {$resumeFrom eq "opt" && $implFlow in {full_race two_stage} &&
                               $::tcl_platform(platform) eq "unix"}]
     if {$flowMode eq "project" && !$_dcpOnlyResume} {
         set xpr [file normalize "$sourceProjPath/${projName}.xpr"]
@@ -134,7 +134,12 @@ if {$resumeFrom ne ""} {
     set _implFlow $implFlow
 
     if {$resumeFrom eq "opt" && !$_singlePassMode &&
-        $_implFlow eq "two_stage" && $::tcl_platform(platform) eq "unix"} {
+        $_implFlow eq "full_race" && $::tcl_platform(platform) eq "unix"} {
+        source [file normalize "$thisScriptDir/impl_full_race_driver.tcl"]
+        lassign [run_full_race_impl $dcp] wns whs
+
+    } elseif {$resumeFrom eq "opt" && !$_singlePassMode &&
+              $_implFlow eq "two_stage" && $::tcl_platform(platform) eq "unix"} {
         source [file normalize "$thisScriptDir/impl_two_stage_driver.tcl"]
         lassign [run_two_stage_impl $dcp] wns whs
 
@@ -267,19 +272,27 @@ if {$resumeFrom ne ""} {
         if {[llength $paths]} { set wns [get_property SLACK [lindex $paths 0]] }
     }
 
-    puts "INFO: Post-route WNS = ${wns} ns"
+    if {![info exists whs]} {
+        set _holdPaths [get_timing_paths -max_paths 1 -delay_type min -quiet]
+        set whs 0.0
+        if {[llength $_holdPaths]} { set whs [get_property SLACK [lindex $_holdPaths 0]] }
+    }
+    puts "INFO: Post-route WNS = ${wns} ns, WHS = ${whs} ns"
 
     # FORCE_BITSTREAM=1 时，即使 WNS < 0 也生成 bitstream（用于微小违例如 -0.05ns 以内）
     set _forceThresh -0.05
     set _forceBit [expr {[info exists ::env(FORCE_BITSTREAM)] && $::env(FORCE_BITSTREAM) eq "1"}]
 
-    if {$wns >= 0 || ($wns > $_forceThresh && $_forceBit)} {
+    set _timingFailure ""
+    set _setupAccepted [expr {$wns >= 0 || ($wns > $_forceThresh && $_forceBit)}]
+    if {$_setupAccepted && $whs >= 0} {
         if {$wns < 0} {
             puts "WARNING: Forcing bitstream despite WNS=${wns}ns (FORCE_BITSTREAM=1, threshold=${_forceThresh}ns)"
         }
         set _topBit [file normalize "$ImplOutputDir/top.bit"]
-        if {[file exists $_topBit]} {
-            puts "INFO: Bitstream already written by selected two-stage winner."
+        if {([info exists ::twoStageBitWritten] && $::twoStageBitWritten) ||
+            ([info exists ::fullRaceBitWritten] && $::fullRaceBitWritten)} {
+            puts "INFO: Bitstream and debug probes already written by selected race winner."
         } else {
             set_property CONFIG_MODE SPIx4 [current_design]
             set_property BITSTREAM.CONFIG.CONFIGRATE 63.8 [current_design]
@@ -288,10 +301,12 @@ if {$resumeFrom ne ""} {
             puts "INFO: Bitstream written."
         }
     } else {
-        puts "ERROR: Timing not met (WNS=${wns}ns) — bitstream skipped."
+        set _timingFailure "Timing not met (WNS=${wns}ns, WHS=${whs}ns); bitstream skipped"
+        puts "ERROR: $_timingFailure"
     }
 
     source [file normalize "$thisScriptDir/4_rpt.tcl"]
+    if {$_timingFailure ne ""} { error $_timingFailure }
 
 } else {
     # ==============================================================================
@@ -408,4 +423,10 @@ if {$_run_error ne ""} {
     } else {
         notify_completion "COMPLETED" "Flow finished (check reports)"
     }
+}
+
+# Do not let batch wrappers report success when synthesis/implementation failed.
+# Notification is deliberately attempted first so a failed build is still visible.
+if {$_run_error ne ""} {
+    return -code error $_run_error
 }

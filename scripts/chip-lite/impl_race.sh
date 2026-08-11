@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -Eeo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
 
 tag="${TAG:-${BUILD_TAG:-$(git rev-parse --short HEAD 2>/dev/null || date +%y%m%d_%H%M)}}"
 vivado_bin="${VIVADO:-vivado}"
-impl_jobs="${IMPL_JOBS:-4}"
-poll_sec="${RACE_POLL_SEC:-60}"
-stop_on_win="${RACE_STOP_ON_WIN:-1}"
+impl_jobs="${IMPL_JOBS:-8}"
 min_wns="${RACE_MIN_WNS_NS:-0.05}"
 min_whs="${RACE_MIN_WHS_NS:-0.02}"
 incremental_dcp="${RACE_INCREMENTAL_DCP:-}"
 incremental_attempts="${RACE_INCREMENTAL_ATTEMPTS:-4}"
+race_id="${RACE_ID:-$(date +%y%m%d_%H%M%S)}"
 
 place_threads="${PLACE_THREADS:-16}"
 route_threads="${ROUTE_THREADS:-16}"
@@ -22,7 +21,7 @@ synth_jobs="${SYNTH_JOBS:-128}"
 impl_dir="$repo_root/build/lite/$tag/ImplOutputDir"
 build_dir="$repo_root/build/lite/$tag"
 source_dcp="$impl_dir/post_opt.dcp"
-race_root="$impl_dir/race"
+race_root="$impl_dir/full_race/$race_id"
 log_dir="$build_dir/logs"
 bitstream_dir="$build_dir/bitstreams"
 summary_dir="$build_dir/summary"
@@ -36,8 +35,8 @@ fi
 mkdir -p "$race_root" "$log_dir" "$bitstream_dir" "$summary_dir"
 
 strategies=(
-  "ExtraTimingOpt|AggressiveExplore|NoTimingRelaxation"
   "ExtraTimingOpt|AggressiveExplore|AggressiveExplore"
+  "ExtraTimingOpt|AggressiveExplore|NoTimingRelaxation"
   "Explore|AggressiveExplore|NoTimingRelaxation"
   "Explore|AggressiveExplore|AggressiveExplore"
   "ExtraTimingOpt|ExploreWithHoldFix|NoTimingRelaxation"
@@ -77,13 +76,24 @@ else
   incremental_attempts=0
 fi
 
-echo "[impl-race] tag=$tag jobs=$impl_jobs place_threads=$place_threads route_threads=$route_threads"
+echo "[impl-race] tag=$tag race_id=$race_id attempts=$impl_jobs place_threads=$place_threads route_threads=$route_threads"
 echo "[impl-race] source=$source_dcp"
 echo "[impl-race] acceptance WNS>=${min_wns}ns WHS>=${min_whs}ns"
 echo "[impl-race] incremental_attempts=$incremental_attempts reference=${incremental_dcp:-none}"
 
 pids=()
 attempt_dirs=()
+
+terminate_workers() {
+  local pid
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    fi
+  done
+}
+trap terminate_workers EXIT
+trap 'terminate_workers; exit 130' INT TERM
 
 launch_attempt() {
   local idx="$1"
@@ -141,18 +151,49 @@ status_value() {
   awk -F '\t' -v k="$key" '$1 == k {print $2; exit}' "$file" 2>/dev/null || true
 }
 
-find_success() {
-  local dir status_file status
+find_winner() {
+  local dir status_file status status_rank wns whs
+  local sortable="$race_root/winner_sortable.tsv"
+  : >"$sortable"
   for dir in "${attempt_dirs[@]}"; do
     status_file="$dir/status.txt"
     [[ -f "$status_file" ]] || continue
     status="$(status_value "$status_file" STATUS)"
-    if [[ "$status" == "SUCCESS" ]]; then
-      echo "$dir"
-      return 0
-    fi
+    case "$status" in
+      SUCCESS) status_rank=2 ;;
+      LOW_MARGIN) status_rank=1 ;;
+      *) continue ;;
+    esac
+    wns="$(status_value "$status_file" POST_ROUTE_WNS)"
+    whs="$(status_value "$status_file" POST_ROUTE_WHS)"
+    printf "%s\t%s\t%s\t%s\n" "$status_rank" "$wns" "$whs" "$dir" >>"$sortable"
   done
-  return 1
+  [[ -s "$sortable" ]] || return 1
+  sort -t $'\t' -k1,1gr -k2,2gr -k3,3gr "$sortable" | sed -n '1s/^[^\t]*\t[^\t]*\t[^\t]*\t//p'
+}
+
+publish_winner() {
+  local winner_dir="$1" status_file attempt status wns whs
+  status_file="$winner_dir/status.txt"
+  attempt="$(status_value "$status_file" ATTEMPT)"
+  status="$(status_value "$status_file" STATUS)"
+  wns="$(status_value "$status_file" POST_ROUTE_WNS)"
+  whs="$(status_value "$status_file" POST_ROUTE_WHS)"
+
+  cp -f "$winner_dir/post_route.dcp" "$impl_dir/post_route.dcp"
+  cp -f "$winner_dir/post_route_timing_summary.rpt" "$impl_dir/post_route_timing_summary.rpt"
+  cp -f "$winner_dir/post_route_util.rpt" "$impl_dir/post_route_util.rpt"
+  cp -f "$winner_dir/top.bit" "$impl_dir/top.bit"
+  [[ ! -f "$winner_dir/top.bin" ]] || cp -f "$winner_dir/top.bin" "$impl_dir/top.bin"
+  cp -f "$winner_dir/top.ltx" "$impl_dir/top.ltx"
+  {
+    printf "RACE_ROOT\t%s\n" "$race_root"
+    printf "WINNER_ATTEMPT\t%s\n" "$attempt"
+    printf "WINNER_STATUS\t%s\n" "$status"
+    printf "WINNER_WNS\t%s\n" "$wns"
+    printf "WINNER_WHS\t%s\n" "$whs"
+    printf "WINNER_DCP\t%s\n" "$winner_dir/post_route.dcp"
+  } >"$impl_dir/full_race_winner.txt"
 }
 
 timing_summary_value() {
@@ -302,60 +343,26 @@ write_summary() {
   return 0
 }
 
-terminate_workers() {
-  local pid
-  for pid in "${pids[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-    fi
-  done
-}
-
 for ((i = 0; i < impl_jobs; i++)); do
   launch_attempt "$i"
 done
 
-if [[ "$stop_on_win" == "1" ]]; then
-  while :; do
-    if winner_dir="$(find_success)"; then
-      terminate_workers
-      for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
-      write_summary
-      winner_status="$winner_dir/status.txt"
-      winner_attempt="$(status_value "$winner_status" ATTEMPT)"
-      winner_wns="$(status_value "$winner_status" POST_ROUTE_WNS)"
-      winner_whs="$(status_value "$winner_status" POST_ROUTE_WHS)"
-      echo "[impl-race] WINNER $winner_attempt WNS=$winner_wns WHS=$winner_whs"
-      echo "[impl-race] bitstream: $bitstream_dir/${tag}_${winner_attempt}.bit"
-      exit 0
-    fi
+for pid in "${pids[@]}"; do wait "$pid" || true; done
 
-    live=0
-    for pid in "${pids[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then live=1; fi
-    done
-    if (( live == 0 )); then
-      break
-    fi
-    sleep "$poll_sec"
-  done
-else
-  for pid in "${pids[@]}"; do wait "$pid" || true; done
-fi
-
-if winner_dir="$(find_success)"; then
+if winner_dir="$(find_winner)"; then
   write_summary
+  publish_winner "$winner_dir"
   winner_status="$winner_dir/status.txt"
   winner_attempt="$(status_value "$winner_status" ATTEMPT)"
   winner_wns="$(status_value "$winner_status" POST_ROUTE_WNS)"
   winner_whs="$(status_value "$winner_status" POST_ROUTE_WHS)"
   echo "[impl-race] WINNER $winner_attempt WNS=$winner_wns WHS=$winner_whs"
-  echo "[impl-race] bitstream: $bitstream_dir/${tag}_${winner_attempt}.bit"
+  echo "[impl-race] canonical bitstream: $impl_dir/top.bit"
   exit 0
 fi
 
 write_summary
-echo "[impl-race] no margin-qualified winner (LOW_MARGIN bitstreams, if any, are preserved for diagnosis)"
+echo "[impl-race] no timing-met winner; routed failures are preserved for diagnosis"
 for dir in "${attempt_dirs[@]}"; do
   status_file="$dir/status.txt"
   if [[ -f "$status_file" ]]; then
