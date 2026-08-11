@@ -16,8 +16,8 @@ python run.py --self-check
 ## 2. Compiler 与 native INT16 contract
 
 ```powershell
-python tests/chip/compiler/test_int16_contract.py
-python tests/chip/compiler/check_release_repro.py
+python TEST/end2end/common/compiler/test_int16_contract.py
+python TEST/end2end/common/compiler/check_release_repro.py
 ```
 
 `test_int16_contract.py` 验证 native INT16 的核心契约：每个 INT16 DCIM 结果使用 signed
@@ -41,7 +41,7 @@ JSON/Markdown 报告到 `output/verilator_peak_int8/`。它不包含 XDMA/HBM/Xi
 
 ## 4. 单图 FPGA 测试
 
-前提：烧录 `bitstream/edgeyolo_80832ec_attempt1_native_w16a16.bit`，Windows 已安装 XDMA
+前提：烧录 `TEST/utils/bitstream/edgeyolo_80832ec_attempt1_native_w16a16.bit`，Windows 已安装 XDMA
 驱动并重新枚举设备。
 
 ```powershell
@@ -65,7 +65,7 @@ host boundary 和结果绘制。
 
 ```powershell
 python run.py --network yolo --yolo-precision int16
-python run.py --network resnet --resnet-precision vai
+python run.py --network resnet --resnet-precision int8
 ```
 
 ## 5. 20+20 图片验收
@@ -112,3 +112,9 @@ nibble phase。计算窗口理论峰值为 `2.048 TOPS@INT8`，同时记录完�
 - 20+20 图片说明功能覆盖与数据一致性，不等于完整 COCO mAP/ImageNet Top-1；
 - Verilator 是纯 RTL 预检，不含 XDMA/HBM/Xilinx IP；
 - 当前不测试 TOPS/W。
+
+## 8. 分支公共依赖
+
+端到端测试维护在 `TEST/end2end/`，YOLO 与 ResNet 的模型和样例明确分开。TOPS 与
+TOPS/W 分支共用的仓库路径、TOPS 公式、JSON 报告、XDMA/HBM host 访问、bitstream 和
+XDMA 程序统一维护在 `TEST/utils/`；分支合并该目录后应直接导入，避免继续复制实现。

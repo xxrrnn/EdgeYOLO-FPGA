@@ -1,1 +1,1 @@
-# tests/chip/unit-tb
+"""Compatibility shims for test utilities moved under TEST/."""

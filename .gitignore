@@ -23,6 +23,20 @@
 !*.gtkw
 !requirements*.txt
 
+# Organized acceptance tests and cross-branch utilities
+!TEST/
+!TEST/**/
+!TEST/**/*.py
+!TEST/**/*.md
+!TEST/**/*.txt
+!TEST/**/*.json
+!TEST/**/*.yaml
+!TEST/**/*.yml
+!TEST/**/*.jpg
+!TEST/**/*.JPEG
+!TEST/**/*.npz
+!TEST/utils/bin/*.exe
+
 # Final project documents (render intermediates remain under ignored tmp/).
 !docs/**/*.docx
 
@@ -157,6 +171,15 @@ model/algorithm/quantized-yolov5_arcive/
 !model/yolov5n_coco50k_qat/parsed_int16/weights/*.npz
 !model/resnet18/resnet18_fp32.onnx
 !model/resnet18/resnet18_w8a8.onnx
+
+# Files moved into TEST/end2end and TEST/utils.  Keep the explicit binary
+# allow-list narrow so generated artifacts under TEST remain ignored.
+!TEST/utils/bitstream/*.bit
+!TEST/end2end/yolo/model/int8/*.pt
+!TEST/end2end/yolo/model/int8/*.onnx
+!TEST/end2end/yolo/model/int16/*.pt
+!TEST/end2end/yolo/model/int16/*.onnx
+!TEST/end2end/resnet/model/*.onnx
 
 # ==============================================================================
 # Simulation and tool byproducts

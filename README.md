@@ -6,7 +6,7 @@
 
 ## 当前唯一 bitstream
 
-烧录 [`bitstream/edgeyolo_80832ec_attempt1_native_w16a16.bit`](bitstream/edgeyolo_80832ec_attempt1_native_w16a16.bit)。
+烧录 [`TEST/utils/bitstream/edgeyolo_80832ec_attempt1_native_w16a16.bit`](TEST/utils/bitstream/edgeyolo_80832ec_attempt1_native_w16a16.bit)。
 
 ```text
 原文件  = 80832ec_attempt1_clean_ExtraTimingOpt_AggressiveExplore_AggressiveExplore.bit
@@ -18,7 +18,7 @@ RTL提交 = 80832ec49984c559d4f5c1bba8d8da40807369f3
 
 这是 2026-07-25 实际选择并下载到本机的 attempt1，不是 `c1773f6`。attempt0 与旧 c177
 文件不在 main；需要追溯时可查看 `codex/archive-main-full-20260810`。详细元数据见
-[`bitstream/manifest.json`](bitstream/manifest.json)。原仓库没有提交 attempt1 的数值 timing
+[`TEST/utils/bitstream/manifest.json`](TEST/utils/bitstream/manifest.json)。原仓库没有提交 attempt1 的数值 timing
 summary，因此本发布不沿用 c177 的 WNS/TNS 数字。
 
 ## 直接运行
@@ -49,7 +49,7 @@ PT/ONNX 输入的 SHA256；若 workload 尚不存在，会自动编译到
 | --- | --- | --- | --- |
 | COCO YOLOv5n | `--yolo-precision int8` | W8A8 | INT32 |
 | COCO YOLOv5n | `--yolo-precision int16` | native W16A16 | signed INT64 |
-| ImageNet ResNet18 | `--resnet-precision vai` | Vitis-AI W8A8 | INT32 |
+| ImageNet ResNet18 | `--resnet-precision int8` | Vitis-AI W8A8 | INT32 |
 | ImageNet ResNet18 | `--resnet-precision int16` | INT8 量化值 widened 到 INT16 | signed INT64 |
 
 YOLO native W16A16 的默认 feature 容差是 `0.01`；其他路径默认 `0.001`。可用
@@ -57,18 +57,18 @@ YOLO native W16A16 的默认 feature 容差是 `0.01`；其他路径默认 `0.00
 
 ```powershell
 python run.py --network yolo --yolo-precision int16
-python run.py --network resnet --resnet-precision vai
+python run.py --network resnet --resnet-precision int8
 ```
 
 ## 保留的 PT/ONNX
 
-完整哈希在 [`model/model_inputs_manifest.json`](model/model_inputs_manifest.json)。
+完整哈希在 [`TEST/end2end/model_inputs_manifest.json`](TEST/end2end/model_inputs_manifest.json)。
 
 | 目录 | 文件 | 用途 |
 | --- | --- | --- |
-| `model/yolov5n_coco50k_qat/int8/` | `best.pt`, `best.onnx`, `best.quant.onnx` | W8A8 QAT、参考推理、FPGA export |
-| `model/yolov5n_coco50k_qat/int16/` | `best.pt`, `best.onnx`, `best.quant.onnx` | native W16A16 QAT、参考推理、FPGA export |
-| `model/resnet18/` | `resnet18_fp32.onnx`, `resnet18_w8a8.onnx` | FP32 参考与 W8A8 QDQ 图 |
+| `TEST/end2end/yolo/model/int8/` | `best.pt`, `best.onnx`, `best.quant.onnx` | W8A8 QAT、参考推理、FPGA export |
+| `TEST/end2end/yolo/model/int16/` | `best.pt`, `best.onnx`, `best.quant.onnx` | native W16A16 QAT、参考推理、FPGA export |
+| `TEST/end2end/resnet/model/` | `resnet18_fp32.onnx`, `resnet18_w8a8.onnx` | FP32 参考与 W8A8 QDQ 图 |
 
 `parsed_int8/`、`parsed_int16/`、`parsed_vai/` 和 `parsed_vai_int16_widened/` 是 compiler
 直接读取的部署输入，保留它们可以让 `run.py` 无需 ONNX/PyTorch 解析环境。由 compiler
@@ -77,25 +77,23 @@ python run.py --network resnet --resnet-precision vai
 ## 项目结构
 
 ```text
-bitstream/              唯一 attempt1 bitstream、SHA256 和来源说明
-examples/coco/          20 张 COCO val2017 测试图片及 manifest
-examples/imagenet/      20 张 ImageNet 测试图片及 manifest
-model/                  PT/ONNX 原始模型与 compiler 直接使用的 parsed 模型
+TEST/end2end/yolo/      YOLO INT8/INT16 模型、COCO 样例与说明
+TEST/end2end/resnet/    ResNet 模型、ImageNet 样例与说明
+TEST/end2end/common/    E2E compiler、runtime、Golden 与 host 算子
+TEST/utils/             TOPS/TOPS-W/E2E 共用路径、XDMA、bitstream 与报告工具
 rtl/chip/               DCIM Array/Tile 和片上 buffer RTL
 rtl/ref/DCIM/src/       DCIM macro 依赖源码
 rtl/vpu/                VPU/decoder RTL，包括 native INT64→FP32 路径
 rtl/tb/lite_bd/         Verilator/VCS testbench 与 golden
 scripts/chip-lite/      Vivado 综合、实现和 impl-race 入口
 scripts/ip/             block design 与 floating-point IP Tcl
-tests/bin/              随仓库提供的 Windows XDMA 工具
-tests/chip/compiler/    full-network compiler 与 native INT16 contract test
-tests/chip/runtime/     FPGA runner、feature compare 和 host head
-tests/chip/unit-tb/     算子 golden 与 host 侧实现
 tools/                  RTL/compiler 共用硬件参数
 xdc/                    引脚和时序约束源码
 ```
 
-层次按“模型输入 → compiler → runtime → RTL → build scripts”划分，适合按数据流讲解；
+E2E 目录细节见 [`TEST/end2end/README.md`](TEST/end2end/README.md)，跨分支复用规则见
+[`TEST/utils/README.md`](TEST/utils/README.md)。层次按“模型输入 → compiler → runtime →
+RTL → build scripts”划分，适合按数据流讲解；
 历史实验、旧 bitstream、生成工程与结果不会混入主线。
 
 ## 验证记录与限制
