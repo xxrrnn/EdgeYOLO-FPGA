@@ -114,6 +114,16 @@ module maColumn#(
 
 );
 	wire w_mode_in_sign;
+
+	// One non-mergeable activation copy per physical output column.  Each bit
+	// then drives only the four local subcolumns, instead of Vivado sharing a
+	// register across distant columns and creating long intra-SLR routes.
+	(* keep = "true", dont_touch = "true", max_fanout = 4 *)
+	reg [WD1*CH_IN-1:0] up_data1_col_reg;
+	always @(posedge clk) begin
+		if (ena)
+			up_data1_col_reg <= up_data1;
+	end
 	
 	wire s1;
 	wire [3: 0] s2;
@@ -138,7 +148,7 @@ module maColumn#(
 				.rstn(rstn),
 				.clr(clr),
 				.ena(ena),
-				.data1(up_data1),
+				.data1(up_data1_col_reg),
 				.data2(up_data2[subcol*WD1*CH_IN+: WD1*CH_IN]),
 				.s1(s1),
 				.s2(s2[subcol]),
@@ -175,7 +185,6 @@ module maSubcolumn#(
 	// Input pipeline registers: fanout distribution for data1/data2/s1/s2
 	// 乘法器内部有 AREG/BREG (1 cycle)，替代了原 product_pipe 的 pipeline 作用
 	// 本级 reg 仅负责扇出分发 + 打断跨 SLR 路径
-	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data1_reg;
 	(* max_fanout = 16 *) reg [WD1*CH_IN-1: 0] data2_reg;
 	(* max_fanout = 32 *) reg s1_reg;
 	(* max_fanout = 16 *) reg s2_reg;
@@ -186,7 +195,6 @@ module maSubcolumn#(
 	// keep each copy beside its local multiplier bank.
 	always @(posedge clk) begin
 		if (ena) begin
-			data1_reg <= data1;
 			data2_reg <= data2;
 			s1_reg <= s1;
 			s2_reg <= s2;
@@ -204,7 +212,7 @@ module maSubcolumn#(
 						.clk(clk),
 						.rstn(rstn),
 						.ena(ena),
-						.a(data1_reg[ch*WD1+: WD1]),
+						.a(data1[ch*WD1+: WD1]),
 						.b(data2_reg[ch*WD1+: WD1]),
 						.c(product[ch*2*WD1+: 2*WD1]),
 						.sa(s1_reg),
@@ -218,7 +226,7 @@ module maSubcolumn#(
 						.clk(clk),
 						.rstn(rstn),
 						.ena(ena),
-						.a(data1_reg[ch*WD1+: WD1]),
+						.a(data1[ch*WD1+: WD1]),
 						.b(data2_reg[ch*WD1+: WD1]),
 						.c(product[ch*2*WD1+: 2*WD1]),
 						.sa(s1_reg),

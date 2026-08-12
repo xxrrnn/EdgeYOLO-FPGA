@@ -35,6 +35,10 @@ module ad_unit #(
     localparam  GB_BW_SHIFT = $clog2(VB_BANDWIDTH);
     localparam  FP_WIDTH_SHIFT = $clog2(FP_WIDTH);
     localparam  BYTE_ADDR_SHIFT = $clog2(VB_BANDWIDTH / 8);  // 字节地址到 word 地址的移位量
+    localparam  AD_DIM_WIDTH = 16;
+    localparam  AD_C_WIDTH = $clog2(`MAX_CHANNEL_NUM + 1);
+    localparam  AD_CH_WIDTH = AD_C_WIDTH + AD_DIM_WIDTH;
+    localparam  AD_CHW_WIDTH = AD_CH_WIDTH + AD_DIM_WIDTH;
 
 
     typedef enum logic [5:0] {
@@ -68,16 +72,16 @@ module ad_unit #(
     reg     [ADDR_WIDTH - 1 : 0]                          ad_src_addr_reg;
     reg     [ADDR_WIDTH - 1 : 0]                          ad_src2_addr_reg;
     reg     [ADDR_WIDTH - 1 : 0]                          ad_dst_addr_reg;
-    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_c_reg;
-    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_h_reg;
-    reg     [ADDR_WIDTH - 1 : 0]                          ad_src_w_reg;
+    reg     [AD_C_WIDTH - 1 : 0]                          ad_src_c_reg;
+    reg     [AD_DIM_WIDTH - 1 : 0]                        ad_src_h_reg;
+    reg     [AD_DIM_WIDTH - 1 : 0]                        ad_src_w_reg;
 
     /* PRECOMPUTE PIPELINE:
      * Stage 1 (AD_PRECOMPUTE_1): ch_product = C * H
      * Stage 2 (AD_PRECOMPUTE_2): ad_x_total_blocks_reg = (ch_product * W * FP_WIDTH + BW - 1) >> log2(BW)
      *                            ad_x_load_done_threshold = total_blocks - ad_single_compute_blocks
      */
-    reg     [2*ADDR_WIDTH - 1 : 0]                        precompute_ch;
+    reg     [AD_CH_WIDTH - 1 : 0]                         precompute_ch;
     reg     [ADDR_WIDTH - 1 : 0]                          ad_x_total_blocks_reg;
     reg     [ADDR_WIDTH - 1 : 0]                          ad_x_load_done_threshold;
 
@@ -98,31 +102,28 @@ module ad_unit #(
     assign  ad_done                                 =  ad_x_load_done & ad_x_load_block_done & ad_save_done;
 
     // Precompute pipeline: split multiplication across 3 clock cycles
-    reg [2*ADDR_WIDTH - 1 : 0] precompute_chw;
+    reg [AD_CHW_WIDTH - 1 : 0] precompute_chw;
+    wire [ADDR_WIDTH - 1 : 0] precompute_blocks =
+        (precompute_chw + FP_CORE_NUM - 1) >> $clog2(FP_CORE_NUM);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            precompute_ch <= '0;
-            precompute_chw <= '0;
             ad_x_total_blocks_reg <= '0;
             ad_x_load_done_threshold <= '0;
         end else begin
-            if (c_state == IDLE && ad_unit_start) begin
-                // Only latch, no multiply (avoid long path from decoder output)
-            end
-            if (c_state == AD_PRECOMPUTE_1) begin
-                precompute_ch <= ad_src_c_reg * ad_src_h_reg;
-            end
-            if (c_state == AD_PRECOMPUTE_2) begin
-                precompute_chw <= precompute_ch * ad_src_w_reg;
-            end
             if (c_state == AD_PRECOMPUTE_3) begin
-                automatic logic [2*ADDR_WIDTH-1:0] total_bits;
-                total_bits = precompute_chw << FP_WIDTH_SHIFT;
-                ad_x_total_blocks_reg <= (total_bits[ADDR_WIDTH-1:0] + VB_BANDWIDTH - 1) >> GB_BW_SHIFT;
-                ad_x_load_done_threshold <= ((total_bits[ADDR_WIDTH-1:0] + VB_BANDWIDTH - 1) >> GB_BW_SHIFT) - ad_single_compute_blocks;
+                ad_x_total_blocks_reg <= precompute_blocks;
+                ad_x_load_done_threshold <= precompute_blocks - ad_single_compute_blocks;
             end
         end
+    end
+
+    // H*W and channel-groups are the exact number of 128-bit FP32 words.
+    // Free-running, architecturally-sized stages avoid state-controlled 64x32
+    // DSP cascades while leaving the existing state latency unchanged.
+    always_ff @(posedge clk) begin
+        precompute_ch  <= ad_src_c_reg * ad_src_h_reg;
+        precompute_chw <= precompute_ch * ad_src_w_reg;
     end
 
     always @* begin
@@ -291,9 +292,9 @@ module ad_unit #(
             ad_src_addr_reg  <= ad_src_addr;
             ad_src2_addr_reg <= ad_src2_addr;
             ad_dst_addr_reg  <= ad_dst_addr;
-            ad_src_c_reg     <= ad_src_c;
-            ad_src_h_reg     <= ad_src_h;
-            ad_src_w_reg     <= ad_src_w;
+            ad_src_c_reg     <= ad_src_c[AD_C_WIDTH-1:0];
+            ad_src_h_reg     <= ad_src_h[AD_DIM_WIDTH-1:0];
+            ad_src_w_reg     <= ad_src_w[AD_DIM_WIDTH-1:0];
         end
     end
 

@@ -81,8 +81,14 @@ module dqa_relu_unit #(
     assign dqa_unit_ready  = (c_state == IDLE);
 
     // dqa signals
-    reg     [MAX_CHANNEL_NUM * FP_WIDTH - 1 : 0]            dqa_scale_reg;
-    reg     [MAX_CHANNEL_NUM * FP_WIDTH - 1 : 0]            dqa_bias_reg;
+    // Scale and bias arrive one WB word at a time and are not consumed until
+    // the complete vectors have been loaded.  Keeping them as two synchronous
+    // word memories avoids shifting/enabling 2 x 16K flip-flops from a single
+    // FSM bit.  In the deployed mapping one word is exactly one FP lane group.
+    localparam DQA_PARAM_WORDS = MAX_CHANNEL_NUM * FP_WIDTH / WB_BANDWIDTH;
+    localparam DQA_PARAM_AW = (DQA_PARAM_WORDS <= 1) ? 1 : $clog2(DQA_PARAM_WORDS);
+    (* ram_style = "block" *) reg [WB_BANDWIDTH-1:0] dqa_scale_mem [0:DQA_PARAM_WORDS-1];
+    (* ram_style = "block" *) reg [WB_BANDWIDTH-1:0] dqa_bias_mem  [0:DQA_PARAM_WORDS-1];
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_full_scale_wire;
     reg     [FP_CORE_NUM * FP_WIDTH - 1 : 0]                dqa_full_bias_wire;
     reg     [FP_CORE_NUM * C_INT_WIDTH_IN - 1 : 0]          dqa_int_in_reg;
@@ -152,6 +158,10 @@ module dqa_relu_unit #(
             $error("dqa_relu_unit requires VB_BANDWIDTH divisible by 64 for native INT16 accumulators");
         if (FP_CORE_NUM % INT64_LANES_PER_WORD != 0)
             $error("dqa_relu_unit requires complete INT64 channel groups in each load transaction");
+        if (WB_BANDWIDTH != FP_CORE_LENGTH)
+            $error("dqa_relu_unit requires one scale/bias WB word per FP core group");
+        if ((MAX_CHANNEL_NUM * FP_WIDTH) % WB_BANDWIDTH != 0)
+            $error("dqa_relu_unit scale/bias storage must contain an integer number of WB words");
     end
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_load_stride ;
     wire[ADDR_WIDTH - 1 : 0]   dqa_w_save_stride;
@@ -322,22 +332,34 @@ module dqa_relu_unit #(
         if(!rst_n) begin
             dqa_bias_load_cnt  <= '0;
             dqa_scale_load_cnt <= '0;
-            dqa_scale_reg      <= '0;
-            dqa_bias_reg      <= '0;
         end
         else begin
             if(c_state == DQA_WAIT_SCALE) begin
                 dqa_scale_load_cnt <= dqa_scale_load_cnt + 1'b1;
-                dqa_scale_reg <= {wb_doutb, dqa_scale_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
             end else if(c_state == DQA_WAIT_BIAS) begin
                 dqa_bias_load_cnt  <= dqa_bias_load_cnt  + 1'b1;
-                dqa_bias_reg  <= {wb_doutb, dqa_bias_reg[MAX_CHANNEL_LENGTH - 1 : WB_BANDWIDTH]};
             end else if(c_state == IDLE) begin
                 dqa_scale_load_cnt <= '0;
                 dqa_bias_load_cnt  <= '0;
             end
         end
             
+    end
+
+    // The memories and their read-data registers intentionally have no reset:
+    // DQA_COMPUTE is unreachable until both complete vectors have been loaded.
+    // A registered read in DQA_LOAD_X leaves several states of margin before
+    // the values are consumed by the FP array.
+    always_ff @(posedge clk) begin
+        if (c_state == DQA_WAIT_SCALE)
+            dqa_scale_mem[dqa_scale_load_cnt[DQA_PARAM_AW-1:0]] <= wb_doutb;
+        if (c_state == DQA_WAIT_BIAS)
+            dqa_bias_mem[dqa_bias_load_cnt[DQA_PARAM_AW-1:0]] <= wb_doutb;
+
+        if (c_state == DQA_LOAD_X) begin
+            dqa_full_scale_wire <= dqa_scale_mem[dqa_x_load_c_cnt[DQA_PARAM_AW-1:0]];
+            dqa_full_bias_wire  <= dqa_bias_mem [dqa_x_load_c_cnt[DQA_PARAM_AW-1:0]];
+        end
     end
 
     /*  X LOAD  —— ready/valid 触发采样（DQA_WAIT_X 等 gb_doutb_valid）
@@ -497,19 +519,6 @@ module dqa_relu_unit #(
     endgenerate
 
 
-    wire [ADDR_WIDTH-1:0] dqa_channel_group_count = dqa_src_c_reg >> $clog2(FP_CORE_NUM);
-    wire [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel_nxt = dqa_channel_group_count - 1 - dqa_x_load_c_cnt;
-
-    // 注册化 group_sel：打一拍降低 fan-out 路径延迟（fo=16384 → 250MHz timing closure）。
-    // 安全性：dqa_x_load_c_cnt 在 DQA_UPDATE 更新，到 DQA_COMPUTE 使用至少相隔 4 个状态，
-    // group_sel_r 延迟 1 拍不影响 DQA_COMPUTE 采样的值。
-    (* MAX_FANOUT = 64, shreg_extract = "no" *)
-    reg [ADDR_WIDTH-1:0] dqa_scale_bias_group_sel;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) dqa_scale_bias_group_sel <= '0;
-        else        dqa_scale_bias_group_sel <= dqa_scale_bias_group_sel_nxt;
-    end
-
     genvar relu_i;
     generate
         for (relu_i = 0; relu_i < FP_CORE_NUM; relu_i = relu_i + 1) begin : gen_dqa_relu
@@ -520,10 +529,6 @@ module dqa_relu_unit #(
             assign dqa_relu_res[LSB +: FP_WIDTH] = (dqa_relu_en && lane_negative) ? {FP_WIDTH{1'b0}} : lane;
         end
     endgenerate
-
-    assign dqa_full_scale_wire = dqa_scale_reg[MAX_CHANNEL_LENGTH - (dqa_scale_bias_group_sel << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
-    assign dqa_full_bias_wire  = dqa_bias_reg [MAX_CHANNEL_LENGTH - (dqa_scale_bias_group_sel << $clog2(FP_CORE_LENGTH)) - 1 -: FP_CORE_LENGTH];
-
 
     assign fp_array_tvalid  = (c_state == DQA_COMPUTE)? 1'b1 : 1'b0;
     assign fp_a_tdata       = (c_state == DQA_COMPUTE)? dqa_fp_reg : '0;

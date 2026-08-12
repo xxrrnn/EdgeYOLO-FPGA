@@ -71,6 +71,12 @@ module DCIM_Weight_Cache #(
        shreg_extract = "no" *) reg [WORD_WIDTH-1:0] load_data_rep2;
     (* keep = "true", dont_touch = "true", max_fanout = 32,
        shreg_extract = "no" *) reg [WORD_WIDTH-1:0] load_data_rep3;
+    // Four lane-local copies keep each one-hot write enable at fanout 32
+    // instead of driving all 128 bits in a cache word.
+    (* keep = "true", dont_touch = "true", max_fanout = 32,
+       shreg_extract = "no" *) reg [3:0][CYCLE-1:0] load_we_cache0;
+    (* keep = "true", dont_touch = "true", max_fanout = 32,
+       shreg_extract = "no" *) reg [3:0][CYCLE-1:0] load_we_cache1;
 
     assign row_load_busy = load_active | load_rsp_valid | load_data_valid;
 
@@ -117,13 +123,79 @@ module DCIM_Weight_Cache #(
     // Keeping this in a separate clocked process also prevents synthesis from
     // inferring FDCP cells from the resettable control process below.
     always_ff @(posedge clk) begin
+        load_we_cache0 <= '0;
+        load_we_cache1 <= '0;
         if (load_rsp_valid) begin
             load_data_rep0 <= mem_q;
             load_data_rep1 <= mem_q;
             load_data_rep2 <= mem_q;
             load_data_rep3 <= mem_q;
+            if (load_bank) begin
+                load_we_cache1[0][load_rsp_word] <= 1'b1;
+                load_we_cache1[1][load_rsp_word] <= 1'b1;
+                load_we_cache1[2][load_rsp_word] <= 1'b1;
+                load_we_cache1[3][load_rsp_word] <= 1'b1;
+            end else begin
+                load_we_cache0[0][load_rsp_word] <= 1'b1;
+                load_we_cache0[1][load_rsp_word] <= 1'b1;
+                load_we_cache0[2][load_rsp_word] <= 1'b1;
+                load_we_cache0[3][load_rsp_word] <= 1'b1;
+            end
         end
     end
+
+    // Static per-word writers avoid synthesizing a 64-way dynamic array write
+    // mux.  Each one-hot bit and each response copy remains local to at most one
+    // 128-bit cache word; the host-visible row/word mapping is unchanged.
+    generate
+        for (word_i = 0; word_i < CYCLE; word_i = word_i + 1) begin : gen_cache_write
+            if (word_i < CYCLE/4) begin : gen_rep0
+                always_ff @(posedge clk) begin
+                    if (load_we_cache0[0][word_i]) cache0[word_i][31:0]   <= load_data_rep0[31:0];
+                    if (load_we_cache0[1][word_i]) cache0[word_i][63:32]  <= load_data_rep0[63:32];
+                    if (load_we_cache0[2][word_i]) cache0[word_i][95:64]  <= load_data_rep0[95:64];
+                    if (load_we_cache0[3][word_i]) cache0[word_i][127:96] <= load_data_rep0[127:96];
+                    if (load_we_cache1[0][word_i]) cache1[word_i][31:0]   <= load_data_rep0[31:0];
+                    if (load_we_cache1[1][word_i]) cache1[word_i][63:32]  <= load_data_rep0[63:32];
+                    if (load_we_cache1[2][word_i]) cache1[word_i][95:64]  <= load_data_rep0[95:64];
+                    if (load_we_cache1[3][word_i]) cache1[word_i][127:96] <= load_data_rep0[127:96];
+                end
+            end else if (word_i < CYCLE/2) begin : gen_rep1
+                always_ff @(posedge clk) begin
+                    if (load_we_cache0[0][word_i]) cache0[word_i][31:0]   <= load_data_rep1[31:0];
+                    if (load_we_cache0[1][word_i]) cache0[word_i][63:32]  <= load_data_rep1[63:32];
+                    if (load_we_cache0[2][word_i]) cache0[word_i][95:64]  <= load_data_rep1[95:64];
+                    if (load_we_cache0[3][word_i]) cache0[word_i][127:96] <= load_data_rep1[127:96];
+                    if (load_we_cache1[0][word_i]) cache1[word_i][31:0]   <= load_data_rep1[31:0];
+                    if (load_we_cache1[1][word_i]) cache1[word_i][63:32]  <= load_data_rep1[63:32];
+                    if (load_we_cache1[2][word_i]) cache1[word_i][95:64]  <= load_data_rep1[95:64];
+                    if (load_we_cache1[3][word_i]) cache1[word_i][127:96] <= load_data_rep1[127:96];
+                end
+            end else if (word_i < (3*CYCLE)/4) begin : gen_rep2
+                always_ff @(posedge clk) begin
+                    if (load_we_cache0[0][word_i]) cache0[word_i][31:0]   <= load_data_rep2[31:0];
+                    if (load_we_cache0[1][word_i]) cache0[word_i][63:32]  <= load_data_rep2[63:32];
+                    if (load_we_cache0[2][word_i]) cache0[word_i][95:64]  <= load_data_rep2[95:64];
+                    if (load_we_cache0[3][word_i]) cache0[word_i][127:96] <= load_data_rep2[127:96];
+                    if (load_we_cache1[0][word_i]) cache1[word_i][31:0]   <= load_data_rep2[31:0];
+                    if (load_we_cache1[1][word_i]) cache1[word_i][63:32]  <= load_data_rep2[63:32];
+                    if (load_we_cache1[2][word_i]) cache1[word_i][95:64]  <= load_data_rep2[95:64];
+                    if (load_we_cache1[3][word_i]) cache1[word_i][127:96] <= load_data_rep2[127:96];
+                end
+            end else begin : gen_rep3
+                always_ff @(posedge clk) begin
+                    if (load_we_cache0[0][word_i]) cache0[word_i][31:0]   <= load_data_rep3[31:0];
+                    if (load_we_cache0[1][word_i]) cache0[word_i][63:32]  <= load_data_rep3[63:32];
+                    if (load_we_cache0[2][word_i]) cache0[word_i][95:64]  <= load_data_rep3[95:64];
+                    if (load_we_cache0[3][word_i]) cache0[word_i][127:96] <= load_data_rep3[127:96];
+                    if (load_we_cache1[0][word_i]) cache1[word_i][31:0]   <= load_data_rep3[31:0];
+                    if (load_we_cache1[1][word_i]) cache1[word_i][63:32]  <= load_data_rep3[63:32];
+                    if (load_we_cache1[2][word_i]) cache1[word_i][95:64]  <= load_data_rep3[95:64];
+                    if (load_we_cache1[3][word_i]) cache1[word_i][127:96] <= load_data_rep3[127:96];
+                end
+            end
+        end
+    endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -192,28 +264,6 @@ module DCIM_Weight_Cache #(
             end
 
             if (load_data_valid) begin
-                // CYCLE is 64 in the deployed architecture.  The upper two
-                // address bits statically bind 16 words to each physical copy;
-                // neither the cache mapping nor the load latency changes.
-                case (load_data_word[CYCLE_AW-1:CYCLE_AW-2])
-                    2'd0: begin
-                        if (load_bank) cache1[load_data_word] <= load_data_rep0;
-                        else           cache0[load_data_word] <= load_data_rep0;
-                    end
-                    2'd1: begin
-                        if (load_bank) cache1[load_data_word] <= load_data_rep1;
-                        else           cache0[load_data_word] <= load_data_rep1;
-                    end
-                    2'd2: begin
-                        if (load_bank) cache1[load_data_word] <= load_data_rep2;
-                        else           cache0[load_data_word] <= load_data_rep2;
-                    end
-                    default: begin
-                        if (load_bank) cache1[load_data_word] <= load_data_rep3;
-                        else           cache0[load_data_word] <= load_data_rep3;
-                    end
-                endcase
-
                 if (load_data_word == CYCLE-1)
                     row_load_done <= 1'b1;
                 if (load_data_word == CYCLE-1)

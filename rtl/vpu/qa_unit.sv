@@ -62,6 +62,13 @@ module qa_unit #(
     localparam FP_WIDTH_SHIFT    = $clog2(FP_WIDTH);
     localparam GB_BW_SHIFT       = $clog2(VB_BANDWIDTH);
     localparam BYTE_ADDR_SHIFT   = $clog2(VB_BANDWIDTH / 8);
+    // The 8-MB VPU buffer makes 16-bit H/W ample, while C is bounded by the
+    // architecture.  C*H is at most 26 bits, so both C*H and (C*H)*W fit one
+    // DSP48E2 (27x18) without weakening the original ceil(total/lanes) rule.
+    localparam QA_DIM_WIDTH      = 16;
+    localparam QA_C_WIDTH        = $clog2(MAX_CHANNEL_NUM + 1);
+    localparam QA_CH_WIDTH       = QA_C_WIDTH + QA_DIM_WIDTH;
+    localparam QA_CHW_WIDTH      = QA_CH_WIDTH + QA_DIM_WIDTH;
 
     // 对齐约束：一次 OBUF 读 = FP_CORE_NUM 个 FP32；INT8/INT16 运行时选择打包密度。
     initial begin
@@ -105,11 +112,12 @@ module qa_unit #(
     reg [ADDR_WIDTH - 1 : 0]                            qa_src_addr_reg;
     reg [ADDR_WIDTH - 1 : 0]                            qa_dst_addr_reg;
     reg [ADDR_WIDTH - 1 : 0]                            qa_scale_addr_reg;
-    reg [ADDR_WIDTH - 1 : 0]                            qa_src_c_reg;
-    reg [ADDR_WIDTH - 1 : 0]                            qa_src_h_reg;
-    reg [ADDR_WIDTH - 1 : 0]                            qa_src_w_reg;
+    reg [QA_C_WIDTH - 1 : 0]                            qa_src_c_reg;
+    reg [QA_DIM_WIDTH - 1 : 0]                          qa_src_h_reg;
+    reg [QA_DIM_WIDTH - 1 : 0]                          qa_src_w_reg;
 
-    reg [2*ADDR_WIDTH - 1 : 0]                          precompute_ch;
+    reg [QA_CH_WIDTH - 1 : 0]                           precompute_ch;
+    reg [QA_CHW_WIDTH - 1 : 0]                          precompute_chw;
     reg [ADDR_WIDTH - 1 : 0]                            qa_total_iters_reg;
     reg [ADDR_WIDTH - 1 : 0]                            qa_iter_cnt;
     reg [ADDR_WIDTH - 1 : 0]                            qa_x_tran_cnt;
@@ -167,20 +175,24 @@ module qa_unit #(
         if (!rst_n) begin
             qa_iter_cnt            <= '0;
             qa_total_iters_reg     <= '0;
-            precompute_ch          <= '0;
         end else if (c_state == IDLE && qa_unit_start) begin
             qa_iter_cnt <= '0;
-        end else if (c_state == QA_PRECOMPUTE_1) begin
-            precompute_ch <= qa_src_c_reg * qa_src_h_reg;
-        end else if (c_state == QA_PRECOMPUTE_2) begin
-            precompute_ch <= precompute_ch * qa_src_w_reg;
         end else if (c_state == QA_LOAD_SCALE) begin
-            qa_total_iters_reg <= (precompute_ch + FP_CORE_NUM - 1) / FP_CORE_NUM;
+            qa_total_iters_reg <=
+                (precompute_chw + FP_CORE_NUM - 1) >> $clog2(FP_CORE_NUM);
         end else if (c_state == QA_INT_WAIT && m_axis_int_tvalid && !pack_word_done) begin
             qa_iter_cnt <= qa_iter_cnt + 1'b1;
         end else if (c_state == QA_SAVE_HOLD) begin
             qa_iter_cnt <= qa_iter_cnt + 1'b1;
         end
+    end
+
+    // Free-running two-stage dimension pipeline.  It removes c_state from the
+    // DSP control pins.  Both stages fit one DSP48E2; parameters are stable and
+    // the result is valid before LOAD_SCALE.
+    always_ff @(posedge clk) begin
+        precompute_ch  <= qa_src_c_reg * qa_src_h_reg;
+        precompute_chw <= precompute_ch * qa_src_w_reg;
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -317,9 +329,9 @@ module qa_unit #(
             qa_src_addr_reg   <= qa_src_addr;
             qa_dst_addr_reg   <= qa_dst_addr;
             qa_scale_addr_reg <= qa_scale_addr;
-            qa_src_c_reg      <= qa_src_c;
-            qa_src_h_reg      <= qa_src_h;
-            qa_src_w_reg      <= qa_src_w;
+            qa_src_c_reg      <= qa_src_c[QA_C_WIDTH-1:0];
+            qa_src_h_reg      <= qa_src_h[QA_DIM_WIDTH-1:0];
+            qa_src_w_reg      <= qa_src_w[QA_DIM_WIDTH-1:0];
 `ifdef PROBE_QA
             $display("[qa] START src=0x%08h dst=0x%08h scale=0x%08h c=%0d h=%0d w=%0d int16=%0d saves_per_word=%0d",
                      qa_src_addr, qa_dst_addr, qa_scale_addr, qa_src_c, qa_src_h, qa_src_w, qa_int16_mode, saves_per_word_active);

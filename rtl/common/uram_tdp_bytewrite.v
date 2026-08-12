@@ -62,34 +62,24 @@ module uram_tdp_bytewrite #(
         end
     end
 
-    // Port A 使能流水
-    // 使用 mem_ena（不含 |wea 归约）：保持 CE 路径为单比特 FDRE，
-    // 避免 Vivado 将 CE 转为 URAM DOUT→FDRE.D 的 LUT MUX（会增加 6~8 逻辑级，
-    // 叠加 7 级 URAM cascade 后 data path 超出 4ns 周期导致 timing violation）。
-    // douta_valid 的正确性（写时不置 1）由上层 vpu_buf.v 的 rd_valid_pipe_a
-    // 单独保证（mem_ena & ~wr_en_a），此处无需在 pipeline CE 中过滤写操作。
-    reg [NBPIPE:0] men_pipe_a;
-    always @(posedge clk)
-        men_pipe_a <= {men_pipe_a[NBPIPE-1:0], mem_ena};
-
+    // Data pipes shift continuously.  douta_valid is maintained by each memory
+    // wrapper, so stale data is never consumed.  Removing the propagated CE
+    // eliminates a 390-load route across the full 8-MB VPU URAM footprint and
+    // does not alter the fixed NBPIPE+2 read latency.
     // Port A 数据流水
     reg [DWIDTH-1:0] dat_pipe_a [0:NBPIPE-1];
-    always @(posedge clk) begin
-        if (men_pipe_a[0])
-            dat_pipe_a[0] <= memrega;
-    end
+    always @(posedge clk)
+        dat_pipe_a[0] <= memrega;
     genvar gpa;
     generate
         for (gpa = 1; gpa < NBPIPE; gpa = gpa + 1) begin : gen_pipe_a
             always @(posedge clk)
-                if (men_pipe_a[gpa])
-                    dat_pipe_a[gpa] <= dat_pipe_a[gpa-1];
+                dat_pipe_a[gpa] <= dat_pipe_a[gpa-1];
         end
     endgenerate
 
     always @(posedge clk)
-        if (men_pipe_a[NBPIPE])
-            douta <= dat_pipe_a[NBPIPE-1];
+        douta <= dat_pipe_a[NBPIPE-1];
 
     // -----------------------------------------------------------------------
     // Port B：byte-enable 写 + no-change 读捕获
@@ -106,29 +96,21 @@ module uram_tdp_bytewrite #(
         end
     end
 
-    // Port B 使能流水（同 Port A：使用 mem_enb，不含 |web 归约）
-    reg [NBPIPE:0] men_pipe_b;
-    always @(posedge clk)
-        men_pipe_b <= {men_pipe_b[NBPIPE-1:0], mem_enb};
-
+    // Port B uses the same fixed-latency, continuously shifting data pipe.
     // Port B 数据流水
     reg [DWIDTH-1:0] dat_pipe_b [0:NBPIPE-1];
-    always @(posedge clk) begin
-        if (men_pipe_b[0])
-            dat_pipe_b[0] <= memregb;
-    end
+    always @(posedge clk)
+        dat_pipe_b[0] <= memregb;
     genvar gpb;
     generate
         for (gpb = 1; gpb < NBPIPE; gpb = gpb + 1) begin : gen_pipe_b
             always @(posedge clk)
-                if (men_pipe_b[gpb])
-                    dat_pipe_b[gpb] <= dat_pipe_b[gpb-1];
+                dat_pipe_b[gpb] <= dat_pipe_b[gpb-1];
         end
     endgenerate
 
     always @(posedge clk)
-        if (men_pipe_b[NBPIPE])
-            doutb <= dat_pipe_b[NBPIPE-1];
+        doutb <= dat_pipe_b[NBPIPE-1];
 
     // -----------------------------------------------------------------------
     // 仿真初始化（综合时 URAM 自动清零，此处在仿真中显式清零）
@@ -140,8 +122,6 @@ module uram_tdp_bytewrite #(
         doutb    = {DWIDTH{1'b0}};
         memrega  = {DWIDTH{1'b0}};
         memregb  = {DWIDTH{1'b0}};
-        men_pipe_a = {(NBPIPE+1){1'b0}};
-        men_pipe_b = {(NBPIPE+1){1'b0}};
         for (j = 0; j < NBPIPE; j = j + 1) begin
             dat_pipe_a[j] = {DWIDTH{1'b0}};
             dat_pipe_b[j] = {DWIDTH{1'b0}};
