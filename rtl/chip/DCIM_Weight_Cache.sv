@@ -58,7 +58,19 @@ module DCIM_Weight_Cache #(
     reg [CYCLE_AW-1:0] load_rsp_word;
     reg                 load_data_valid;
     reg [CYCLE_AW-1:0]  load_data_word;
-    reg [WORD_WIDTH-1:0] load_data;
+
+    // Four explicit response-register copies keep each 128-bit data net local
+    // to one quarter of the 64-word cache.  KEEP/DONT_TOUCH are intentional:
+    // without them Vivado folds this stage into the BRAM output and recreates
+    // the 128-fanout, routing-dominated BRAM-to-cache critical path.
+    (* keep = "true", dont_touch = "true", max_fanout = 32,
+       shreg_extract = "no" *) reg [WORD_WIDTH-1:0] load_data_rep0;
+    (* keep = "true", dont_touch = "true", max_fanout = 32,
+       shreg_extract = "no" *) reg [WORD_WIDTH-1:0] load_data_rep1;
+    (* keep = "true", dont_touch = "true", max_fanout = 32,
+       shreg_extract = "no" *) reg [WORD_WIDTH-1:0] load_data_rep2;
+    (* keep = "true", dont_touch = "true", max_fanout = 32,
+       shreg_extract = "no" *) reg [WORD_WIDTH-1:0] load_data_rep3;
 
     assign row_load_busy = load_active | load_rsp_valid | load_data_valid;
 
@@ -99,6 +111,19 @@ module DCIM_Weight_Cache #(
                 active_bank_sel ? cache1[word_i] : cache0[word_i];
         end
     endgenerate
+
+    // Data-only response registers intentionally have no reset.  They are
+    // consumed only when load_data_valid is asserted after a real BRAM read.
+    // Keeping this in a separate clocked process also prevents synthesis from
+    // inferring FDCP cells from the resettable control process below.
+    always_ff @(posedge clk) begin
+        if (load_rsp_valid) begin
+            load_data_rep0 <= mem_q;
+            load_data_rep1 <= mem_q;
+            load_data_rep2 <= mem_q;
+            load_data_rep3 <= mem_q;
+        end
+    end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -164,14 +189,30 @@ module DCIM_Weight_Cache #(
             load_data_valid <= load_rsp_valid;
             if (load_rsp_valid) begin
                 load_data_word <= load_rsp_word;
-                load_data <= mem_q;
             end
 
             if (load_data_valid) begin
-                if (load_bank)
-                    cache1[load_data_word] <= load_data;
-                else
-                    cache0[load_data_word] <= load_data;
+                // CYCLE is 64 in the deployed architecture.  The upper two
+                // address bits statically bind 16 words to each physical copy;
+                // neither the cache mapping nor the load latency changes.
+                case (load_data_word[CYCLE_AW-1:CYCLE_AW-2])
+                    2'd0: begin
+                        if (load_bank) cache1[load_data_word] <= load_data_rep0;
+                        else           cache0[load_data_word] <= load_data_rep0;
+                    end
+                    2'd1: begin
+                        if (load_bank) cache1[load_data_word] <= load_data_rep1;
+                        else           cache0[load_data_word] <= load_data_rep1;
+                    end
+                    2'd2: begin
+                        if (load_bank) cache1[load_data_word] <= load_data_rep2;
+                        else           cache0[load_data_word] <= load_data_rep2;
+                    end
+                    default: begin
+                        if (load_bank) cache1[load_data_word] <= load_data_rep3;
+                        else           cache0[load_data_word] <= load_data_rep3;
+                    end
+                endcase
 
                 if (load_data_word == CYCLE-1)
                     row_load_done <= 1'b1;
