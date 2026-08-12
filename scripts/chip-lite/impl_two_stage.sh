@@ -18,6 +18,10 @@ route_variant_count="${IMPL_ROUTE_VARIANTS:-4}"
 route_task_limit="${IMPL_ROUTE_TOP_K:-0}"
 min_wns="${RACE_MIN_WNS_NS:-0.05}"
 min_whs="${RACE_MIN_WHS_NS:-0.02}"
+# Routing can recover a modest negative post-place WNS (the known-good image
+# improved from -0.364 ns to 0.000 ns), but not a structural multi-nanosecond
+# miss.  Filter candidates before expanding the top-N x route Cartesian race.
+place_gate_wns="${RACE_PLACE_GATE_WNS_NS:--0.75}"
 race_id="${RACE_ID:-$(date +%y%m%d_%H%M%S)}"
 resume_after_place="${RACE_RESUME_AFTER_PLACE:-0}"
 
@@ -67,6 +71,10 @@ if [[ "$resume_after_place" != "0" && "$resume_after_place" != "1" ]]; then
   echo "ERROR: RACE_RESUME_AFTER_PLACE must be 0 or 1" >&2
   exit 1
 fi
+if [[ ! "$place_gate_wns" =~ ^[-+]?[0-9]+([.][0-9]+)?$ ]]; then
+  echo "ERROR: RACE_PLACE_GATE_WNS_NS must be numeric" >&2
+  exit 1
+fi
 
 mkdir -p "$place_root" "$route_root" "$log_root" "$summary_root"
 
@@ -94,7 +102,7 @@ timing_summary_value() {
 echo "[two-stage] tag=$tag race_id=$race_id"
 echo "[two-stage] source=$source_dcp"
 echo "[two-stage] place=${#place_strategies[@]}x${place_threads} threads; place_top_n=${place_top_n}; route_variants=${route_variant_count}; route_threads=${route_threads}"
-echo "[two-stage] resume_after_place=$resume_after_place"
+echo "[two-stage] resume_after_place=$resume_after_place place_gate_wns=${place_gate_wns}ns"
 
 # -----------------------------------------------------------------------------
 # Stage 1: unique place directives. Repeating the same directive from the same
@@ -168,6 +176,47 @@ fi
 # primary because it is the strongest inexpensive predictor available here.
 sort -t $'\t' -k2,2gr -k3,3gr -k4,4n "$sortable" >>"$ranking"
 mapfile -t ranked_lines < <(tail -n +2 "$ranking")
+
+# Keep the full ranking for auditability, but only route candidates whose
+# post-place WNS is inside the empirically routable window.
+gate_file="$summary_root/place_gate_status.tsv"
+eligible_file="$summary_root/place_eligible.tsv"
+printf "candidate\twns\ttns\tfailing_endpoints\tdirective\tdcp\n" >"$eligible_file"
+awk -F '\t' -v threshold="$place_gate_wns" \
+  'NR == 1 || (($2 + 0.0) >= (threshold + 0.0))' "$ranking" >"$eligible_file"
+mapfile -t eligible_lines < <(tail -n +2 "$eligible_file")
+
+best_line="${ranked_lines[0]}"
+IFS=$'\t' read -r best_candidate best_wns _best_tns _best_failing _best_directive _best_dcp <<<"$best_line"
+if (( ${#eligible_lines[@]} == 0 )); then
+  {
+    printf "STATUS\tFAIL\n"
+    printf "THRESHOLD_WNS\t%s\n" "$place_gate_wns"
+    printf "BEST_CANDIDATE\t%s\n" "$best_candidate"
+    printf "BEST_WNS\t%s\n" "$best_wns"
+    printf "ELIGIBLE_COUNT\t0\n"
+    printf "DETAIL\tall post-place candidates are below the routability threshold; routing was not started\n"
+  } >"$gate_file"
+  echo "ERROR: post-place route gate failed: best WNS=${best_wns}ns < ${place_gate_wns}ns; no route workers launched" >&2
+  BUILD_TAG="$tag" RACE_ROOT="$race_root" VIVADO="$vivado_bin" \
+    RACE_MIN_WNS_NS="$min_wns" RACE_MIN_WHS_NS="$min_whs" \
+    RACE_PLACE_GATE_WNS_NS="$place_gate_wns" \
+    bash "$repo_root/scripts/chip-lite/impl_two_stage_summary.sh" || true
+  exit 4
+fi
+
+{
+  printf "STATUS\tPASS\n"
+  printf "THRESHOLD_WNS\t%s\n" "$place_gate_wns"
+  printf "BEST_CANDIDATE\t%s\n" "$best_candidate"
+  printf "BEST_WNS\t%s\n" "$best_wns"
+  printf "ELIGIBLE_COUNT\t%s\n" "${#eligible_lines[@]}"
+  printf "DETAIL\tpost-place candidates inside the routability window will be ranked for routing\n"
+} >"$gate_file"
+
+# From this point ranked_lines means the eligible ranking, not merely every
+# place run that completed successfully.
+ranked_lines=("${eligible_lines[@]}")
 
 available_places="${#ranked_lines[@]}"
 if (( place_top_n == 0 )); then

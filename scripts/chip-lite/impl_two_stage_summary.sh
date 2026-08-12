@@ -14,6 +14,7 @@ winner_file="$impl_dir/two_stage_winner.txt"
 race_root="${RACE_ROOT:-}"
 min_wns="${RACE_MIN_WNS_NS:-0.05}"
 min_whs="${RACE_MIN_WHS_NS:-0.02}"
+place_gate_wns="${RACE_PLACE_GATE_WNS_NS:--0.75}"
 vivado_bin="${VIVADO:-vivado}"
 
 status_value() {
@@ -59,6 +60,7 @@ route_root="$race_root/route"
 race_summary="$race_root/summary"
 place_ranking="$race_summary/place_ranking.tsv"
 route_ranking="$race_summary/route_ranking.tsv"
+place_gate_file="$race_summary/place_gate_status.tsv"
 summary_dir="$repo_root/build/lite/$tag/summary"
 md="$summary_dir/two_stage_impl_summary.md"
 place_tsv="$summary_dir/two_stage_place_results.tsv"
@@ -70,6 +72,12 @@ winner_status="$(status_value "$winner_file" WINNER_STATUS)"
 winner_wns="$(status_value "$winner_file" WINNER_WNS)"
 winner_whs="$(status_value "$winner_file" WINNER_WHS)"
 winner_dcp="$(status_value "$winner_file" WINNER_DCP)"
+place_gate_status="$(status_value "$place_gate_file" STATUS)"
+place_gate_threshold="$(status_value "$place_gate_file" THRESHOLD_WNS)"
+place_gate_best_candidate="$(status_value "$place_gate_file" BEST_CANDIDATE)"
+place_gate_best_wns="$(status_value "$place_gate_file" BEST_WNS)"
+place_gate_eligible="$(status_value "$place_gate_file" ELIGIBLE_COUNT)"
+place_gate_detail="$(status_value "$place_gate_file" DETAIL)"
 
 declare -A place_rank=()
 declare -A selected_place=()
@@ -152,7 +160,9 @@ ltx_state="not generated"
 dcp_state="not generated"
 [[ -f "$impl_dir/post_route.dcp" ]] && dcp_state="[post_route.dcp](../ImplOutputDir/post_route.dcp)"
 
-if [[ "$winner_status" == "SUCCESS" ]]; then
+if [[ "$place_gate_status" == "FAIL" ]]; then
+  recommendation="Stopped before routing. Every post-place candidate was outside the configured routability window."
+elif [[ "$winner_status" == "SUCCESS" ]]; then
   recommendation="Recommended. Setup and hold timing meet the requested guard bands."
 elif [[ "$winner_status" == "LOW_MARGIN" ]]; then
   recommendation="Conditionally usable. Timing is legal, but one or both requested guard bands are not met."
@@ -182,6 +192,15 @@ fi
   echo "- source commit: \`$(git rev-parse HEAD 2>/dev/null || echo unknown)\`"
   echo "- Vivado: \`$($vivado_bin -version 2>/dev/null | head -1 || echo unknown)\`"
   echo "- race root: \`$race_root\`"
+  echo
+  echo "## Post-place route gate"
+  echo
+  echo "- status: \`$(md_cell "$place_gate_status")\`"
+  echo "- minimum routable post-place WNS: $(md_cell "${place_gate_threshold:-$place_gate_wns}") ns"
+  echo "- best candidate: \`$(md_cell "$place_gate_best_candidate")\`"
+  echo "- best post-place WNS: $(md_cell "$place_gate_best_wns") ns"
+  echo "- eligible candidates: $(md_cell "$place_gate_eligible")"
+  echo "- detail: $(md_cell "$place_gate_detail")"
   echo
   echo "## Placement results"
   echo
