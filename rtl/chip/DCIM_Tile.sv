@@ -109,10 +109,16 @@ module DCIM_Tile #(
     state_t state, next_state;
 
     reg start_d;
-    wire start_pulse = start && !start_d && tile_enable;
+    reg start_d2;
+    wire start_pulse = start_d && !start_d2 && tile_enable;
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) start_d <= 1'b0;
-        else start_d <= start;
+        if (!rst_n) begin
+            start_d <= 1'b0;
+            start_d2 <= 1'b0;
+        end else begin
+            start_d <= start;
+            start_d2 <= start_d;
+        end
     end
 
     reg [2:0] mode_reg;
@@ -125,6 +131,49 @@ module DCIM_Tile #(
     reg [31:0] repeat_count_reg;
     reg [BUF_ADDR_WIDTH-1:0] act_stride_reg;
     reg [OBUF_AW-1:0] out_stride_reg;
+
+    // Array-boundary configuration crosses SLRs only into these Tile-local
+    // copies.  start_pulse is delayed one cycle so the command capture below
+    // always sees the matching local configuration.
+    reg [2:0] cfg_mode_local;
+    reg [ACC_W-1:0] cfg_acc_depth_local;
+    reg [BUF_ADDR_WIDTH-1:0] cfg_wei_base_local;
+    reg [BUF_ADDR_WIDTH-1:0] cfg_act_base_local;
+    reg [OBUF_AW-1:0] cfg_out_base_local;
+    reg cfg_batch_enable_local;
+    reg [31:0] cfg_batch_count_local;
+    reg cfg_benchmark_repeat_local;
+    reg [31:0] cfg_repeat_count_local;
+    reg [BUF_ADDR_WIDTH-1:0] cfg_act_stride_local;
+    reg [OBUF_AW-1:0] cfg_out_stride_local;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cfg_mode_local <= `MODE_INT8;
+            cfg_acc_depth_local <= '0;
+            cfg_wei_base_local <= '0;
+            cfg_act_base_local <= '0;
+            cfg_out_base_local <= '0;
+            cfg_batch_enable_local <= 1'b0;
+            cfg_batch_count_local <= 32'd1;
+            cfg_benchmark_repeat_local <= 1'b0;
+            cfg_repeat_count_local <= 32'd1;
+            cfg_act_stride_local <= '0;
+            cfg_out_stride_local <= '0;
+        end else begin
+            cfg_mode_local <= mode;
+            cfg_acc_depth_local <= acc_depth;
+            cfg_wei_base_local <= wei_base_addr;
+            cfg_act_base_local <= act_base_addr;
+            cfg_out_base_local <= out_base_addr[OBUF_AW-1:0];
+            cfg_batch_enable_local <= batch_enable;
+            cfg_batch_count_local <= batch_count;
+            cfg_benchmark_repeat_local <= benchmark_repeat;
+            cfg_repeat_count_local <= repeat_count;
+            cfg_act_stride_local <= act_stride_words;
+            cfg_out_stride_local <= out_stride_words[OBUF_AW-1:0];
+        end
+    end
 
     reg [31:0] pixels_remaining;
     reg [JOB_COUNT_W-1:0] block_pixels;
@@ -396,16 +445,16 @@ module DCIM_Tile #(
             prefetch_done_reg <= 1'b0;
         end else begin
             if (state == ST_IDLE && start_pulse) begin
-                mode_reg <= mode;
-                acc_reg <= acc_depth;
-                wei_base_reg <= wei_base_addr;
-                act_base_reg <= act_base_addr;
-                out_base_reg <= out_base_addr[OBUF_AW-1:0];
-                total_pixels_reg <= batch_enable ? batch_count : 32'd1;
-                benchmark_repeat_reg <= benchmark_repeat;
-                repeat_count_reg <= (repeat_count == 0) ? 32'd1 : repeat_count;
-                act_stride_reg <= act_stride_words;
-                out_stride_reg <= out_stride_words[OBUF_AW-1:0];
+                mode_reg <= cfg_mode_local;
+                acc_reg <= cfg_acc_depth_local;
+                wei_base_reg <= cfg_wei_base_local;
+                act_base_reg <= cfg_act_base_local;
+                out_base_reg <= cfg_out_base_local;
+                total_pixels_reg <= cfg_batch_enable_local ? cfg_batch_count_local : 32'd1;
+                benchmark_repeat_reg <= cfg_benchmark_repeat_local;
+                repeat_count_reg <= (cfg_repeat_count_local == 0) ? 32'd1 : cfg_repeat_count_local;
+                act_stride_reg <= cfg_act_stride_local;
+                out_stride_reg <= cfg_out_stride_local;
                 preload_req_count <= '0;
                 preload_rsp_count <= '0;
             end
@@ -446,12 +495,13 @@ module DCIM_Tile #(
 
 `ifdef SIMULATION
     always_ff @(posedge clk) begin
-        if (rst_n && start_pulse && (acc_depth == 0))
+        if (rst_n && start_pulse && (cfg_acc_depth_local == 0))
             $fatal(1, "DCIM_Tile[%0d] acc_depth must be nonzero", TILE_IDX);
-        if (rst_n && start_pulse && batch_enable && (batch_count == 0))
+        if (rst_n && start_pulse && cfg_batch_enable_local && (cfg_batch_count_local == 0))
             $fatal(1, "DCIM_Tile[%0d] batch_count must be nonzero", TILE_IDX);
-        if (rst_n && start_pulse && benchmark_repeat &&
-            ((acc_depth != 1) || !batch_enable || (batch_count != MICRO_BATCH)))
+        if (rst_n && start_pulse && cfg_benchmark_repeat_local &&
+            ((cfg_acc_depth_local != 1) || !cfg_batch_enable_local ||
+             (cfg_batch_count_local != MICRO_BATCH)))
             $fatal(1,
                    "DCIM_Tile[%0d] benchmark repeat requires batch=64 and acc_depth=1",
                    TILE_IDX);

@@ -138,7 +138,10 @@ module DCIM_Activation_Stream #(
     // cleared below.  Keep the 2048 data bits out of the asynchronous-reset
     // tree; otherwise synthesis creates a 4084-load reset net in every Tile.
     always_ff @(posedge clk) begin
-        if (active && ibuf0_data_valid && ibuf1_data_valid) begin
+        // Both valid signals can only coincide for a paired activation read;
+        // `active` is therefore redundant on the 2048 payload FF enables.
+        // Removing it avoids broadcasting one control bit across the buffer.
+        if (ibuf0_data_valid && ibuf1_data_valid) begin
             if (is_int16) begin
                 for (word_lane = 0; word_lane < BUF_DATA_WIDTH/16; word_lane = word_lane + 1) begin
                     for (nibble_lane = 0; nibble_lane < 4; nibble_lane = nibble_lane + 1) begin

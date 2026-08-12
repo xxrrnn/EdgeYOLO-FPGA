@@ -140,9 +140,10 @@ module mp_unit_fixed #(
     wire [ADDR_WIDTH-1:0] gap_save_addr = dst_base_word + cb_cnt;
 
     reg  [VB_BANDWIDTH-1:0] max_reg;
+    reg  [VB_BANDWIDTH-1:0] mp_read_data_reg;
     reg                      first_valid;
 
-    wire [VB_BANDWIDTH-1:0] new_data = in_bounds ? gb_doutb : {LANES{FP32_NEG_INF}};
+    wire [VB_BANDWIDTH-1:0] new_data = in_bounds ? mp_read_data_reg : {LANES{FP32_NEG_INF}};
     wire [VB_BANDWIDTH-1:0] max_result;
 
     genvar gi;
@@ -170,7 +171,7 @@ module mp_unit_fixed #(
 
     assign fp_add_valid_in = (state == S_LOAD_CMP) && (mode_r == MP_MODE_GAP);
     assign fp_add_a        = acc_reg;
-    assign fp_add_b        = gb_doutb;
+    assign fp_add_b        = mp_read_data_reg;
 
     genvar gj;
     generate
@@ -203,7 +204,7 @@ module mp_unit_fixed #(
             state <= S_IDLE;
             oh_cnt <= '0; ow_cnt <= '0; cb_cnt <= '0;
             kh_cnt <= '0; kw_cnt <= '0; gap_pos_cnt <= '0;
-            max_reg <= '0; first_valid <= 1'b1;
+            max_reg <= '0; mp_read_data_reg <= '0; first_valid <= 1'b1;
             gap_add_wait <= '0;
             src_base_word <= '0; dst_base_word <= '0;
             src_h_r <= '0; src_w_r <= '0; src_c_r <= '0;
@@ -304,7 +305,13 @@ module mp_unit_fixed #(
 
                 // ---------------------------------------------------------
                 S_LOAD_WAIT: begin
-                    if (gb_doutb_valid) state <= S_LOAD_CMP;
+                    if (gb_doutb_valid) begin
+                        // The state already spends this edge waiting for the
+                        // fixed-latency URAM response.  Capture it here so the
+                        // FP compare/add logic starts from a local register.
+                        mp_read_data_reg <= gb_doutb;
+                        state <= S_LOAD_CMP;
+                    end
                 end
 
                 // ---------------------------------------------------------
