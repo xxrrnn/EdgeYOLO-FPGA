@@ -67,7 +67,11 @@ module uram_tdp_bytewrite #(
     // eliminates a 390-load route across the full 8-MB VPU URAM footprint and
     // does not alter the fixed NBPIPE+2 read latency.
     // Port A 数据流水
-    reg [DWIDTH-1:0] dat_pipe_a [0:NBPIPE-1];
+    // Keep every latency stage as an FF bank.  With an always-enabled shift
+    // Vivado otherwise folds the whole vector into SRL16E cells.  On a deep
+    // UltraRAM cascade that creates URAM DOUT -> 7 LUT levels -> SRL.D,
+    // which is substantially slower than the intended URAM -> FF boundary.
+    (* shreg_extract = "no" *) reg [DWIDTH-1:0] dat_pipe_a [0:NBPIPE-1];
     always @(posedge clk)
         dat_pipe_a[0] <= memrega;
     genvar gpa;
@@ -98,7 +102,7 @@ module uram_tdp_bytewrite #(
 
     // Port B uses the same fixed-latency, continuously shifting data pipe.
     // Port B 数据流水
-    reg [DWIDTH-1:0] dat_pipe_b [0:NBPIPE-1];
+    (* shreg_extract = "no" *) reg [DWIDTH-1:0] dat_pipe_b [0:NBPIPE-1];
     always @(posedge clk)
         dat_pipe_b[0] <= memregb;
     genvar gpb;
