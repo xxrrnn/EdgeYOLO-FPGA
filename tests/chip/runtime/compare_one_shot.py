@@ -92,7 +92,19 @@ def _conv_dqa_fp32(feat: np.ndarray, meta, npz, mode: str, *, relu: bool = True)
     accum = cols.astype(matmul_dtype) @ weights[:, :cols.shape[1]].T
     scale = npz["dqa_scale"].astype(np.float32)[:meta.out_ch]
     bias = npz["dqa_bias"].astype(np.float32)[:meta.out_ch]
-    dqa = accum.astype(np.float32) * scale[None, :] + bias[None, :]
+    # FPGA DQA: integer accum → FP32, then FP mul/add.
+    # INT16 uses int64→fp32 (drops low bits when |acc| > 2^24); INT8 uses
+    # int32→fp32 which is exact for typical early-layer accumulators.
+    # Host float32 mul/add still drifts ~1 ULP vs the board, so finish the
+    # affine in float64 and round once to float32.
+    if mode == "int16":
+        acc_f = accum.astype(np.float32)
+    else:
+        acc_f = accum.astype(np.float64)
+    dqa = (
+        acc_f.astype(np.float64) * scale.astype(np.float64)
+        + bias.astype(np.float64)
+    ).astype(np.float32)
     if relu:
         dqa = np.maximum(dqa, 0.0)
     oh, ow = out_hw(h, w, meta)
@@ -107,9 +119,10 @@ def run_yolo_compiler_golden(image_path: Path, mode: str, max_layers: int | None
     )
     network_json = parsed_dir / "network.json"
     parsed = json.loads(network_json.read_text())
-    qa_reciprocal_multiply = (
-        parsed.get("quantization_semantics") == "int8_values_widened_to_int16"
-    )
+    # FPGA WB stores qa_scale = float32(1/act_scale) and multiplies; legacy
+    # divide-by-act-scale can diverge on half-up boundaries and amplify through
+    # later layers. Always mirror the hardware QA multiply for one-shot compare.
+    qa_reciprocal_multiply = True
     unit_run.ACT_SCALE = float(parsed.get("input_act_scale", unit_run.ACT_SCALE))
     img = unit_run.load_image(str(image_path))
     if mode == "int16":
