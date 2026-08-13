@@ -81,6 +81,8 @@ REGS_BASE = 0x1_0500_0000
 
 DEFAULT_TIMEOUT_S = 60.0
 XDMA_SUBPROC_TIMEOUT_S = 30.0
+# This bitstream hangs C2H at length >= 4096 (HBM and on-chip BRAM). 256 B is proven safe.
+C2H_CHUNK_BYTES = 256
 CASE_TIMEOUTS: dict[tuple[str, str], float] = {
     ("im2col", "im2col_6x6_s2_c3"): 180.0,
     ("im2col", "im2col_3x3_s2_c32"): 180.0,
@@ -153,7 +155,7 @@ class XDMAWin:
     def write_u32(self, address: int, val: int) -> None:
         self.write(address, struct.pack("<I", val & 0xFFFFFFFF))
 
-    def read(self, address: int, nbytes: int) -> bytes:
+    def _read_once(self, address: int, nbytes: int) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
             tmp_path = f.name
         try:
@@ -164,6 +166,19 @@ class XDMAWin:
             return Path(tmp_path).read_bytes()
         finally:
             os.unlink(tmp_path)
+
+    def read(self, address: int, nbytes: int) -> bytes:
+        if nbytes <= 0:
+            return b""
+        if nbytes <= C2H_CHUNK_BYTES:
+            return self._read_once(address, nbytes)
+        out = bytearray()
+        offset = 0
+        while offset < nbytes:
+            chunk = min(C2H_CHUNK_BYTES, nbytes - offset)
+            out.extend(self._read_once(address + offset, chunk))
+            offset += chunk
+        return bytes(out)
 
     def read_u32(self, address: int) -> int:
         return struct.unpack("<I", self.read(address, 4))[0]
@@ -477,6 +492,7 @@ class ChipRunnerWin:
 
     def start_decoder(self, n_words: int) -> None:
         self._log(f"[decoder] INST_COUNT={n_words}, starting...")
+        print("*** PEAK/DECODER ENABLED now — start power measurement ***", flush=True)
         self.x.write_u32(REGS_BASE + REG_INST_COUNT, n_words)
         self.x.write_u32(REGS_BASE + REG_DECODER_CTRL, 1)
         time.sleep(0.001)
@@ -567,6 +583,9 @@ class ChipRunnerWin:
         staging: str = "hbm",
         verify: bool = True,
         weight_hbm_map: "dict[str, int] | None" = None,
+        on_before_decoder=None,
+        on_decoder_start=None,
+        on_decoder_done=None,
     ) -> list[dict]:
         """Run one case.
 
@@ -584,7 +603,11 @@ class ChipRunnerWin:
 
         if staging == "hbm":
             self.upload_hbm(run_dir, weight_hbm_map=weight_hbm_map)
-            n_words = self.upload_inst(run_dir, drain_output=verify,
+            # Keep HBM for input/weight CDMA (original staging). Do not CDMA
+            # tile_obuf -> HBM for check: 8 back-to-back drains through
+            # axi_misc_smc + hbm_axi_cc only preserve tile0 (256/2048).
+            # Host scatter-reads tile_obuf, same as the VPU_BUF path.
+            n_words = self.upload_inst(run_dir, drain_output=False,
                                         weight_hbm_map=weight_hbm_map)
         else:
             self.upload_preload(run_dir)
@@ -604,15 +627,21 @@ class ChipRunnerWin:
                     self.x.write(VPU_BUF_BASE + chk["dst_off"], b"\x00" * nbytes)
                     break
 
+        if on_before_decoder is not None:
+            on_before_decoder()
         self.start_decoder(n_words)
+        if on_decoder_start is not None:
+            on_decoder_start()
         self.poll_done(timeout_s)
+        if on_decoder_done is not None:
+            on_decoder_done()
 
         if not verify:
             self._log(f"[result] {run_dir.name}: SKIP verify")
             return [{"name": run_dir.name, "pass": True, "total_words": 0,
                      "passed": 0, "failed": 0, "first_mismatch": None, "mismatches": []}]
 
-        results = self.read_check(run_dir, from_hbm=(staging == "hbm"))
+        results = self.read_check(run_dir, from_hbm=False)
 
         status = "PASS" if all(r["pass"] for r in results) else "FAIL"
         self._log(f"[result] {run_dir.name}: {status}")
