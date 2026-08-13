@@ -172,8 +172,8 @@ set synthJobs [env_int_or_default SYNTH_JOBS 128]
 set fullSynthReports [env_bool_or_default FULL_SYNTH_REPORTS 0]
 set raceReloadXdc [env_bool_or_default RACE_RELOAD_XDC 0]
 set vivadoThreads [clamp_vivado_threads VIVADO_THREADS [env_int_or_default VIVADO_THREADS 32]]
-set placeThreads  [clamp_vivado_threads PLACE_THREADS  [env_int_or_default PLACE_THREADS 32]]
-set routeThreads  [clamp_vivado_threads ROUTE_THREADS  [env_int_or_default ROUTE_THREADS 32]]
+set placeThreads  [clamp_vivado_threads PLACE_THREADS  [env_int_or_default PLACE_THREADS 16]]
+set routeThreads  [clamp_vivado_threads ROUTE_THREADS  [env_int_or_default ROUTE_THREADS 16]]
 
 proc use_vivado_threads {} {
     global vivadoThreads
