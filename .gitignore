@@ -206,3 +206,10 @@ rtl/**/xsim*.pb
 
 .cxl.vcs*.version
 synopsys_sim.setup
+
+# Local scratch. Must come after !*.py / !TEST/**/*.py or those globs
+# would keep probe scripts and leftover checkouts visible.
+temp/
+temp/**
+TEST/end2end/output/
+TEST/end2end/output/**
