@@ -349,6 +349,11 @@ MODULE_CASES = {
     #   no_layer=True 跳过 npz 依赖；不需要 WB；仅发 CDMA_COPY+WAIT_CDMA 指令。
     # ---------------------------------------------------------------------------
     'cdma_memtest': [
+        {'name': 'cdma_obuf_ibuf_obuf_16b',
+         'desc': 'Minimum non-zero 16-byte OBUF→IBUF→OBUF roundtrip; '
+                 'checks that SR busy observation cannot deadlock a short copy',
+         'nbytes': 16,
+         'obuf_src': 0x000000, 'ibuf_mid': 0x000000, 'obuf_dst': 0x200000},
         {'name': 'cdma_obuf_ibuf_obuf_c128',
          'desc': 'OBUF→IBUF→OBUF roundtrip, 128-channel block (2KB), '
                  'verifies ibuf/obuf controller pipeline delay configs',

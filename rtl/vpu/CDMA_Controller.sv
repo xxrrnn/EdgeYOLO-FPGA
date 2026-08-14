@@ -54,6 +54,7 @@
     reg [31:0] cdma_dst_addr_lsb_reg;
     reg [31:0] cdma_length_reg;
     reg        sr_idle_flag;  // 锁存 SR 读取结果的 IDLE 位
+    reg        sr_seen_busy;  // BTT 后必须先看到真实 CDMA SR.IDLE=0
     reg [$clog2(`CDMA_COOLDOWN_CYCLES+1)-1:0] cooldown_cnt;
     reg        write_addr_done;
     reg        write_data_done;
@@ -129,8 +130,11 @@
             // 轮询 CDMA SR 直到 IDLE=1（传输完成）
             CDMA_POLL_ISSUE:  n_state = CDMA_POLL_WAIT;
             CDMA_POLL_WAIT:   if (r_handshake_cdma) n_state = CDMA_POLL_CHECK;
-            CDMA_POLL_CHECK:  if (sr_idle_flag) n_state = CDMA_COOLDOWN;
-                              else              n_state = CDMA_POLL_ISSUE;
+            // The CDMA can briefly keep SR.IDLE=1 after accepting BTT.  That
+            // value is the pre-launch idle state, not transfer completion.
+            // Require an observed busy state before accepting the next IDLE.
+            CDMA_POLL_CHECK:  if (sr_seen_busy && sr_idle_flag) n_state = CDMA_COOLDOWN;
+                              else                              n_state = CDMA_POLL_ISSUE;
 
             // 等待 AXI 互连写路径完全 flush 到目标 BRAM
             CDMA_COOLDOWN:    if (cooldown_cnt == `CDMA_COOLDOWN_CYCLES) n_state = IDLE;
@@ -153,10 +157,20 @@
 
     // 锁存 SR 读取结果
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
+        if (!rst_n) begin
             sr_idle_flag <= 1'b0;
-        else if (r_handshake_cdma)
-            sr_idle_flag <= cdma_axilm_rdata[1];
+            sr_seen_busy <= 1'b0;
+        end else begin
+            // Each command gets an independent post-BTT busy observation.
+            if (c_state == IDLE)
+                sr_seen_busy <= 1'b0;
+            else if (c_state == CDMA_POLL_WAIT && r_handshake_cdma &&
+                     !cdma_axilm_rdata[1])
+                sr_seen_busy <= 1'b1;
+
+            if (r_handshake_cdma)
+                sr_idle_flag <= cdma_axilm_rdata[1];
+        end
     end
 
     // Cooldown 计数器：CDMA 完成后等待写路径 flush
