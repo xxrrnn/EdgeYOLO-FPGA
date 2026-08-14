@@ -204,9 +204,8 @@ def parse_args() -> argparse.Namespace:
         "--staging",
         choices=("hbm", "preload"),
         default="preload",
-        help="hbm=Host->HBM->CDMA->IBUF (original). preload=Host H2C into each "
-             "tile IBUF. This bitstream's multi-tile HBM CDMA only keeps tile0; "
-             "preload is required for a correct 8-tile peak/power run.",
+        help="hbm=Host->HBM->CDMA->IBUF, then tile_obuf drain to HBM "
+             "(tops_ila_hbmfix_260813). preload=Host H2C into each tile IBUF.",
     )
     parser.add_argument(
         "--measure-power",
@@ -369,7 +368,8 @@ def main() -> int:
         timeout_s = max(args.timeout_s, compute_s + 30.0)
         print(f"[fpga] compute window ≈ {compute_s:.3f} s  (repeat={repeat_count}, timeout={timeout_s:.1f}s)")
         if args.staging == "hbm":
-            print("[fpga] warning: HBM CDMA staging on this bitstream only verified tile0")
+            print("[fpga] staging=hbm: Host->HBM->CDMA->IBUF; check reads tile_obuf "
+                  "(drain CDMA still tile0-only on this bit)")
 
         sampler = None
         power_report = None

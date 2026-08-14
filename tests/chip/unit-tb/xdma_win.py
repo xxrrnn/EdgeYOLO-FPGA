@@ -603,10 +603,9 @@ class ChipRunnerWin:
 
         if staging == "hbm":
             self.upload_hbm(run_dir, weight_hbm_map=weight_hbm_map)
-            # Keep HBM for input/weight CDMA (original staging). Do not CDMA
-            # tile_obuf -> HBM for check: 8 back-to-back drains through
-            # axi_misc_smc + hbm_axi_cc only preserve tile0 (256/2048).
-            # Host scatter-reads tile_obuf, same as the VPU_BUF path.
+            # Load path (HBM->IBUF) is 2048/2048 on tops_ila_hbmfix_260813.
+            # Official tile_obuf->HBM drain is still tile0-only (256/2048), so
+            # host scatter-reads tile_obuf for the peak check.
             n_words = self.upload_inst(run_dir, drain_output=False,
                                         weight_hbm_map=weight_hbm_map)
         else:

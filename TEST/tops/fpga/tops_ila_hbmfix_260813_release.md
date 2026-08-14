@@ -55,11 +55,12 @@ top.ltx  b1feb90460ab4b581bb70a4736f2210c888efe9ba0f7a7cf17037af37b4f127d
 已完成：BD validation、受影响 IP OOC 综合、VCS streamed multiblock、INT8/INT16
 模块回归、完整综合/布局/布线和 bit/ltx 生成。
 
-仍需板测：
+2026-08-14 Windows VCU128 板测（bit = `cc0c28f9…`，代码 `f88b510`）：
 
-1. Windows XDMA 正常枚举；
-2. `run_peak_int8.py --staging preload --repeat-count 1` 为 2048/2048；
-3. `run_peak_int8.py --staging hbm --repeat-count 1` 为 2048/2048；
-4. main-compatible YOLO/ResNet end-to-end，初测保持 256B C2H 分块；
-5. 单笔 4KB/64KB C2H。当前修改没有实现 tile/VPU 专用 outstanding limiter，
-   因此不能在板测前宣称长 C2H 已根治。
+1. XDMA 枚举：**PASS**。单笔 C2H 16～2048B 通。Host 写读 HBM 256KB（256B 分块）0 mismatch。
+2. `--staging preload`：**2048/2048 PASS**。
+3. `--staging hbm` 加载后读 tile_obuf：**2048/2048 PASS**。官方 drain（tile_obuf→HBM）：**256/2048 FAIL**。
+4. YOLO INT8 / ResNet INT8：**FAIL**（`corr≈0.17～0.25`，不是 1 ULP）。
+5. 单笔 4KB C2H：本 bit 未测（上一份 ILA bit 会楔死；Step D 未做）。Host 保持 256B 分块。
+
+剩余问题与 RTL 计划见 `HBM_E2E_RTL_FIX_HANDOFF.md`。
