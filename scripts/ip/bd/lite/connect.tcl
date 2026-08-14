@@ -43,23 +43,25 @@ connect_bd_net [get_bd_pins xdma_constant/dout] [get_bd_pins xdma_0/usr_irq_req]
 
 # ==============================================================================
 # SmartConnect 拓扑（修复 XDMA PCIe 协议错误）
-#   - XDMA 直连 axi_xdma_smc (1SI, 2MI) → tile_smc / misc_smc
-#   - CDMA 直连 axi_cdma_smc (1SI, 2MI) → tile_smc / misc_smc
+#   - XDMA 直连 axi_xdma_smc (1SI, 3MI) → tile_smc / misc_smc / hbm_smc
+#   - CDMA 直连 axi_cdma_smc (1SI, 3MI) → tile_smc / misc_smc / hbm_smc
 #   - axi_tile_smc (2SI, 16MI) → 8×ibuf + 8×obuf
-#   - axi_misc_smc (2SI, 5MI)  → vpu_buf + wb + inst_bram + regs + hbm
+#   - axi_misc_smc (2SI, 4MI)  → vpu_buf + wb + inst_bram + regs
+#   - axi_hbm_smc  (SmartConnect, 2SI, 1MI)
+#       → full register slice + clock converter + HBM
 # ==============================================================================
 set num_tile_mi [expr {$::DCIM_NUM_TILES * 2}]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_xdma_smc
 set_property -dict [list \
   CONFIG.NUM_SI    {1} \
-  CONFIG.NUM_MI    {2} \
+  CONFIG.NUM_MI    {3} \
 ] [get_bd_cells axi_xdma_smc]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_cdma_smc
 set_property -dict [list \
   CONFIG.NUM_SI    {1} \
-  CONFIG.NUM_MI    {2} \
+  CONFIG.NUM_MI    {3} \
 ] [get_bd_cells axi_cdma_smc]
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_tile_smc
@@ -71,18 +73,26 @@ set_property -dict [list \
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_misc_smc
 set_property -dict [list \
   CONFIG.NUM_SI    {2} \
-  CONFIG.NUM_MI    {5} \
+  CONFIG.NUM_MI    {4} \
 ] [get_bd_cells axi_misc_smc]
+
+create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_hbm_smc
+set_property -dict [list \
+  CONFIG.NUM_SI    {2} \
+  CONFIG.NUM_MI    {1} \
+] [get_bd_cells axi_hbm_smc]
 
 # XDMA → axi_xdma_smc → tile/misc (single-master, zero arbitration)
 connect_bd_intf_net [get_bd_intf_pins xdma_0/M_AXI] [get_bd_intf_pins axi_xdma_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_xdma_smc/M00_AXI] [get_bd_intf_pins axi_tile_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_xdma_smc/M01_AXI] [get_bd_intf_pins axi_misc_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_xdma_smc/M02_AXI] [get_bd_intf_pins axi_hbm_smc/S00_AXI]
 
 # CDMA → axi_cdma_smc → tile/misc (single-master, zero arbitration)
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_0/M_AXI] [get_bd_intf_pins axi_cdma_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_smc/M00_AXI] [get_bd_intf_pins axi_tile_smc/S01_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_cdma_smc/M01_AXI] [get_bd_intf_pins axi_misc_smc/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_cdma_smc/M02_AXI] [get_bd_intf_pins axi_hbm_smc/S01_AXI]
 
 # Level-2a: axi_tile_smc M[0..N-1] → ibuf, M[N..2N-1] → obuf
 for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
@@ -94,7 +104,7 @@ for {set t 0} {$t < $::DCIM_NUM_TILES} {incr t} {
   connect_bd_intf_net [get_bd_intf_pins axi_tile_smc/$mi] [get_bd_intf_pins tile_obuf_ctrl_${t}/S_AXI]
 }
 
-# Level-2b: axi_misc_smc M00..M04 → vpu_buf, wb, inst_bram, regs, hbm
+# Level-2b: axi_misc_smc M00..M03 → vpu_buf, wb, inst_bram, regs
 connect_bd_intf_net [get_bd_intf_pins axi_misc_smc/M00_AXI] [get_bd_intf_pins vpu_buf_ctrl/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_misc_smc/M01_AXI] [get_bd_intf_pins vpu_wb_ctrl/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_misc_smc/M02_AXI] [get_bd_intf_pins inst_bram_ctrl/S_AXI]
@@ -252,7 +262,7 @@ connect_bd_net [get_bd_pins vpu_0/ready]                 [get_bd_pins vpu_regs/r
 # Common clock/reset from XDMA (250 MHz)
 # ==============================================================================
 
-# SmartConnect (4-instance: xdma_smc + cdma_smc + tile_smc + misc_smc)
+# SmartConnect (5-instance: xdma_smc + cdma_smc + tile_smc + misc_smc + hbm_smc)
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_xdma_smc/aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_xdma_smc/aresetn]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_cdma_smc/aclk]
@@ -261,6 +271,9 @@ connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_tile_smc/aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_tile_smc/aresetn]
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_misc_smc/aclk]
 connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins axi_misc_smc/aresetn]
+
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins axi_hbm_smc/aclk]
+connect_bd_net [get_bd_pins hbm_s_rst/peripheral_aresetn] [get_bd_pins axi_hbm_smc/aresetn]
 
 # AXI BRAM controllers
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins vpu_wb_ctrl/s_axi_aclk]
@@ -320,18 +333,33 @@ connect_bd_net [get_bd_ports cpu_reset]                 [get_bd_pins hbm_apb_rst
 connect_bd_net [get_bd_pins hbm_ref_clk_wiz/locked]    [get_bd_pins hbm_apb_rst/dcm_locked]
 connect_bd_net [get_bd_pins hbm_apb_rst/peripheral_aresetn] [get_bd_pins hbm_0/APB_0_PRESET_N]
 
+# A PCIe reset must reset both sides of the HBM clock converter.  Build one
+# active-high logical request (cpu_reset OR !axi_aresetn), then synchronize its
+# deassertion independently at 250 MHz and 450 MHz.
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins hbm_xdma_reset_inv/Op1]
+connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_reset_or/Op1]
+connect_bd_net [get_bd_pins hbm_xdma_reset_inv/Res] [get_bd_pins hbm_reset_or/Op2]
+
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins hbm_s_rst/slowest_sync_clk]
+connect_bd_net [get_bd_pins hbm_reset_or/Res] [get_bd_pins hbm_s_rst/ext_reset_in]
+connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins hbm_s_rst/dcm_locked]
+
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_rst/slowest_sync_clk]
-connect_bd_net [get_bd_ports cpu_reset] [get_bd_pins hbm_rst/ext_reset_in]
+connect_bd_net [get_bd_pins hbm_reset_or/Res] [get_bd_pins hbm_rst/ext_reset_in]
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/locked] [get_bd_pins hbm_rst/dcm_locked]
 
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_0/AXI_00_ACLK]
 connect_bd_net [get_bd_pins hbm_rst/peripheral_aresetn] [get_bd_pins hbm_0/AXI_00_ARESET_N]
 
 connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins hbm_axi_cc/s_axi_aclk]
-connect_bd_net [get_bd_pins xdma_0/axi_aresetn] [get_bd_pins hbm_axi_cc/s_axi_aresetn]
+connect_bd_net [get_bd_pins hbm_s_rst/peripheral_aresetn] [get_bd_pins hbm_axi_cc/s_axi_aresetn]
 connect_bd_net [get_bd_pins hbm_axi_clk_wiz/clk_out1] [get_bd_pins hbm_axi_cc/m_axi_aclk]
 connect_bd_net [get_bd_pins hbm_rst/peripheral_aresetn] [get_bd_pins hbm_axi_cc/m_axi_aresetn]
 
-# axi_misc_smc M04 → AXI Clock Converter → HBM SAXI_00 (interleaved, full 4GB)
-connect_bd_intf_net [get_bd_intf_pins axi_misc_smc/M04_AXI] [get_bd_intf_pins hbm_axi_cc/S_AXI]
+# Dedicated HBM path: arbitrate XDMA/CDMA independently of misc peripherals,
+# then cross a full register slice before the 250-to-450 MHz clock converter.
+connect_bd_net [get_bd_pins xdma_0/axi_aclk] [get_bd_pins hbm_axi_regslice/aclk]
+connect_bd_net [get_bd_pins hbm_s_rst/peripheral_aresetn] [get_bd_pins hbm_axi_regslice/aresetn]
+connect_bd_intf_net [get_bd_intf_pins axi_hbm_smc/M00_AXI] [get_bd_intf_pins hbm_axi_regslice/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins hbm_axi_regslice/M_AXI] [get_bd_intf_pins hbm_axi_cc/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins hbm_axi_cc/M_AXI] [get_bd_intf_pins hbm_0/SAXI_00]

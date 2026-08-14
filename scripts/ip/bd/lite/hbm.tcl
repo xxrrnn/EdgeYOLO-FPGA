@@ -83,8 +83,22 @@ set_property -dict [list \
   CONFIG.RESET_TYPE {ACTIVE_HIGH} \
 ] [get_bd_cells hbm_axi_clk_wiz]
 
-# HBM domain reset
+# HBM AXI reset synchronizers.  Both sides of hbm_axi_cc observe the same
+# logical reset request, but each side releases reset in its own clock domain.
+# This prevents a PCIe reset from clearing only the 250 MHz side of the
+# converter while stale transactions remain in the 450 MHz side.
+create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 hbm_s_rst
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 hbm_rst
+create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 hbm_xdma_reset_inv
+set_property -dict [list \
+  CONFIG.C_OPERATION {not} \
+  CONFIG.C_SIZE {1} \
+] [get_bd_cells hbm_xdma_reset_inv]
+create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 hbm_reset_or
+set_property -dict [list \
+  CONFIG.C_OPERATION {or} \
+  CONFIG.C_SIZE {1} \
+] [get_bd_cells hbm_reset_or]
 
 # ==============================================================================
 # 4. AXI Clock Converter (250 MHz system → 450 MHz HBM)
@@ -93,8 +107,20 @@ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 hbm_axi_cc
 set_property -dict [list \
   CONFIG.ADDR_WIDTH {33} \
   CONFIG.DATA_WIDTH {256} \
-  CONFIG.ID_WIDTH {4} \
+  CONFIG.ID_WIDTH {6} \
 ] [get_bd_cells hbm_axi_cc]
+
+# A full register slice isolates the HBM clock converter from SmartConnect and
+# gives the two-master HBM arbitration path a clean timing/protocol boundary.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 hbm_axi_regslice
+set_property -dict [list \
+  CONFIG.REG_AR {7} \
+  CONFIG.REG_AW {7} \
+  CONFIG.REG_B  {7} \
+  CONFIG.REG_R  {1} \
+  CONFIG.REG_W  {1} \
+  CONFIG.MAX_BURST_LENGTH {16} \
+] [get_bd_cells hbm_axi_regslice]
 
 # ==============================================================================
 # 5. tile_ibuf Controllers (chip-v3: N x 512KB per-tile IBUF, 128-bit)

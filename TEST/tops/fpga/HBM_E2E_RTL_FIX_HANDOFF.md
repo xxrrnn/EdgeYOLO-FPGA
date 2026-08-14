@@ -2,6 +2,36 @@
 
 给后续 agent 的完整上下文。目标：**新 bitstream 上恢复官方 HBM staging 的峰值 8-tile 正确性，并让 YOLO/ResNet end-to-end 特征比对稳定通过**。不要把 host 上的规避当成架构变更。
 
+## 2026-08-14 实施状态（bitstream 已生成，尚待板测）
+
+已基于 `test/tops/ila` 的最新远程提交 `a6a29fa` 完成 Step A/B/C 的低风险版本：
+
+- `axi_misc_smc` 已恢复为 4MI；HBM 从 misc 外设互连拆出，新增独立 `axi_hbm_smc`（XDMA/CDMA 两个 SI、一个 HBM MI）。
+- HBM 前加入 full AXI register slice；CDMA 与 HBM 下游传播的最大 burst 均为 16 beat。
+- `hbm_axi_cc` 的 ID width 从 4 修正为与 HBM 一致的 6，生成 BD 不再有 4↔6 bit ID 截断告警。
+- PCIe/CPU 的组合复位请求分别在 250 MHz 和 450 MHz 域同步释放，clock converter 两侧及 HBM AXI 端共享同一个逻辑复位事件。
+- XDMA 与 CDMA 的 HBM 地址仍是 `0x0`、范围仍是 4GB；host 地址图和命令格式不变。
+
+验证状态：Vivado 2024.2 `validate_bd_design`、wrapper 生成及 6 个受影响 IP 的 OOC 综合均通过；VCS `END2END_MULTIBLOCK_PASS pixels=70 acc_depth=3`。HBM stub 不能复现板级 CC/PHY 故障，因此这些结果只表示修改可综合且没有改变 DCIM 计算语义，**不能勾选板级验收**。
+
+完整 implementation `tops_ila_hbmfix_260813` 已结束。winner 为
+`route7_place0_ExtraTimingOpt_ExploreWithHoldFix_Explore`，post-route
+`WNS=+0.029 ns`、`WHS=+0.001 ns`、TNS/THS 均为 0，setup/hold 失败端点均为
+0。该结果时序合法但属于 low-margin；构建日志未发现 `ERROR` 或
+`CRITICAL WARNING`。发布文件及其 SHA-256：
+
+```text
+top.bit  cc0c28f9ee064c79528128dd462a59e8529d787a050090d91fb9ef5d95da9d2a
+top.bin  7284d77df678b3e8ca2d8b85e33a1a5d4b8efe86e0db1f06e52823c3bf0739ee
+top.ltx  b1feb90460ab4b581bb70a4736f2210c888efe9ba0f7a7cf17037af37b4f127d
+```
+
+绝对路径和输入 blob 绑定见 `tops_ila_hbmfix_260813_release.md`。上述结果只完成
+实现验收；XDMA 枚举、HBM staging 2048/2048、YOLO/ResNet end-to-end 和 4KB
+C2H 仍必须板测。
+
+SmartConnect 2024.2 没有可写的 per-port outstanding 上限。虽然 register slice XCI 可记录 `NUM_*_OUTSTANDING=1`，连接后的接口能力仍传播为 32/16，而且 register slice 不是事务限流器，故未用该属性冒充修复。当前先以 HBM 独立、16-beat、full slice、统一复位和 ID 对齐生成 bitstream；若 `--staging hbm` 仍非 2048/2048，再实现并验证专用 AXI outstanding limiter。Step D（tile/vpu 4KB C2H 根治）本轮未做，host 仍应保持 256B C2H 分块。
+
 ---
 
 ## 0. 仓库与板卡身份
@@ -9,10 +39,10 @@
 | 项 | 值 |
 |---|---|
 | Repo | `E:\work2026\runnan_xu\FPGA\EdgeYOLO-FPGA` |
-| Branch | `test/tops/ila` @ `d443e6b` (`release: bind TOPS ILA source to routed artifacts`) |
+| Branch | `test/tops/ila`，本轮输入为 `a6a29fa` 加本次提交的 HBM Tcl 修改 |
 | 设备 | VCU128 `xcvu37p-fsvh2892-2L-e`，Windows XDMA |
 | 当前可枚举 bit | 工作区 `TEST/utils/bitstream/top.bit`（能进系统）。**不要**用会 Code 10 的 `tops_ila_cegate_260812.bit`（sha256 `8466f519…`，与 release md 中的 `top.bit` 同哈希但本机起不来） |
-| Release 文档 | `TEST/tops/fpga/tops_ila_cegate_260812_release.md` |
+| Release 文档 | `TEST/tops/fpga/tops_ila_hbmfix_260813_release.md` |
 | Host 驱动工具 | `tests/bin/xdma_rw.exe`, `tests/bin/xdma_info.exe` |
 | Python | `D:\SoftwareTools\miniconda\miniconda\python.exe` |
 | 功耗脚本 | `TEST/tops/fpga/vcu128_sc_power.py`（UART 读 INA226，与本问题正交） |
