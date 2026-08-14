@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-08-14 夜4：**已定位并改 RTL** — CDMA wait 把 IDLE 当成完成
+
+二次验证（bit `cc0c28f9…`）：host 灌 IBUF 两笔都 64000/64000 之后，再打 CDMA 路径 tile0，仍 **3783/64000 first_bad=211**，ABC-A IBUF act **4000/4000**。
+
+| 实验 | tile0 | tile1 |
+|---|---|---|
+| A IBUF 激活 vs 软件 im2col（job **结束后**读） | **4000/4000** | **4000/4000** |
+| B job2 OBUF == job1 OBUF？ | — | **否**（0/4000） |
+| C OBUF vs 现场 IBUF×权重 | 3712/64000 first_bad=**211** | 3783/64000 first_bad=**211** |
+| host 灌 IBUF，只跑 `dcim_layer` | **64000/64000** | **64000/64000** |
+| 再打 `--dcim-probe` CDMA 路径 | **3783/64000 px211** | — |
+
+`cdma_config_ready == (c_state==IDLE)`。旧 `S_WAIT_CDMA_CFG` 在仍为 IDLE 的那拍拉低 start 并进入 DONE，DONE 再看见 ready 就发 `dcim_layer`。DCIM 读到半成品 IBUF；job 结束后 CDMA 写完，所以再读 IBUF 激活是全对的。OBUF 从 **px211** 起错。
+
+已改 `rtl/vpu/INST_Decoder.sv`（**不改 MAC**）：
+
+- `S_WAIT_CDMA_CFG` / `S_CDMA_STRIDE_WAIT`：保持 start，直到 `!ready`（离开 IDLE）
+- `S_WAIT_CDMA_DONE` / `S_CDMA_STRIDE_DONE`：`cdma_seen_busy && ready` 才完成
+- 超时 `CDMA_WAIT_TIMEOUT=250e6`
+
+**当前板上 bit 不含此改动**，需重新综合。新 bit 验收：
+
+```powershell
+python TEST/tops/fpga/e2e_isolate.py --dcim-lock
+# 期望 tile0+tile1 均为 64000/64000，ABC-VERDICT CLEAN
+```
+
+`95eb919` 的 Tile job 隔离仍保留（仿真加固），但**板上 YOLO 失败的根因是本节 CDMA 竞态**，不是 Tile sticky。新 bit 必须同时含 decoder wait 修复。
+
+---
+
 ## 2026-08-14：连续 DCIM job RTL 修复与仿真状态
 
 已完成低资源的任务级状态修复，未修改 host ABI、地址图、数据 mapping、
@@ -37,12 +68,57 @@ DCIM OOC 综合为 0 error、0 critical warning，250 MHz `WNS=+1.649 ns`、
 DSP 85.11%，本次任务隔离逻辑没有引起 RAM 寄存器化或显著资源膨胀。
 
 以上证明 RTL 仿真中的连续任务、尾块、累加、native INT16 和峰值模式没有
-回归。**仍必须由新 bitstream 依次执行 tile0、tile1、7 个 OH tile、再 tile0
-的实机测试，才能关闭本节最初的板级故障。**
+回归。板级 YOLO 失败见文首夜4：decoder CDMA wait 竞态。新 bit 验收仍用
+`--dcim-lock`（tile0 再 tile1，期望均为 64000/64000）。
 
 ---
 
-## 2026-08-14 夜：e2e 根因已钉死 — DCIM 第二次 job 内部状态脏
+## 2026-08-14 夜3：YOLO 真实 tile0→tile1 灌进同一 Tile，仿真仍 **64000/64000**
+
+`gen_yolo_two_job_vectors.py` 用官方图 `000000000139.jpg`、`model.0.conv` 软件 im2col + `pack_weight_tile`，OH tile0 / tile1 各 4000 px（25×160），FPGA 同款 DSP 映射。中间不复位，只换激活、权重保留。
+
+```
+TWO_JOB_YOLO job=1 exact=64000/64000 mismatches=0 first_bad_px=-1 max_abs=0
+TWO_JOB_YOLO job=2 exact=64000/64000 mismatches=0 first_bad_px=-1 max_abs=0
+TWO_JOB_PASS pixels=4000 acc_depth=2 yolo_real
+```
+
+板上同一数据是 job1 全对、job2 从 **px211** 起 3783/64000。仿真里 **DCIM_Tile 本身不会把第二笔算脏**。
+
+跑法：
+
+```bash
+python TEST/tops/simulation/gen_yolo_two_job_vectors.py
+python3 TEST/tops/simulation/_wsl_launch_two_job.py 4000 2 /tmp/two_job_verilator_dsp \
+  /mnt/e/work2026/runnan_xu/FPGA/EdgeYOLO-FPGA/output/tops/simulation/yolo_two_job
+```
+
+孤立 Tile TB 在 start 前已经把 IBUF 写完，所以复现不了 decoder/CDMA 竞态。板上根因与修复见夜4。
+
+---
+
+## 2026-08-14 夜2：Verilator 两笔 job **没有**复现板上 sticky 错
+
+WSL `Ubuntu-22.04`（hostname `ZZCROG16`）Verilator **4.038**。TB：`TEST/tops/simulation/tb_dcim_two_job_verilator_top.sv` + `tb_dcim_two_job_verilator.cpp`。中间 **不拉 `rst_n`**，job2 激活从 `0x11` 改成 `0x22`（golden 跟着变，残留 partial-sum 加到 job2 会 100% 对不上）。
+
+| 配置 | job1 | job2 | 结论 |
+|---|---|---|---|
+| 70 px, acc=3, LUT (`MULT_DSP_EN=0`) | 0 mismatch | 0 mismatch | PASS |
+| 256 px, acc=2, LUT（盖过板上 first_bad **px211**） | 0 | 0 | PASS |
+| 4000 px, acc=2, LUT（YOLO OH tile 尺寸） | 0 | 0 | PASS |
+| 256 px, acc=2, **FPGA DSP** (`COL=3, PARTIAL=3`) | 0 | 0 | PASS |
+
+跑法（不要直接 `bash *.sh`：Windows CRLF + `/mnt/e` chmod 会挂）：
+
+```bash
+python3 TEST/tops/simulation/_wsl_launch_two_job.py 256 2 /tmp/two_job_verilator_dsp
+```
+
+**含义：** 孤立 `DCIM_Tile` + C++ `start` 脉冲 + 常数激活/权重，**两笔 job 在仿真里 bit-exact**。板上「reset 后第一笔对、第二笔起从 px211 脏」**不是**「FSM / partial-sum RAM / DSP pipeline 在均匀数据下必然残留」这么简单。不要因为仿真两笔都过就改 MAC。也不要再为峰值 drain 出 HBM bit。
+
+---
+
+## 2026-08-14 夜：当时钉死为 Tile sticky（**已被夜4二次验证推翻**）
 
 PCIe reset 后立刻复测（`tops_ila_hbmfix_260813`，脚本 `TEST/tops/fpga/e2e_isolate.py`）：
 
@@ -67,25 +143,21 @@ PCIe reset 后立刻复测（`tops_ila_hbmfix_260813`，脚本 `TEST/tops/fpga/e
 
 1. 峰值 INT8 含 drain **已经对**（单次 DCIM job，`acc_depth=1`）。
 2. YOLO 第一层编译/im2col/DQA/HBM/IBUF 权重都不是根因。
-3. `DCIM_Tile` **第一次 `dcim_layer` 在 reset 后 bit-exact；第二次起内部状态脏**。decoder soft-reset **清不掉**，只有 PCIe/bitstream reset 能恢复。
-4. 脏状态特征稳定：约 5.9% INT32 仍 exact，从像素 211 起大面积错。权重 SRAM 从 IBUF 重载也救不回来 → 指向 **partial-sum RAM / micro-batch writer / start_pulse**，不是 host。
+3. **当时误判**为 `DCIM_Tile` 第二次 job 内部状态脏。夜4 二次验证：host 灌 IBUF 后只跑 `dcim_layer` 两笔都 **64000/64000**；带 CDMA 的路径每笔都会抢。偶发 tile0 全对是时序碰巧赶上。
+4. 错法形状（约 5.9% INT32 exact，从 px211 起）是 **IBUF 激活 CDMA 未完成就发 dcim_layer**，不是 partial-sum RAM 残留。
 
 YOLO 第一层 7 次背靠背 `dcim_layer`（`acc_depth=2`，每块 4000 像素）。ResNet 同样会连打多次，且后层还有 `n_tiles*acc_depth>=256` 的 SRAM 分块缺口（`ops.py` 的 WA 编译器没用）。
 
-RTL 下手处（**改 job 之间的状态，不要改 MAC**）：
+RTL 下手处（夜4 已改 **decoder CDMA wait**，不要改 MAC）：
 
-- `rtl/chip/DCIM_Partial_Sum_RAM.sv`：BRAM **没有内容 clear**
-- `rtl/chip/DCIM_Result_Stream.sv`：64-context 累加与 OBUF 写地址
-- `rtl/chip/DCIM_Tile.sv`：`start_pulse`、`ST_PRELOAD`、`MICRO_BATCH=64`
-- `rtl/chip/chip_defines.vh`：`DCIM_OBUF_WR_DRAIN` 仅 **2**
-- `rtl/vpu/INST_Decoder.sv`：`S_EXEC_WAIT_DCIM` 无 `seen_busy`（`dcim_layer` 内部 wait 有）
+- `rtl/vpu/INST_Decoder.sv`：COPY/STRIDE 必须 `seen_busy` 后再等 IDLE
+- `95eb919` 已加固 `DCIM_Tile` / `DCIM_Result_Stream`（仿真侧，保留）
 
-复现（reset 后只打一次 tile0，不要先打别的 DCIM）：
+复现（当前 bit 不含 decoder 修复；host-ibuf 应全对，CDMA 路径应挂）：
 
 ```powershell
-python TEST/tops/fpga/e2e_isolate.py --dcim-probe --dcim-tile 0   # 应 64000/64000
-python TEST/tops/fpga/e2e_isolate.py --dcim-probe --dcim-tile 1   # 应失败，权重仍 match
-python TEST/tops/fpga/e2e_isolate.py --skip-large-cdma --max-conv 1
+python TEST/tops/fpga/e2e_isolate.py --dcim-host-ibuf --dcim-tile 0   # 应 64000/64000
+python TEST/tops/fpga/e2e_isolate.py --dcim-lock                     # 当前 bit 应挂 px211
 ```
 
 Host C2H 仍拆 256B；隔离读回用 2048B 分块。不要打单笔 4KB C2H。
@@ -116,7 +188,7 @@ python TEST/tops/fpga/run_peak_int8.py --staging hbm --repeat-count 1 --quiet-xd
 
 **不要**为峰值 drain 再出 Step H（AXI outstanding limiter）/ Step I（HBM fence）bit。当前 bit 上峰值官方路径已经过。
 
-YOLO INT8 一张图仍 FAIL（`PAN_P3/P4/P5 max_abs≈17/19/12`）。YOLO `plan.json` 里 **986 次 cdma_copy 的 dst 没有一次是 HBM**。不是 P1。根因见文首：连续 `dcim_layer` 弄脏 Tile。
+YOLO INT8 一张图仍 FAIL（`PAN_P3/P4/P5 max_abs≈17/19/12`）。YOLO `plan.json` 里 **986 次 cdma_copy 的 dst 没有一次是 HBM**。不是 P1。根因见文首夜4：decoder CDMA wait 把 IDLE 当完成。
 
 ---
 
@@ -142,7 +214,7 @@ top.bit  cc0c28f9ee064c79528128dd462a59e8529d787a050090d91fb9ef5d95da9d2a
 | ResNet INT8 一张图 `atol=1e-3` | **FAIL** `max_abs=127`，`corr≈0.17` |
 | 单笔 ≥4KB C2H 不拆包 | **未在本 bit 上重打**（上一份 ILA bit 会楔死 PCIe；本轮 Step D 没做） |
 
-**一句话（已更正）：峰值路径上单次 DCIM job 和 CDMA（含写 HBM）是对的。YOLO/ResNet e2e 错在连续 `dcim_layer`：reset 后第一笔 INT32 全对，第二笔起 Tile 内部状态脏。**
+**一句话（夜4 再更正）：峰值路径上单次 DCIM job 和 CDMA（含写 HBM）是对的。YOLO/ResNet e2e 错在 decoder 把 CDMA IDLE 当成 copy 完成，`dcim_layer` 读半成品 IBUF。**
 
 ### 已证实（本 bit，2026-08-14 下午）
 
@@ -163,7 +235,7 @@ top.bit  cc0c28f9ee064c79528128dd462a59e8529d787a050090d91fb9ef5d95da9d2a
 
 ### 不要当成根因
 
-- **不要**改 DCIM 的 nibble/MAC/INT8 打包去「凑」e2e。峰值单次 job 已与 golden 对齐。要改的是 **job 之间的 Tile 状态**（见文首夜节）。
+- **不要**改 DCIM 的 nibble/MAC/INT8 打包去「凑」e2e。峰值单次 job 已与 golden 对齐。要改的是 **decoder CDMA wait**（见文首夜4）。
 - **不要**把 `CDMA_COOLDOWN_CYCLES` 当主修复。
 - **不要**把 YOLO `corr≈0.2` 解释成 HBM 加载没修好。YOLO **从不 CDMA 写 HBM**。
 - Host 写读 256KB HBM 全对 → **不是 HBM PHY 坏、也不是 XDMA 写 HBM 坏**。
@@ -230,11 +302,11 @@ axi_hbm_smc (2SI, 1MI)
 
 峰值 256/2048 不是 HBM 写通道。见文首「晚间」节。`cdma_dir_probe.py` 与 drain MATCH_SELF 已否证。**不要再为 P1 改 BD。**
 
-### 问题 P2 — 连续 `dcim_layer` 把 Tile 打脏（当前主问题）
+### 问题 P2 — decoder CDMA wait 把 IDLE 当完成（当前主问题，RTL 已改、bit 未含）
 
-YOLO 第一层 oh[0:25] 在 DCIM 干净时可以 DQA bit-exact；oh[25:160] 和 **reset 之后的第二笔 DCIM** 失败。IBUF 权重未被激活 CDMA 覆盖。不是 `cdma_stride`、也不是 512KB VPU 搬运（那些尺寸的 unique-pattern CDMA 已 MATCH）。
+YOLO 第一层 oh[0:25] 在 IBUF 已写完时可以 DQA bit-exact；带 CDMA 的 `dcim_layer` 从 px211 起错。host 直写 IBUF 后只跑 `dcim_layer` 则 tile0/tile1 均为 64000/64000。不是 Tile sticky，也不是 `cdma_stride` / 512KB VPU 搬运。
 
-下一步只修 DCIM_Tile job 复位 / partial-sum 清空。修完后用文首三条 `e2e_isolate` 命令验收：tile0 全对、tile1 仍全对、第一层 7 个 OH tile 全对。
+`INST_Decoder.sv` 已加 `cdma_seen_busy`。新 bit 验收：`--dcim-lock` tile0+tile1 均为 64000/64000，再 `--skip-large-cdma --max-conv 1`。
 
 ### 问题 P3 — 通向 128-bit BRAM 的长 C2H（Step D，本轮未做）
 
@@ -253,7 +325,8 @@ YOLO 第一层 oh[0:25] 在 DCIM 干净时可以 DQA bit-exact；oh[25:160] 和 
 | `tests/chip/unit-tb/hbm_flow.py` | `_preload_rows` 按行 dst；禁止按文件名折叠 |
 | `tests/chip/unit-tb/xdma_win.py` | C2H 256B 分块；hbm staging **已开 drain** |
 | `TEST/tops/fpga/run_peak_int8.py` | `--staging hbm` 走官方 drain 读 HBM |
-| `TEST/tops/fpga/e2e_isolate.py` | YOLO 第一层 OH tile：im2col / 孤立 DCIM / 连续 DCIM / prefix |
+| `TEST/tops/fpga/e2e_isolate.py` | YOLO 第一层 OH tile：`--dcim-lock` / `--dcim-host-ibuf` / im2col |
+| `rtl/vpu/INST_Decoder.sv` | CDMA wait：离开 IDLE 才 accept，`seen_busy && ready` 才完成 |
 | `TEST/tops/fpga/cdma_dir_probe.py` | 无 DCIM 的 CDMA 方向/次数探针 |
 | `rtl/chip/DCIM_Tile.sv` | 连续 job 状态；`start_pulse` / preload / micro-batch |
 | `rtl/chip/DCIM_Partial_Sum_RAM.sv` | 64×512b 累加 RAM，无内容 clear |
@@ -274,7 +347,7 @@ python run.py --network resnet --resnet-precision vai
 
 ## 4. RTL / BD 修改计划
 
-原则：P1（HBM 写）已关闭。当前只出 **DCIM job 复位** bit。C2H Busy 后先 PCIe 复位，不要继续打。
+原则：P1（HBM 写）已关闭。当前出 **含 decoder CDMA wait 修复** 的新 bit。C2H Busy 后先 PCIe 复位，不要继续打。
 
 ### Step G — 已完成
 
@@ -284,18 +357,19 @@ python run.py --network resnet --resnet-precision vai
 
 HBM write outstanding limiter 和 HBM read fence **没有**实验支持。本 bit 上 8× BRAM→HBM 和官方 peak drain 都已过。
 
-### Step J — DCIM 连续 job 状态（当前主线）
+### Step J — decoder CDMA wait（RTL 已改，等新 bit）
 
-验收（必须 **PCIe reset 后按顺序**，中间不要夹别的 DCIM）：
+`95eb919` 的 Tile job 隔离已在仿真侧落地。板上主修复是 `INST_Decoder`：COPY/STRIDE 必须看见 CDMA 离开 IDLE，再等回到 IDLE。
 
-1. `--dcim-probe --dcim-tile 0` → 64000/64000
-2. `--dcim-probe --dcim-tile 1` → **也要** 64000/64000（今天第二笔必挂）
-3. `--skip-large-cdma --max-conv 1` → 7 个 OH tile 均 `max_abs=0`
-4. 再打一遍 tile0 仍 64000/64000（证明不再粘滞）
+新 bit 验收：
 
-改动范围：`DCIM_Partial_Sum_RAM` 在 start 清内容或 first_row 不读脏数据且 writer 状态机在 `ST_IDLE` 真正复位；检查 `start_pulse` 在 decoder 连发两次 `dcim_layer` 时是否丢边沿。不要改 nibble 打包、acc 公式、ISA 字段。
+```powershell
+python TEST/tops/fpga/e2e_isolate.py --dcim-lock          # tile0+tile1 均为 64000/64000
+python TEST/tops/fpga/e2e_isolate.py --dcim-host-ibuf --dcim-tile 0
+python TEST/tops/fpga/e2e_isolate.py --skip-large-cdma --max-conv 1
+```
 
-不要再改 HBM SMC / CC / limiter。
+不要改 nibble 打包、acc 公式、ISA 字段。不要再改 HBM SMC / CC / limiter。
 
 ### Step D — 长 C2H（P3，独立）
 
@@ -323,7 +397,7 @@ HBM write outstanding limiter 和 HBM read fence **没有**实验支持。本 bi
 - 用中文写每个 RTL 改动对应哪条 `e2e_isolate` 实验。
 - 新 bit 必须带配对 `.ltx`；以能枚举为准。
 - 不要为已关闭的 P1 再出 HBM limiter bit。
-- 改完更新本文件顶部勾选。验证连续 DCIM 前必须 PCIe reset。
+- 改完更新本文件顶部勾选。新 bit 先跑 `--dcim-lock`，不要只跑 reset 后单笔 tile0。
 
 ---
 
@@ -331,6 +405,6 @@ HBM write outstanding limiter 和 HBM read fence **没有**实验支持。本 bi
 
 **完成（峰值）**：hbm **drain** 2048/2048。
 
-**未完成**：reset 后第二笔孤立 DCIM 仍非 64000/64000；YOLO/ResNet e2e；4KB 单笔 C2H。
+**未完成**：当前 bit 上 `--dcim-lock` 仍非 64000/64000（修复未进 bit）；YOLO/ResNet e2e；4KB 单笔 C2H。
 
 **不要当成未完成**：再加 cooldown、再出 Step H limiter bit、再改 host preload。

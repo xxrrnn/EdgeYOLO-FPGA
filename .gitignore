@@ -66,6 +66,8 @@
 !TEST/**/*.tcl
 !TEST/**/*.md
 !TEST/**/*.cfg
+!TEST/**/*.cpp
+!TEST/**/*.h
 
 !xdc/
 !xdc/**/

@@ -217,8 +217,11 @@ module INST_Decoder #(
     reg [31:0] dcim_layer_wait_count;
     reg        dcim_seen_busy;
     reg [31:0] dcim_wait_count;
+    reg        cdma_seen_busy;
+    reg [31:0] cdma_wait_count;
     localparam [31:0] DCIM_LAYER_WAIT_TIMEOUT = 32'd250_000_000;
     localparam [31:0] DCIM_WAIT_TIMEOUT = 32'd250_000_000;
+    localparam [31:0] CDMA_WAIT_TIMEOUT = 32'd250_000_000;
     
     // 流水线寄存器（BRAM已经内部实现3级流水，这里直接使用输出）
     // BRAM内部流水线: addr -> s0 -> s1 -> inst_rd_data (总共4周期延迟)
@@ -357,12 +360,17 @@ module INST_Decoder #(
             end
             
             S_WAIT_CDMA_CFG: begin
-                if (cdma_config_ready)
+                // ready==IDLE. Do not treat the still-idle cycle as "accepted".
+                if (cdma_wait_count >= CDMA_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (!cdma_config_ready)
                     next_state = S_WAIT_CDMA_DONE;
             end
             
             S_WAIT_CDMA_DONE: begin
-                if (cdma_config_ready)
+                if (cdma_wait_count >= CDMA_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (cdma_seen_busy && cdma_config_ready)
                     next_state = S_NEXT_INST;
             end
             
@@ -380,6 +388,7 @@ module INST_Decoder #(
             end
             
             S_EXEC_WAIT_CDMA: begin
+                // Idle barrier only. OP_CDMA_COPY already waited busy-then-idle.
                 if (cdma_config_ready)
                     next_state = S_NEXT_INST;
             end
@@ -420,12 +429,16 @@ module INST_Decoder #(
             end
 
             S_CDMA_STRIDE_WAIT: begin
-                if (cdma_config_ready)
+                if (cdma_wait_count >= CDMA_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (!cdma_config_ready)
                     next_state = S_CDMA_STRIDE_DONE;
             end
 
             S_CDMA_STRIDE_DONE: begin
-                if (cdma_config_ready)
+                if (cdma_wait_count >= CDMA_WAIT_TIMEOUT)
+                    next_state = S_ERROR;
+                else if (cdma_seen_busy && cdma_config_ready)
                     next_state = S_CDMA_STRIDE_NEXT;
             end
 
@@ -610,6 +623,8 @@ module INST_Decoder #(
             dcim_layer_wait_count <= '0;
             dcim_seen_busy <= 1'b0;
             dcim_wait_count <= '0;
+            cdma_seen_busy <= 1'b0;
+            cdma_wait_count <= '0;
                 
         end else if (decoder_soft_reset) begin
             decoder_busy <= 1'b0;
@@ -638,6 +653,8 @@ module INST_Decoder #(
             dcim_layer_wait_count <= '0;
             dcim_seen_busy <= 1'b0;
             dcim_wait_count <= '0;
+            cdma_seen_busy <= 1'b0;
+            cdma_wait_count <= '0;
             cstride_src_msb <= '0;
             cstride_src_cur <= '0;
             cstride_dst_msb <= '0;
@@ -754,20 +771,26 @@ module INST_Decoder #(
                         cdma_length       <= body_buffer[2];
                     end
                     cdma_config_valid <= 1'b1;
-                    cdma_start <= 1'b1;  // 保持高电平
+                    cdma_start <= 1'b1;  // 保持高电平 until CDMA leaves IDLE
+                    cdma_seen_busy <= 1'b0;
+                    cdma_wait_count <= '0;
                 end
                 
                 S_WAIT_CDMA_CFG: begin
-                    // 保持 cdma_start 和 cdma_config_valid 直到 ready
+                    // Hold start until CDMA leaves IDLE (ready falls).
                     cdma_start <= 1'b1;
-                    if (cdma_config_ready) begin
+                    cdma_wait_count <= cdma_wait_count + 1'b1;
+                    if (!cdma_config_ready) begin
                         cdma_config_valid <= 1'b0;
-                        cdma_start <= 1'b0;  // 握手完成后清零
+                        cdma_start <= 1'b0;
+                        cdma_seen_busy <= 1'b1;
                     end
                 end
                 
                 S_WAIT_CDMA_DONE: begin
-                    // 等待 CDMA 传输完成
+                    cdma_wait_count <= cdma_wait_count + 1'b1;
+                    if (!cdma_config_ready)
+                        cdma_seen_busy <= 1'b1;
                 end
                 
                 S_EXEC_VPU: begin
@@ -999,14 +1022,24 @@ module INST_Decoder #(
                     cdma_length       <= cstride_copy_bytes;
                     cdma_config_valid <= 1'b1;
                     cdma_start        <= 1'b1;
+                    cdma_seen_busy    <= 1'b0;
+                    cdma_wait_count   <= '0;
                 end
 
                 S_CDMA_STRIDE_WAIT: begin
                     cdma_start <= 1'b1;
-                    if (cdma_config_ready) begin
+                    cdma_wait_count <= cdma_wait_count + 1'b1;
+                    if (!cdma_config_ready) begin
                         cdma_config_valid <= 1'b0;
                         cdma_start <= 1'b0;
+                        cdma_seen_busy <= 1'b1;
                     end
+                end
+
+                S_CDMA_STRIDE_DONE: begin
+                    cdma_wait_count <= cdma_wait_count + 1'b1;
+                    if (!cdma_config_ready)
+                        cdma_seen_busy <= 1'b1;
                 end
 
                 S_CDMA_STRIDE_NEXT: begin

@@ -39,6 +39,7 @@ from compare_one_shot import run_yolo_compiler_golden, _stats  # noqa: E402
 YOLO_BUILD = REPO / "output" / "compiled" / "80832ec_attempt1" / "yolo_coco_int8"
 YOLO_IMG = REPO / "examples" / "coco" / "000000000139.jpg"
 YOLO_PARSED = REPO / "model" / "yolov5n_coco50k_qat" / "parsed_int8"
+ABC_DIR = REPO / "output" / "tops" / "fpga" / "dcim_abc"
 FILL = 0xA5
 
 
@@ -287,7 +288,10 @@ def yolo_prefix_split(iso: Iso, settle_s: float = 0.05) -> dict:
     return {"pass": s["max_abs"] <= 1e-3, "stats": s, "corr": corr, "mode": "split"}
 
 
-def read_c2h(x, addr: int, nbytes: int, chunk: int = 2048) -> bytes:
+def read_c2h(x, addr: int, nbytes: int, chunk: int = 256) -> bytes:
+    """Host C2H must stay at 256B. A single 4KB C2H has wedged this PCIe link."""
+    if hasattr(x, "read") and chunk == 256:
+        return x.read(addr, nbytes)
     raw = bytearray()
     off = 0
     while off < nbytes:
@@ -295,6 +299,35 @@ def read_c2h(x, addr: int, nbytes: int, chunk: int = 2048) -> bytes:
         raw.extend(x._read_once(addr + off, n))
         off += n
     return bytes(raw)
+
+
+def _pix_match(got: bytes, exp: bytes, pix_bytes: int) -> tuple[int, int, int]:
+    n_pix = min(len(got), len(exp)) // pix_bytes
+    same = 0
+    first = -1
+    for p in range(n_pix):
+        sl = slice(p * pix_bytes, (p + 1) * pix_bytes)
+        if got[sl] == exp[sl]:
+            same += 1
+        elif first < 0:
+            first = p
+    return same, n_pix, first
+
+
+def _abc_verdict(act_ok: bool, obuf_eq_prev: bool | None, resident_ok: bool, sw_ok: bool) -> str:
+    if obuf_eq_prev:
+        return "NO_START (job2 OBUF identical to job1)"
+    if act_ok and resident_ok and sw_ok:
+        return "CLEAN"
+    if (not act_ok) and resident_ok:
+        return "INPUT (IBUF act stale/partial; DCIM matches resident IBUF)"
+    if act_ok and (not resident_ok):
+        return "DCIM_FPGA (IBUF act exact, compute != resident matmul)"
+    if (not act_ok) and (not resident_ok):
+        return "INPUT_AND_COMPUTE (act wrong and OBUF != resident matmul)"
+    if act_ok and resident_ok and (not sw_ok):
+        return "PACK_MISMATCH (resident matmul matches OBUF, software golden does not)"
+    return "UNCLASSIFIED"
 
 
 def analyze_spatial(got: np.ndarray, ref: np.ndarray, chunk: int = 25) -> None:
@@ -457,7 +490,7 @@ def _upload_yolo_inputs(iso: Iso, plan: dict) -> tuple[bytes, int, int]:
     return input_bytes, obuf_base, hbm_base
 
 
-def dcim_probe(iso: Iso, tile_idx: int = 0) -> dict:
+def dcim_probe(iso: Iso, tile_idx: int = 0, prev_obuf: bytes | None = None) -> dict:
     from golden_module_tb import im2col, conv_meta, load_network  # noqa: WPS433
 
     plan = json.loads((YOLO_BUILD / "plan.json").read_text())
@@ -468,7 +501,7 @@ def dcim_probe(iso: Iso, tile_idx: int = 0) -> dict:
         pix0 += int(im["args"]["addr_s"]) * int(im["args"]["addr_t"])
     tile = tiles[tile_idx]
     collect = next(op for op in tile if op.get("kind") == "cdma_copy" and "collect tile_obuf" in str(op.get("comment", "")))
-    # isolated: preamble (WB+weights) + this OH tile through collect wait, no prior tiles
+    dcim = next(op for op in tile if op.get("kind") == "dcim_layer")
     cut = []
     for op in tile:
         cut.append(op)
@@ -479,6 +512,12 @@ def dcim_probe(iso: Iso, tile_idx: int = 0) -> dict:
     ops = pre + cut + [{"kind": "end"}]
     print(f"\n=== DCIM OH tile {tile_idx} ISOLATED pix0={pix0} ===", flush=True)
     print(f"  ops={len(ops)} collect={collect}", flush=True)
+    print(
+        f"  dcim act_base_word={dcim.get('act_base_word')} "
+        f"act_stride={dcim.get('act_stride_words')} "
+        f"wei0={dcim.get('wei_base_words', [None])[0]} pixels={dcim.get('num_pixels')}",
+        flush=True,
+    )
 
     input_bytes, obuf_base, _hbm = _upload_yolo_inputs(iso, plan)
     words = encode_ops(plan, ops)
@@ -489,16 +528,23 @@ def dcim_probe(iso: Iso, tile_idx: int = 0) -> dict:
 
     n = int(collect["length"])
     dst_off = int(collect["dst"][1])
-    print(f"  reading collect {n}B VPU+0x{dst_off:x} and tile_obuf0", flush=True)
-    wexp = (YOLO_BUILD / "weights.bin").read_bytes()[:2048]
-    wgot = read_c2h(iso.x, TILE_IBUF_BASE, 2048)
-    print(f"  IBUF weights[0:2048] match={wgot == wexp}", flush=True)
+    n_pix = int(dcim.get("num_pixels") or (n // 64))
+    act_word = int(dcim.get("act_base_word", 128))
+    act_stride = int(dcim.get("act_stride_words", 8))
+    wei_word = int((dcim.get("wei_base_words") or [0])[0])
+    act_bytes = n_pix * act_stride * 16
+    wei_bytes = 2048
+    print(f"  reading collect {n}B VPU+0x{dst_off:x} tile_obuf0 IBUF act {act_bytes}B @word {act_word}", flush=True)
+    wexp = (YOLO_BUILD / "weights.bin").read_bytes()[:wei_bytes]
+    wgot = read_c2h(iso.x, TILE_IBUF_BASE + wei_word * 16, wei_bytes)
+    print(f"  IBUF weights match={wgot == wexp}", flush=True)
     if wgot != wexp:
         okw = sum(1 for i in range(128) if wgot[i * 16:(i + 1) * 16] == wexp[i * 16:(i + 1) * 16])
         print(f"  weight words {okw}/128 head_got={wgot[:16].hex()} head_exp={wexp[:16].hex()}", flush=True)
     got_vpu = read_c2h(iso.x, obuf_base + dst_off, n)
     got_tile = read_c2h(iso.x, TILE_OBUF_BASE, n)
     print(f"  collect vs tile_obuf match={got_vpu == got_tile}", flush=True)
+    ibuf_act = read_c2h(iso.x, TILE_IBUF_BASE + act_word * 16, act_bytes)
 
     net = load_network(str(YOLO_PARSED / "network.json"))
     meta = conv_meta(net, "model.0.conv")
@@ -511,15 +557,16 @@ def dcim_probe(iso: Iso, tile_idx: int = 0) -> dict:
     w = npz["weight_int8"].reshape(meta.out_ch, -1).astype(np.int32)
     if w.shape[1] < cols.shape[1]:
         w = np.pad(w, ((0, 0), (0, cols.shape[1] - w.shape[1])))
-    n_pix = n // (16 * 4)
-    exp = (cols[pix0:pix0 + n_pix].astype(np.int32) @ w[:, :cols.shape[1]].T)
+    tile_cols = cols[pix0:pix0 + n_pix]
+    exp_act = tile_cols.astype(np.int8).tobytes()
+    exp = (tile_cols.astype(np.int32) @ w[:, :cols.shape[1]].T).astype(np.int32)
     got = np.frombuffer(got_vpu, dtype=np.int32).reshape(n_pix, 16)
     same = int((got == exp).sum())
     tot = got.size
     max_abs = int(np.max(np.abs(got.astype(np.int64) - exp.astype(np.int64))))
     cc = float(np.corrcoef(got.ravel().astype(np.float64), exp.ravel().astype(np.float64))[0, 1])
     print(
-        f"  INT32 exact {same}/{tot} max_abs={max_abs} corr={cc:.4f} "
+        f"  INT32 vs software exact {same}/{tot} max_abs={max_abs} corr={cc:.4f} "
         f"got_range=[{got.min()},{got.max()}] exp_range=[{exp.min()},{exp.max()}]",
         flush=True,
     )
@@ -533,22 +580,79 @@ def dcim_probe(iso: Iso, tile_idx: int = 0) -> dict:
         )
         i0 = int(bad[0])
         print(f"  first px {i0} got={got[i0].tolist()} exp={exp[i0].tolist()}", flush=True)
-        g0 = got[i0]
-        for cand, arr in (("exp", exp), ("got", got)):
-            hits = [int(j) for j in range(n_pix) if np.array_equal(arr[j], g0)]
-            print(f"  got[px{i0}] equals {cand} at {hits[:8]}{'...' if len(hits) > 8 else ''} n={len(hits)}", flush=True)
-        for d in (-160, -1, 1, 160):
-            j = i0 + d
-            if 0 <= j < n_pix:
-                print(f"  vs exp[px{i0}{d:+d}] equal={np.array_equal(g0, exp[j])} max_abs={int(np.max(np.abs(g0-exp[j])))}", flush=True)
-        for ch in range(16):
-            cc_ch = float(np.corrcoef(got[:, ch].astype(np.float64), exp[:, ch].astype(np.float64))[0, 1])
-            print(
-                f"  ch{ch:02d} exact={(got[:, ch] == exp[:, ch]).mean():.3f} "
-                f"corr={cc_ch:.4f} max_abs={int(np.max(np.abs(got[:, ch] - exp[:, ch])))}",
-                flush=True,
-            )
-    return {"pass": same == tot, "exact": same, "tot": tot, "max_abs": max_abs, "corr": cc}
+
+    act_same, act_n, act_first = _pix_match(ibuf_act, exp_act, act_stride * 16)
+    act_ok = act_same == act_n
+    print(
+        f"  ABC-A IBUF act vs sw im2col {act_same}/{act_n} first_bad_px={act_first} match={act_ok}",
+        flush=True,
+    )
+    if not act_ok and act_first >= 0:
+        p = act_first
+        sl = slice(p * act_stride * 16, (p + 1) * act_stride * 16)
+        print(f"  ABC-A px{p} got={ibuf_act[sl][:16].hex()} exp={exp_act[sl][:16].hex()}", flush=True)
+
+    obuf_eq_prev = None
+    if prev_obuf is not None:
+        obuf_eq_prev = got_tile == prev_obuf
+        print(f"  ABC-B tile_obuf vs prev job identical={obuf_eq_prev} len={len(got_tile)}/{len(prev_obuf)}", flush=True)
+        if not obuf_eq_prev:
+            same_b, n_b, first_b = _pix_match(got_tile, prev_obuf, 64)
+            print(f"  ABC-B vs prev exact_px={same_b}/{n_b} first_diff_px={first_b}", flush=True)
+
+    resident = np.frombuffer(ibuf_act, dtype=np.int8).reshape(n_pix, act_stride * 16)
+    k = min(resident.shape[1], w.shape[1])
+    exp_res = (resident[:, :k].astype(np.int32) @ w[:, :k].T).astype(np.int32)
+    got_tile_i = np.frombuffer(got_tile, dtype=np.int32).reshape(n_pix, 16)
+    same_c = int((got_tile_i == exp_res).sum())
+    max_c = int(np.max(np.abs(got_tile_i.astype(np.int64) - exp_res.astype(np.int64))))
+    resident_ok = same_c == tot
+    print(
+        f"  ABC-C OBUF vs resident IBUF matmul exact {same_c}/{tot} max_abs={max_c} match={resident_ok}",
+        flush=True,
+    )
+    if not resident_ok:
+        bad_c = np.where(~np.all(got_tile_i == exp_res, axis=1))[0]
+        print(f"  ABC-C first_bad_px={int(bad_c[0]) if len(bad_c) else -1} n_bad_px={len(bad_c)}", flush=True)
+
+    sw_ok = same == tot
+    verdict = _abc_verdict(act_ok, obuf_eq_prev, resident_ok, sw_ok)
+    print(f"  ABC-VERDICT tile{tile_idx}: {verdict}", flush=True)
+
+    ABC_DIR.mkdir(parents=True, exist_ok=True)
+    (ABC_DIR / f"tile{tile_idx}_obuf.bin").write_bytes(got_tile)
+    (ABC_DIR / f"tile{tile_idx}_ibuf_act.bin").write_bytes(ibuf_act)
+
+    return {
+        "pass": sw_ok,
+        "exact": same,
+        "tot": tot,
+        "max_abs": max_abs,
+        "corr": cc,
+        "obuf": got_tile,
+        "act_ok": act_ok,
+        "act_first": act_first,
+        "obuf_eq_prev": obuf_eq_prev,
+        "resident_ok": resident_ok,
+        "verdict": verdict,
+    }
+
+
+def dcim_lock(iso: Iso) -> dict:
+    """PCIe-reset session: tile0 then tile1, A/B/C lock. Do not PCIe-reset between."""
+    print("\n=== DCIM ABC LOCK tile0 then tile1 (no PCIe reset between) ===", flush=True)
+    r0 = dcim_probe(iso, tile_idx=0)
+    r1 = dcim_probe(iso, tile_idx=1, prev_obuf=r0.get("obuf"))
+    print(
+        f"\nLOCK tile0 verdict={r0.get('verdict')} exact={r0.get('exact')}/{r0.get('tot')}\n"
+        f"LOCK tile1 verdict={r1.get('verdict')} exact={r1.get('exact')}/{r1.get('tot')} "
+        f"A_act_ok={r1.get('act_ok')} A_first={r1.get('act_first')} "
+        f"B_eq_prev={r1.get('obuf_eq_prev')} C_resident_ok={r1.get('resident_ok')}",
+        flush=True,
+    )
+    return {"tile0": {k: v for k, v in r0.items() if k != "obuf"},
+            "tile1": {k: v for k, v in r1.items() if k != "obuf"},
+            "pass": bool(r0.get("pass") and r1.get("pass"))}
 
 
 def _dcim_exp_and_got(input_bytes, plan, pix0, n_pix, got_vpu):
@@ -588,6 +692,93 @@ def _tile_through_collect(tile: list) -> list:
         if collect in cut and op.get("kind") == "wait_cdma":
             break
     return cut
+
+
+def dcim_host_ibuf(iso: Iso, tile_idx: int = 0) -> dict:
+    """Fill IBUF from host, run only dcim_layer. Distinguishes CDMA race vs DCIM compute."""
+    from golden_module_tb import (  # noqa: WPS433
+        im2col, conv_meta, load_network, pack_weight_tile,
+    )
+    from hw_runner_win import write_chunked, verify_write_tail, plan_mode, make_yolo_input, _pad_nhwc_input, soft_reset_decoder  # noqa: WPS433
+
+    plan = json.loads((YOLO_BUILD / "plan.json").read_text())
+    pre, tiles = split_oh_tiles(plan["ops"])
+    pix0 = 0
+    for t in tiles[:tile_idx]:
+        im = next(op for op in t if op.get("unit") == "im2col")
+        pix0 += int(im["args"]["addr_s"]) * int(im["args"]["addr_t"])
+    tile = tiles[tile_idx]
+    dcim = next(op for op in tile if op.get("kind") == "dcim_layer")
+    n_pix = int(dcim["num_pixels"])
+    act_word = int(dcim["act_base_word"])
+    act_stride = int(dcim["act_stride_words"])
+    wei_word = int(dcim["wei_base_words"][0])
+
+    net = load_network(str(YOLO_PARSED / "network.json"))
+    meta = conv_meta(net, "model.0.conv")
+    mode = plan_mode(plan)
+    feat_pad = _pad_nhwc_input(make_yolo_input(YOLO_IMG, mode, YOLO_PARSED), plan, mode)
+    shape = plan.get("input_shape") or [1, 3, 320, 320]
+    _n, cin, in_h, in_w = [int(x) for x in shape]
+    feat = np.frombuffer(feat_pad, dtype=np.int8).reshape(in_h, in_w, -1)[:, :, :cin]
+    cols = im2col(feat, meta)
+    npz = np.load(YOLO_PARSED / "weights" / "model_0_conv.npz")
+    w = npz["weight_int8"].reshape(meta.out_ch, -1).astype(np.int32)
+    if w.shape[1] < cols.shape[1]:
+        w = np.pad(w, ((0, 0), (0, cols.shape[1] - w.shape[1])))
+    tile_cols = cols[pix0:pix0 + n_pix]
+    act_blob = tile_cols.astype(np.int8).tobytes()
+    wei_ints = pack_weight_tile(meta, npz["weight_int8"], 0)
+    wei_blob = b"".join(int(e).to_bytes(16, "little") for e in wei_ints)
+    exp = (tile_cols.astype(np.int32) @ w[:, :cols.shape[1]].T).astype(np.int32)
+
+    print(
+        f"\n=== DCIM HOST-IBUF tile {tile_idx} pix0={pix0} n_pix={n_pix} "
+        f"wei@{wei_word} act@{act_word} ===",
+        flush=True,
+    )
+    soft_reset_decoder(iso.x)
+    write_chunked(iso.x, TILE_IBUF_BASE + wei_word * 16, wei_blob, 4096)
+    write_chunked(iso.x, TILE_IBUF_BASE + act_word * 16, act_blob, 4096)
+    verify_write_tail(iso.x, TILE_IBUF_BASE + wei_word * 16, len(wei_blob))
+    wgot = read_c2h(iso.x, TILE_IBUF_BASE + wei_word * 16, len(wei_blob))
+    agot = read_c2h(iso.x, TILE_IBUF_BASE + act_word * 16, len(act_blob))
+    print(f"  host IBUF weights match={wgot == wei_blob} act match={agot == act_blob}", flush=True)
+    if agot != act_blob:
+        same_a, n_a, first_a = _pix_match(agot, act_blob, act_stride * 16)
+        print(f"  host act px {same_a}/{n_a} first_bad={first_a}", flush=True)
+        return {"pass": False, "reason": "host_ibuf_write_mismatch"}
+
+    ops = [dcim, {"kind": "wait_dcim", "layer": dcim.get("layer")}, {"kind": "end"}]
+    words = encode_ops(plan, ops)
+    data = inst_words_to_bin(words)
+    iso.x.write(INST_BASE, data)
+    iso.r.start_decoder(len(data) // 4)
+    iso.r.poll_done(60.0)
+
+    n = n_pix * 64
+    got_tile = read_c2h(iso.x, TILE_OBUF_BASE, n)
+    got = np.frombuffer(got_tile, dtype=np.int32).reshape(n_pix, 16)
+    same = int((got == exp).sum())
+    tot = got.size
+    max_abs = int(np.max(np.abs(got.astype(np.int64) - exp.astype(np.int64))))
+    cc = float(np.corrcoef(got.ravel().astype(np.float64), exp.ravel().astype(np.float64))[0, 1])
+    print(
+        f"  HOST-IBUF INT32 exact {same}/{tot} max_abs={max_abs} corr={cc:.4f}",
+        flush=True,
+    )
+    if same != tot:
+        bad = np.where(~np.all(got == exp, axis=1))[0]
+        print(
+            f"  bad pixels {len(bad)} first={int(bad[0])} last={int(bad[-1])} "
+            f"contiguous={len(bad) == (bad[-1] - bad[0] + 1)}",
+            flush=True,
+        )
+    print(
+        f"  HOST-IBUF-VERDICT: {'CDMA_RACE (DCIM ok without CDMA)' if same == tot else 'DCIM_FPGA (still wrong without CDMA)'}",
+        flush=True,
+    )
+    return {"pass": same == tot, "exact": same, "tot": tot, "max_abs": max_abs, "corr": cc}
 
 
 def dcim_seq(iso: Iso) -> dict:
@@ -631,6 +822,10 @@ def main() -> int:
                     help="按 OH tile 拆开跑，tile 之间 host sleep")
     ap.add_argument("--dcim-seq", action="store_true",
                     help="同一 INST：tile0+tile1 DCIM，对照 tile1 INT32")
+    ap.add_argument("--dcim-lock", action="store_true",
+                    help="复位后同一会话：tile0 再 tile1，打印 IBUF/OBUF A/B/C 对照")
+    ap.add_argument("--dcim-host-ibuf", action="store_true",
+                    help="host 直写 IBUF 权重+激活，只跑 dcim_layer，绕开 CDMA")
     args = ap.parse_args()
 
     iso = Iso()
@@ -643,6 +838,16 @@ def main() -> int:
         return 0 if r.get("pass") else 1
     if args.dcim_probe:
         r = dcim_probe(iso, tile_idx=args.dcim_tile)
+        print("\n======== SUMMARY ========", flush=True)
+        print({k: v for k, v in r.items() if k != "obuf"})
+        return 0 if r.get("pass") else 1
+    if args.dcim_lock:
+        r = dcim_lock(iso)
+        print("\n======== SUMMARY ========", flush=True)
+        print(r)
+        return 0 if r.get("pass") else 1
+    if args.dcim_host_ibuf:
+        r = dcim_host_ibuf(iso, tile_idx=args.dcim_tile)
         print("\n======== SUMMARY ========", flush=True)
         print(r)
         return 0 if r.get("pass") else 1

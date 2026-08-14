@@ -60,7 +60,7 @@ top.ltx  b1feb90460ab4b581bb70a4736f2210c888efe9ba0f7a7cf17037af37b4f127d
 1. XDMA 枚举：**PASS**。单笔 C2H 16～2048B 通。Host 写读 HBM 256KB（256B 分块）0 mismatch。
 2. `--staging preload`：**2048/2048 PASS**。
 3. `--staging hbm` 加载后读 tile_obuf：**2048/2048 PASS**。官方 drain（tile_obuf→HBM）：**256/2048 FAIL**。
-4. YOLO INT8 / ResNet INT8：**FAIL**（`corr≈0.17～0.25`，不是 1 ULP）。
+4. YOLO INT8 / ResNet INT8：**FAIL**。2026-08-14 夜已定位为 `INST_Decoder` CDMA wait 把 IDLE 当完成，DCIM 读半成品 IBUF（host 灌 IBUF 则 64000/64000）。修复在后续提交的 `INST_Decoder.sv`，**本 bit 不含该修复**。
 5. 单笔 4KB C2H：本 bit 未测（上一份 ILA bit 会楔死；Step D 未做）。Host 保持 256B 分块。
 
 剩余问题与 RTL 计划见 `HBM_E2E_RTL_FIX_HANDOFF.md`。
