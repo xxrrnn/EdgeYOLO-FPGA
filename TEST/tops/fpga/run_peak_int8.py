@@ -368,8 +368,7 @@ def main() -> int:
         timeout_s = max(args.timeout_s, compute_s + 30.0)
         print(f"[fpga] compute window ≈ {compute_s:.3f} s  (repeat={repeat_count}, timeout={timeout_s:.1f}s)")
         if args.staging == "hbm":
-            print("[fpga] staging=hbm: Host->HBM->CDMA->IBUF; check reads tile_obuf "
-                  "(drain CDMA still tile0-only on this bit)")
+            print("[fpga] staging=hbm: Host->HBM->CDMA->IBUF, drain tile_obuf->HBM, check HBM")
 
         sampler = None
         power_report = None

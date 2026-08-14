@@ -603,10 +603,10 @@ class ChipRunnerWin:
 
         if staging == "hbm":
             self.upload_hbm(run_dir, weight_hbm_map=weight_hbm_map)
-            # Load path (HBM->IBUF) is 2048/2048 on tops_ila_hbmfix_260813.
-            # Official tile_obuf->HBM drain is still tile0-only (256/2048), so
-            # host scatter-reads tile_obuf for the peak check.
-            n_words = self.upload_inst(run_dir, drain_output=False,
+            # Official path: HBM->IBUF load CDMAs + tile_obuf->HBM drain.
+            # Duplicate preload filenames (peak act.hex x8) must keep per-line
+            # destinations; see hbm_flow._preload_rows.
+            n_words = self.upload_inst(run_dir, drain_output=True,
                                         weight_hbm_map=weight_hbm_map)
         else:
             self.upload_preload(run_dir)
@@ -640,7 +640,7 @@ class ChipRunnerWin:
             return [{"name": run_dir.name, "pass": True, "total_words": 0,
                      "passed": 0, "failed": 0, "first_mismatch": None, "mismatches": []}]
 
-        results = self.read_check(run_dir, from_hbm=False)
+        results = self.read_check(run_dir, from_hbm=(staging == "hbm"))
 
         status = "PASS" if all(r["pass"] for r in results) else "FAIL"
         self._log(f"[result] {run_dir.name}: {status}")

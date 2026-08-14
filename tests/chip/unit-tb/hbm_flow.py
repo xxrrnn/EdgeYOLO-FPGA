@@ -124,6 +124,37 @@ _WB_SETTLE_NOPS = 512
 _VPU_SETTLE_NOPS = 256
 
 
+def _preload_rows(
+    run_dir: Path,
+    weight_hbm_map: "dict[str, int] | None" = None,
+) -> list[tuple[int, str, int, int]]:
+    """(hbm_off, fname, nbytes, dst_addr) for every preload.txt line.
+
+    Duplicate filenames (peak broadcasts act.hex to 8 tile IBUFs) must keep
+    their per-line destination. Looking up dst by filename would collapse
+    them all onto tile0.
+    """
+    preload = run_dir / "preload.txt"
+    if not preload.exists():
+        return []
+
+    rows: list[tuple[int, str, int, int]] = []
+    weight_cursor = [0]
+    for line in preload.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fname, addr_str = line.split()
+        nbytes = len(hex_to_bin(run_dir / fname))
+        hbm_off = _hbm_src_offset(fname, weight_cursor, weight_hbm_map)
+        if fname.startswith("weight") and not (weight_hbm_map and fname in weight_hbm_map):
+            weight_cursor[0] += nbytes
+        if fname == "aux_zero.hex" and not (weight_hbm_map and fname in weight_hbm_map):
+            weight_cursor[0] += nbytes
+        rows.append((hbm_off, fname, nbytes, int(addr_str, 16)))
+    return rows
+
+
 def build_hbm_input_cdma(
     run_dir: Path,
     weight_hbm_map: "dict[str, int] | None" = None,
@@ -140,8 +171,7 @@ def build_hbm_input_cdma(
     (e.g. conv_pipeline / mini_network input feature maps).
     """
     insts: list[int] = []
-    for hbm_off, fname, nbytes in staging_writes_for_preload(run_dir, weight_hbm_map):
-        dst = _preload_dst(run_dir, fname)
+    for hbm_off, fname, nbytes, dst in _preload_rows(run_dir, weight_hbm_map):
         # If the preload target is HBM-space, the file is stored in HBM and the
         # inst.hex already handles moving it on-chip.  Nothing to inject here.
         if dst < TILE_IBUF_BASE:
@@ -176,28 +206,12 @@ def staging_writes_for_preload(
     weight_hbm_map: when supplied, weight/wb file HBM offsets come from the map
     (pre-allocated pool), allowing the caller to skip re-uploading them.
     """
-    preload = run_dir / "preload.txt"
-    if not preload.exists():
-        return []
-
-    rows: list[tuple[int, str, int]] = []
-    weight_cursor = [0]
-    for line in preload.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        fname, _addr_str = line.split()
-        nbytes = len(hex_to_bin(run_dir / fname))
-        hbm_off = _hbm_src_offset(fname, weight_cursor, weight_hbm_map)
-        if fname.startswith("weight") and not (weight_hbm_map and fname in weight_hbm_map):
-            weight_cursor[0] += nbytes
-        if fname == "aux_zero.hex" and not (weight_hbm_map and fname in weight_hbm_map):
-            weight_cursor[0] += nbytes
-        rows.append((hbm_off, fname, nbytes))
-    return rows
+    return [(hbm_off, fname, nbytes) for hbm_off, fname, nbytes, _dst in
+            _preload_rows(run_dir, weight_hbm_map)]
 
 
 def _preload_dst(run_dir: Path, fname: str) -> int:
+    """First preload.txt address for fname. Do not use for CDMA injection."""
     for line in (run_dir / "preload.txt").read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
