@@ -111,6 +111,7 @@ module DCIM_Tile #(
     reg start_d;
     reg start_d2;
     wire start_pulse = start_d && !start_d2 && tile_enable;
+    wire job_accept = (state == ST_IDLE) && start_pulse;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             start_d <= 1'b0;
@@ -210,7 +211,7 @@ module DCIM_Tile #(
             done_reg <= 1'b0;
             drain_count <= '0;
         end else begin
-            if (state == ST_IDLE && start_pulse)
+            if (job_accept)
                 done_reg <= 1'b0;
             else if (state == ST_DONE)
                 done_reg <= 1'b1;
@@ -254,7 +255,11 @@ module DCIM_Tile #(
     // ------------------------------------------------------------------
     // Weight store + double wide cache.
     // ------------------------------------------------------------------
-    wire cache_clear = (state == ST_IDLE);
+    // A single accepted-command pulse defines the reset boundary of all
+    // job-local state.  Holding clear throughout IDLE made the boundary depend
+    // on how long the decoder happened to remain idle.
+    wire job_clear = job_accept;
+    wire cache_clear = job_clear;
     wire cache_row_load_start = (state == ST_PRIME_START) ||
                                 ((state == ST_ROW_START) && next_operation_exists);
     wire [ACC_W-1:0] cache_row_load_index =
@@ -303,7 +308,7 @@ module DCIM_Tile #(
         .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
         .MICRO_BATCH(MICRO_BATCH)
     ) u_activation_stream (
-        .clk(clk), .rst_n(rst_n), .clear(state == ST_IDLE),
+        .clk(clk), .rst_n(rst_n), .clear(job_clear),
         .start(row_stream_start), .mode(mode_reg),
         .pixel_count(block_pixels),
         .benchmark_repeat(benchmark_repeat_reg),
@@ -329,7 +334,7 @@ module DCIM_Tile #(
     // Existing DCIM arithmetic, now used as a pure row pipeline.  Cross-row
     // accumulation is performed in BRAM, so postProcess.acc is tied to bypass.
     // ------------------------------------------------------------------
-    wire core_clear = (state == ST_IDLE) || (state == ST_PRELOAD);
+    wire core_clear = job_clear || (state == ST_PRELOAD);
     wire ma_valid;
     wire ma_ready;
     wire [CH_OUT*WD2-1:0] ma_data;
@@ -367,7 +372,7 @@ module DCIM_Tile #(
         .OBUF_ADDR_WIDTH(OBUF_AW), .BUF_DATA_WIDTH(BUF_DATA_WIDTH),
         .MICRO_BATCH(MICRO_BATCH)
     ) u_result_stream (
-        .clk(clk), .rst_n(rst_n), .clear(state == ST_IDLE),
+        .clk(clk), .rst_n(rst_n), .clear(job_clear),
         .row_start(row_stream_start), .mode(mode_reg),
         .first_acc_row(first_acc_row), .last_acc_row(last_acc_row),
         .pixel_count(block_pixels), .out_base_addr(block_out_base),
@@ -444,7 +449,7 @@ module DCIM_Tile #(
             row_index <= '0;
             prefetch_done_reg <= 1'b0;
         end else begin
-            if (state == ST_IDLE && start_pulse) begin
+            if (job_accept) begin
                 mode_reg <= cfg_mode_local;
                 acc_reg <= cfg_acc_depth_local;
                 wei_base_reg <= cfg_wei_base_local;

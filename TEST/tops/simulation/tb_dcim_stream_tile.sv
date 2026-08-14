@@ -8,9 +8,15 @@ module tb_dcim_stream_tile;
     localparam integer IBUF_AW = `DCIM_TILE_IBUF_ADDR_WIDTH;
     localparam integer OBUF_AW = `DCIM_TILE_OBUF_ADDR_WIDTH;
     localparam integer IBUF_LATENCY = `DCIM_TILE_IBUF_RD_LATENCY;
+`ifdef LONG_BACK2BACK
+    localparam integer PIXELS = 4000;
+`else
     localparam integer PIXELS = 64;
+`endif
     localparam integer ACC_DEPTH = 2;
-    localparam integer WEIGHT_BASE = 15'h1000;
+    // Keep the weight image above the largest 4000-pixel INT8 activation
+    // image: 4000 * 8 = 32000 words, then 128 words of weights.
+    localparam integer WEIGHT_BASE = 15'h7f00;
 
     reg clk = 1'b0;
     reg rst_n = 1'b0;
@@ -116,6 +122,9 @@ module tb_dcim_stream_tile;
     integer last_result_cycle;
     integer expected_job;
     integer expected_phase;
+    integer expected_row_in_block;
+    integer expected_pixels_left;
+    integer expected_block_pixels;
     integer phases_per_job;
     integer expected_value;
 
@@ -134,16 +143,30 @@ module tb_dcim_stream_tile;
                 $fatal(1, "compute bubble inside row at cycle=%0d previous=%0d",
                        cycle, last_fire_cycle);
 
-            $display("STREAM_FIRE mode=%0d cycle=%0d job=%0d phase=%0d input=%08h",
-                     mode, cycle, peak_job, peak_phase, peak_dcim_input);
+            if (!$test$plusargs("QUIET"))
+                $display("STREAM_FIRE mode=%0d cycle=%0d job=%0d phase=%0d input=%08h",
+                         mode, cycle, peak_job, peak_phase, peak_dcim_input);
             fire_count = fire_count + 1;
             last_fire_cycle = cycle;
             if (expected_phase + 1 >= phases_per_job) begin
                 expected_phase = 0;
-                if (expected_job + 1 >= PIXELS)
+                expected_block_pixels = (expected_pixels_left > 64) ?
+                                        64 : expected_pixels_left;
+                // phase_job is the 64-context scratch-RAM address and restarts
+                // for each accumulator row and each micro-batch.  The final
+                // block may contain fewer than 64 pixels.
+                if (expected_job + 1 >= expected_block_pixels) begin
                     expected_job = 0;
-                else
+                    if (expected_row_in_block + 1 >= ACC_DEPTH) begin
+                        expected_row_in_block = 0;
+                        expected_pixels_left = expected_pixels_left -
+                                               expected_block_pixels;
+                    end else begin
+                        expected_row_in_block = expected_row_in_block + 1;
+                    end
+                end else begin
                     expected_job = expected_job + 1;
+                end
             end else begin
                 expected_phase = expected_phase + 1;
             end
@@ -153,18 +176,23 @@ module tb_dcim_stream_tile;
             if (peak_result_data !== expected_value[31:0])
                 $fatal(1, "result mismatch mode=%0d job=%0d got=%08h expected=%08h",
                        mode, result_count, peak_result_data, expected_value);
-            if ((result_count != 0) &&
+            if ((result_count != 0) && ((result_count % 64) != 0) &&
                 (cycle != last_result_cycle + phases_per_job))
                 $fatal(1, "result II mismatch mode=%0d cycle=%0d previous=%0d expected_ii=%0d",
                        mode, cycle, last_result_cycle, phases_per_job);
-            $display("STREAM_RESULT mode=%0d cycle=%0d job=%0d data=%08h",
-                     mode, cycle, result_count, peak_result_data);
+            if (!$test$plusargs("QUIET"))
+                $display("STREAM_RESULT mode=%0d cycle=%0d job=%0d data=%08h",
+                         mode, cycle, result_count, peak_result_data);
             result_count = result_count + 1;
             last_result_cycle = cycle;
         end
     end
 
-    task automatic prepare_and_run(input [2:0] test_mode);
+    task automatic prepare_and_run(
+        input [2:0] test_mode,
+        input integer test_job,
+        input integer reset_before
+    );
         integer pixel;
         integer word_idx;
         integer lane;
@@ -192,10 +220,20 @@ module tb_dcim_stream_tile;
             for (word_idx = 0; word_idx < PIXELS*4; word_idx = word_idx + 1)
                 obuf_mem[word_idx] = 'x;
 
-            rst_n = 1'b0;
             start = 1'b0;
-            valid0_pipe = '0;
-            valid1_pipe = '0;
+            if (reset_before) begin
+                rst_n = 1'b0;
+                valid0_pipe = '0;
+                valid1_pipe = '0;
+                repeat (6) @(negedge clk);
+                rst_n = 1'b1;
+                repeat (3) @(negedge clk);
+            end else begin
+                // Exercise the real decoder contract: a new command is issued
+                // after ready returns, without resetting the Tile or its RAMs.
+                wait (ready);
+                repeat (3) @(negedge clk);
+            end
             cycle = 0;
             fire_count = 0;
             result_count = 0;
@@ -203,19 +241,19 @@ module tb_dcim_stream_tile;
             last_result_cycle = -1;
             expected_job = 0;
             expected_phase = 0;
-            repeat (6) @(negedge clk);
-            rst_n = 1'b1;
-            repeat (3) @(negedge clk);
+            expected_row_in_block = 0;
+            expected_pixels_left = PIXELS;
+            expected_block_pixels = (PIXELS > 64) ? 64 : PIXELS;
             start = 1'b1;
             @(negedge clk);
             start = 1'b0;
 
             timeout = 0;
-            while ((result_count < PIXELS) && (timeout < 10000)) begin
+            while ((result_count < PIXELS) && (timeout < 200000)) begin
                 @(negedge clk);
                 timeout = timeout + 1;
             end
-            if (timeout >= 10000)
+            if (timeout >= 200000)
                 $fatal(1, "stream timeout mode=%0d fire=%0d results=%0d state=%0d",
                        test_mode, fire_count, result_count, dut.state);
             wait (done);
@@ -234,8 +272,9 @@ module tb_dcim_stream_tile;
                                obuf_mem[pixel*4 + lane][31:0], expected_value);
                 end
             end
-            $display("STREAM_PASS mode=%0d fires=%0d results=%0d expected=%0d",
-                     test_mode, fire_count, result_count, expected_value);
+            $display("STREAM_PASS job=%0d reset_before=%0d mode=%0d fires=%0d results=%0d expected=%0d",
+                     test_job, reset_before, test_mode, fire_count,
+                     result_count, expected_value);
             repeat (5) @(negedge clk);
         end
     endtask
@@ -244,13 +283,19 @@ module tb_dcim_stream_tile;
         cycle = 0;
         fire_count = 0;
         result_count = 0;
+`ifdef FSDB_DUMP
         if ($test$plusargs("FSDB")) begin
             $fsdbDumpfile("dcim_stream_tile.fsdb");
             $fsdbDumpvars(0, tb_dcim_stream_tile);
         end
-        prepare_and_run(`MODE_INT8);
-        prepare_and_run(`MODE_INT16);
-        $display("PASS: unified INT8/native-INT16 streamed Tile");
+`endif
+        prepare_and_run(`MODE_INT8,  0, 1);
+        prepare_and_run(`MODE_INT8,  1, 0);
+`ifndef LONG_BACK2BACK
+        prepare_and_run(`MODE_INT16, 2, 0);
+        prepare_and_run(`MODE_INT16, 3, 0);
+`endif
+        $display("PASS: back-to-back unified INT8/native-INT16 streamed Tile without inter-job reset");
         $finish;
     end
 endmodule

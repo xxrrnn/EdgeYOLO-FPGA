@@ -4,6 +4,44 @@
 
 ---
 
+## 2026-08-14：连续 DCIM job RTL 修复与仿真状态
+
+已完成低资源的任务级状态修复，未修改 host ABI、地址图、数据 mapping、
+INT8/native-INT16 数值语义或 HBM/CDMA：
+
+- `DCIM_Tile` 以 `job_accept` 单周期脉冲作为 activation/cache/result-stream
+  的唯一任务初始化边界；core 在 preload 期间继续保持 clear。
+- `DCIM_Result_Stream` 不再用 response counter 推测 partial-sum context；
+  BRAM 请求 tag 随两周期读延迟返回。
+- 每个 Tile 增加 64-bit `partial_valid_map`，在 job start 清零、first-row
+  写入后置位。后续 accumulator row 只允许读取本 job 已写 context；不清空
+  64×512-bit BRAM payload，避免破坏 RAMB36 inference。
+- 仿真加入 partial read-before-write、tag mismatch、response overflow 和
+  row-done pending-token 断言。
+
+VCS 已通过：
+
+| 回归 | 结果 |
+|---|---|
+| 连续 INT8×2 + native INT16×2，中间均不 reset | PASS；每次 64/64 结果正确 |
+| 实机等规模 INT8，4000 pixels、`acc_depth=2`，连续两次不 reset | PASS；两次均 16000 fires、4000/4000 结果正确 |
+| 70 pixels、`acc_depth=3`、64+6 tail multiblock | PASS；420 fires、70/70 结果正确 |
+| 峰值 pipeline | PASS；32/32，mismatch=0 |
+| repeat benchmark | PASS；4 repeats、512/512 active cycles、2.048 TOPS@250MHz |
+| INT8/native-INT16 core latency | PASS |
+
+Vivado 预检也已通过：完整 `chip-lite` BD validation 生成 wrapper 成功；8-Tile
+DCIM OOC 综合为 0 error、0 critical warning，250 MHz `WNS=+1.649 ns`、
+`TNS=0`。partial-sum store 仍推断为每 Tile `7×RAMB36 + 1×RAMB18`；整个
+8-Tile OOC 使用 LUT 37.74%、寄存器 20.85%、BRAM 10.32%、URAM 20.00%、
+DSP 85.11%，本次任务隔离逻辑没有引起 RAM 寄存器化或显著资源膨胀。
+
+以上证明 RTL 仿真中的连续任务、尾块、累加、native INT16 和峰值模式没有
+回归。**仍必须由新 bitstream 依次执行 tile0、tile1、7 个 OH tile、再 tile0
+的实机测试，才能关闭本节最初的板级故障。**
+
+---
+
 ## 2026-08-14 夜：e2e 根因已钉死 — DCIM 第二次 job 内部状态脏
 
 PCIe reset 后立刻复测（`tops_ila_hbmfix_260813`，脚本 `TEST/tops/fpga/e2e_isolate.py`）：

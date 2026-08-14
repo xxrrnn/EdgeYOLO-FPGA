@@ -141,8 +141,9 @@ module DCIM_Result_Stream #(
     reg [JOB_W-1:0] read_job_pipe [0:READ_DELAY-1];
     integer delay_i;
 
-    wire scratch_rd_en = read_valid_pipe[READ_DELAY-1];
+    wire scratch_rd_pending = read_valid_pipe[READ_DELAY-1];
     wire [JOB_W-1:0] scratch_rd_addr = read_job_pipe[READ_DELAY-1];
+    wire scratch_rd_en;
     wire scratch_rd_valid;
     wire [PACKED_WIDTH-1:0] scratch_rd_data;
     wire scratch_wr_en;
@@ -166,7 +167,21 @@ module DCIM_Result_Stream #(
     reg partial_valid;
     reg [PACKED_WIDTH-1:0] partial_data;
     reg [JOB_W-1:0] partial_job;
-    reg [JOB_W-1:0] partial_rsp_count;
+    // Carry the context address beside the two-cycle BRAM read.  Reconstructing
+    // it with a response counter silently relies on a bubble-free response
+    // stream and can associate a valid partial sum with the wrong pixel after a
+    // job boundary.
+    reg [JOB_W-1:0] scratch_tag_q;
+    reg [JOB_W-1:0] scratch_tag_qq;
+    // The BRAM payload deliberately has no reset so it remains a RAMB36.  This
+    // small per-context validity vector provides job isolation without placing
+    // 32 Kbit of data on a reset tree.
+    reg [MICRO_BATCH-1:0] partial_valid_map;
+    wire scratch_context_valid = partial_valid_map[scratch_rd_addr];
+    // Never consume an old BRAM payload if a context was not produced by this
+    // accepted job.  A missing first-row write now stalls and is fatal in
+    // simulation instead of silently corrupting the following accumulation.
+    assign scratch_rd_en = scratch_rd_pending && scratch_context_valid;
     reg [JOB_W-1:0] core_result_count;
 
     reg sum_valid;
@@ -258,7 +273,9 @@ module DCIM_Result_Stream #(
                 read_job_pipe[delay_i] <= '0;
             partial_valid <= 1'b0;
             partial_job <= '0;
-            partial_rsp_count <= '0;
+            scratch_tag_q <= '0;
+            scratch_tag_qq <= '0;
+            partial_valid_map <= '0;
             core_result_count <= '0;
             sum_valid <= 1'b0;
             sum_job <= '0;
@@ -269,7 +286,9 @@ module DCIM_Result_Stream #(
         end else if (clear) begin
             read_valid_pipe <= '0;
             partial_valid <= 1'b0;
-            partial_rsp_count <= '0;
+            scratch_tag_q <= '0;
+            scratch_tag_qq <= '0;
+            partial_valid_map <= '0;
             core_result_count <= '0;
             sum_valid <= 1'b0;
             second_half_valid <= 1'b0;
@@ -291,7 +310,8 @@ module DCIM_Result_Stream #(
                 for (delay_i = 0; delay_i < READ_DELAY; delay_i = delay_i + 1)
                     read_job_pipe[delay_i] <= '0;
                 partial_valid <= 1'b0;
-                partial_rsp_count <= '0;
+                scratch_tag_q <= '0;
+                scratch_tag_qq <= '0;
                 core_result_count <= '0;
                 sum_valid <= 1'b0;
                 second_half_valid <= 1'b0;
@@ -304,13 +324,19 @@ module DCIM_Result_Stream #(
                     read_job_pipe[delay_i] <= read_job_pipe[delay_i-1];
                 end
 
+                if (scratch_rd_en)
+                    scratch_tag_q <= scratch_rd_addr;
+                scratch_tag_qq <= scratch_tag_q;
+
                 if (scratch_rd_valid) begin
                     partial_valid <= 1'b1;
-                    partial_job <= partial_rsp_count;
-                    partial_rsp_count <= partial_rsp_count + 1'b1;
+                    partial_job <= scratch_tag_qq;
                 end else if (partial_consume) begin
                     partial_valid <= 1'b0;
                 end
+
+                if (scratch_wr_en)
+                    partial_valid_map[scratch_wr_addr] <= 1'b1;
 
                 if (sum_in_ready) begin
                     sum_valid <= core_out_fire;
@@ -355,6 +381,14 @@ module DCIM_Result_Stream #(
             (partial_job != core_result_count))
             $fatal(1, "DCIM partial/core job mismatch partial=%0d core=%0d",
                    partial_job, core_result_count);
+        if (rst_n && !clear && scratch_rd_pending &&
+            !scratch_context_valid)
+            $fatal(1, "DCIM partial-sum read before write context=%0d",
+                   scratch_rd_addr);
+        if (rst_n && row_done &&
+            ((read_valid_pipe != '0) || partial_valid || sum_valid ||
+             second_half_valid || scratch_rd_valid))
+            $fatal(1, "DCIM row_done with pending result-stream token");
         if (rst_n && row_start && benchmark_repeat &&
             (!first_acc_row || !last_acc_row || (pixel_count != MICRO_BATCH)))
             $fatal(1, "DCIM benchmark repeat requires acc_depth=1 and %0d jobs",

@@ -36,11 +36,12 @@ cd "$BUILD_DIR"
 rm -rf work simv simv.daidir csrc ucli.key
 mkdir work
 "$VLOGAN" -full64 -sverilog +v2k +define+SIMULATION \
+  ${VCS_FSDB_DEFINE-+define+FSDB_DUMP} ${VCS_TEST_DEFINES:-} \
   "+incdir+$REPO_ROOT/rtl/chip" \
   "+incdir+$REPO_ROOT/rtl/ref/DCIM/src/inc" \
   -work work "${SOURCES[@]}" -l "$RUN_DIR/vlogan.log"
-"$VCS" -full64 -j32 -lca -debug_access+all -t ps \
+"$VCS" -full64 -j32 ${VCS_ELAB_OPTS:--lca -debug_access+all} -t ps \
   work.tb_dcim_stream_tile -o simv -l "$RUN_DIR/compile.log"
 cd "$RUN_DIR"
-"$BUILD_DIR/simv" +FSDB -no_save 2>&1 | tee sim.log
-grep -q "PASS: unified INT8/native-INT16 streamed Tile" sim.log
+"$BUILD_DIR/simv" +FSDB ${VCS_SIM_OPTS:-} -no_save 2>&1 | tee sim.log
+grep -q "PASS: back-to-back unified INT8/native-INT16 streamed Tile without inter-job reset" sim.log
