@@ -7,11 +7,13 @@ On-chip data path (default staging=hbm):
 """
 from __future__ import annotations
 
+import ctypes
 import os
 import struct
 import subprocess
 import tempfile
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
@@ -104,6 +106,189 @@ REG_INST_COUNT = 0x3C
 REG_DECODER_STATUS = 0x40
 
 
+# Xilinx Windows XDMA device-interface GUID used by xdma_rw.exe / xdma_info.exe.
+_XDMA_GUID = "{74c7e4a9-6d5d-4a70-bc0d-20691dff9e9d}"
+_XDMA_CHANNELS = ("h2c_0", "c2h_0")
+_INVALID_HANDLE = 0xFFFFFFFFFFFFFFFF
+_GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_OPEN_EXISTING = 3
+_FILE_ATTRIBUTE_NORMAL = 0x80
+_FILE_BEGIN = 0
+_DIGCF_PRESENT = 0x2
+_DIGCF_DEVICEINTERFACE = 0x10
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", wintypes.DWORD),
+        ("Data2", wintypes.WORD),
+        ("Data3", wintypes.WORD),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class _SP_DEVICE_INTERFACE_DATA(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("InterfaceClassGuid", _GUID),
+        ("Flags", wintypes.DWORD),
+        ("Reserved", ctypes.c_void_p),
+    ]
+
+
+def _guid_from_braces(text: str) -> _GUID:
+    raw = bytes.fromhex(text.strip("{}").replace("-", ""))
+    g = _GUID()
+    g.Data1 = int.from_bytes(raw[0:4], "little")
+    g.Data2 = int.from_bytes(raw[4:6], "little")
+    g.Data3 = int.from_bytes(raw[6:8], "little")
+    g.Data4[:] = raw[8:16]
+    return g
+
+
+def _winapi():
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    setup = ctypes.WinDLL("setupapi", use_last_error=True)
+    k32.CreateFileW.restype = ctypes.c_void_p
+    k32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+    ]
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    k32.SetFilePointerEx.argtypes = [
+        ctypes.c_void_p, ctypes.c_longlong, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    k32.ReadFile.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    k32.WriteFile.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    setup.SetupDiGetClassDevsW.restype = ctypes.c_void_p
+    setup.SetupDiEnumDeviceInterfaces.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(_GUID),
+        wintypes.DWORD, ctypes.POINTER(_SP_DEVICE_INTERFACE_DATA),
+    ]
+    setup.SetupDiGetDeviceInterfaceDetailW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_SP_DEVICE_INTERFACE_DATA),
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    setup.SetupDiDestroyDeviceInfoList.argtypes = [ctypes.c_void_p]
+    return k32, setup
+
+
+def _xdma_interface_path() -> str | None:
+    """XDMA device-interface path with no channel suffix. Never open this path itself."""
+    info_exe = REPO_ROOT / "tests" / "bin" / "xdma_info.exe"
+    if info_exe.is_file():
+        try:
+            proc = subprocess.run(
+                [str(info_exe)], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            proc = None
+        if proc is not None:
+            for line in proc.stdout.splitlines():
+                if "device path:" in line.lower():
+                    path = line.split(":", 1)[1].strip()
+                    if path:
+                        return path
+    return _xdma_interface_path_setupapi()
+
+
+def _xdma_interface_path_setupapi() -> str | None:
+    if os.name != "nt":
+        return None
+    k32, setup = _winapi()
+    guid = _guid_from_braces(_XDMA_GUID)
+    hdev = setup.SetupDiGetClassDevsW(
+        ctypes.byref(guid), None, None, _DIGCF_PRESENT | _DIGCF_DEVICEINTERFACE
+    )
+    if hdev in (None, ctypes.c_void_p(-1).value, _INVALID_HANDLE):
+        return None
+    try:
+        iface = _SP_DEVICE_INTERFACE_DATA()
+        iface.cbSize = ctypes.sizeof(_SP_DEVICE_INTERFACE_DATA)
+        if not setup.SetupDiEnumDeviceInterfaces(hdev, None, ctypes.byref(guid), 0, ctypes.byref(iface)):
+            return None
+        needed = wintypes.DWORD(0)
+        setup.SetupDiGetDeviceInterfaceDetailW(
+            hdev, ctypes.byref(iface), None, 0, ctypes.byref(needed), None
+        )
+        if needed.value < 8:
+            return None
+        buf = (ctypes.c_byte * needed.value)()
+        ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0] = (
+            8 if ctypes.sizeof(ctypes.c_void_p) == 8 else 6
+        )
+        if not setup.SetupDiGetDeviceInterfaceDetailW(
+            hdev, ctypes.byref(iface), buf, needed.value, None, None
+        ):
+            return None
+        path_off = 8 if ctypes.sizeof(ctypes.c_void_p) == 8 else 4
+        return ctypes.wstring_at(ctypes.addressof(buf) + path_off)
+    finally:
+        setup.SetupDiDestroyDeviceInfoList(hdev)
+
+
+def _create_xdma_channel(base_path: str, channel: str):
+    if channel not in _XDMA_CHANNELS:
+        raise ValueError(f"refusing to open XDMA channel {channel!r}")
+    k32, _setup = _winapi()
+    path = base_path.rstrip("\\") + "\\" + channel
+    handle = k32.CreateFileW(
+        path,
+        _GENERIC_READ | _GENERIC_WRITE,
+        0,
+        None,
+        _OPEN_EXISTING,
+        _FILE_ATTRIBUTE_NORMAL,
+        None,
+    )
+    hv = int(handle) if handle is not None else -1
+    if hv in (-1, _INVALID_HANDLE, 0xFFFFFFFF):
+        raise OSError(ctypes.get_last_error(), f"CreateFileW({path}) failed")
+    return handle
+
+
+def _handle_seek(handle, address: int) -> None:
+    k32, _setup = _winapi()
+    if not k32.SetFilePointerEx(handle, int(address), None, _FILE_BEGIN):
+        raise OSError(ctypes.get_last_error(), f"SetFilePointerEx(0x{address:x}) failed")
+
+
+def _handle_write(handle, data: bytes) -> None:
+    k32, _setup = _winapi()
+    sent = 0
+    while sent < len(data):
+        chunk = data[sent:]
+        written = wintypes.DWORD(0)
+        buf = ctypes.create_string_buffer(chunk, len(chunk))
+        if not k32.WriteFile(handle, buf, len(chunk), ctypes.byref(written), None):
+            raise OSError(ctypes.get_last_error(), f"WriteFile failed after {sent} bytes")
+        if written.value == 0:
+            raise RuntimeError("WriteFile wrote 0 bytes")
+        sent += int(written.value)
+
+
+def _handle_read(handle, nbytes: int) -> bytes:
+    k32, _setup = _winapi()
+    out = bytearray()
+    while len(out) < nbytes:
+        want = nbytes - len(out)
+        buf = ctypes.create_string_buffer(want)
+        got = wintypes.DWORD(0)
+        if not k32.ReadFile(handle, buf, want, ctypes.byref(got), None):
+            raise OSError(ctypes.get_last_error(), f"ReadFile failed after {len(out)} bytes")
+        if got.value == 0:
+            raise RuntimeError(f"ReadFile EOF after {len(out)}/{nbytes} bytes")
+        out.extend(buf.raw[: got.value])
+    return bytes(out)
+
+
 class XDMAWin:
     def __init__(
         self,
@@ -114,11 +299,60 @@ class XDMAWin:
         self.exe = str(exe_path or XDMA_RW_EXE)
         self.verbose = verbose
         self.xdma_timeout_s = xdma_timeout_s
-        if not Path(self.exe).exists():
+        self._h2c = None
+        self._c2h = None
+        self._direct = False
+        force_exe = os.environ.get("EDGEYOLO_XDMA_EXE", "").strip() in {"1", "true", "yes"}
+        if not force_exe:
+            self._try_open_direct()
+        if not self._direct and not Path(self.exe).exists():
             raise FileNotFoundError(
                 f"xdma_rw.exe not found: {self.exe}. "
                 "Set XDMA_RW_EXE, or extract tests/bin.zip so tests/bin/xdma_rw.exe exists."
             )
+
+    def _try_open_direct(self) -> None:
+        if os.name != "nt":
+            return
+        base = _xdma_interface_path()
+        if not base:
+            return
+        h2c = c2h = None
+        try:
+            h2c = _create_xdma_channel(base, "h2c_0")
+            c2h = _create_xdma_channel(base, "c2h_0")
+        except OSError as exc:
+            print(f"[xdma] CreateFile channel open failed ({exc}); using xdma_rw.exe", flush=True)
+            self._close_handles(h2c, c2h)
+            return
+        self._h2c = h2c
+        self._c2h = c2h
+        self._direct = True
+        print(f"[xdma] using CreateFile {base}\\h2c_0 and \\c2h_0", flush=True)
+
+    @staticmethod
+    def _close_handles(*handles) -> None:
+        if os.name != "nt":
+            return
+        k32, _setup = _winapi()
+        for handle in handles:
+            if handle is not None:
+                try:
+                    k32.CloseHandle(handle)
+                except OSError:
+                    pass
+
+    def close(self) -> None:
+        self._close_handles(self._h2c, self._c2h)
+        self._h2c = None
+        self._c2h = None
+        self._direct = False
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
         cmd = [self.exe] + args
@@ -140,7 +374,20 @@ class XDMAWin:
             )
         return result
 
+    def _direct_write(self, address: int, data: bytes) -> None:
+        _handle_seek(self._h2c, address)
+        _handle_write(self._h2c, data)
+
+    def _direct_read(self, address: int, nbytes: int) -> bytes:
+        _handle_seek(self._c2h, address)
+        return _handle_read(self._c2h, nbytes)
+
     def write(self, address: int, data: bytes) -> None:
+        if self._direct:
+            if self.verbose:
+                print(f"  [xdma] direct h2c 0x{address:x} {len(data)}B")
+            self._direct_write(address, data)
+            return
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
             f.write(data)
             tmp_path = f.name
@@ -156,6 +403,10 @@ class XDMAWin:
         self.write(address, struct.pack("<I", val & 0xFFFFFFFF))
 
     def _read_once(self, address: int, nbytes: int) -> bytes:
+        if self._direct:
+            if self.verbose:
+                print(f"  [xdma] direct c2h 0x{address:x} {nbytes}B")
+            return self._direct_read(address, nbytes)
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
             tmp_path = f.name
         try:
