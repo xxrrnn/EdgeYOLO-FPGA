@@ -110,7 +110,8 @@ def load_programs(build_dir: Path) -> list[tuple[int, Path, bytes]]:
     return programs
 
 
-def start_and_poll(xdma: XDMAWin, n_words: int, timeout_s: float, label: str) -> float:
+def start_and_poll(xdma: XDMAWin, n_words: int, timeout_s: float, label: str,
+                   poll_interval_s: float = 0.05) -> float:
     print(f"[win] {label}: INST_COUNT={n_words}")
     t0 = time.perf_counter()
     xdma.write_u32(REGS_BASE + REG_INST_COUNT, n_words)
@@ -118,6 +119,7 @@ def start_and_poll(xdma: XDMAWin, n_words: int, timeout_s: float, label: str) ->
     time.sleep(0.001)
     xdma.write_u32(REGS_BASE + REG_DECODER_CTRL, 0)
 
+    interval = max(0.0, float(poll_interval_s))
     deadline = time.perf_counter() + timeout_s
     last = None
     while True:
@@ -130,9 +132,10 @@ def start_and_poll(xdma: XDMAWin, n_words: int, timeout_s: float, label: str) ->
         if st & 0x2:
             print(f"[win] {label}: DONE")
             return time.perf_counter() - t0
-        if time.perf_counter() > deadline:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
             raise TimeoutError(f"{label}: decoder timeout after {timeout_s}s status=0x{st:08x}")
-        time.sleep(0.002)
+        time.sleep(interval if interval <= remaining else remaining)
 
 
 def soft_reset_decoder(xdma: XDMAWin) -> int:
@@ -263,6 +266,8 @@ def main() -> None:
     ap.add_argument("--output-dir", default=None,
                     help="optional directory for all named host outputs")
     ap.add_argument("--poll-timeout-s", type=float, default=120.0)
+    ap.add_argument("--poll-interval-s", type=float, default=0.05,
+                    help="sleep between DECODER_STATUS C2H polls; default 50ms")
     ap.add_argument("--read-chunk-bytes", type=int, default=0x20000,
                     help="chunk size for large C2H output reads")
     ap.add_argument("--write-chunk-bytes", type=int, default=0x100000,
@@ -381,7 +386,10 @@ def main() -> None:
             write_chunked(xdma, INST_BASE, program, args.write_chunk_bytes)
             verify_write_tail(xdma, INST_BASE, len(program))
             seg["upload_s"] = time.perf_counter() - t0
-            seg["execute_s"] = start_and_poll(xdma, len(program) // 4, args.poll_timeout_s, f"segment {idx}")
+            seg["execute_s"] = start_and_poll(
+                xdma, len(program) // 4, args.poll_timeout_s, f"segment {idx}",
+                poll_interval_s=args.poll_interval_s,
+            )
         except Exception as exc:
             seg.setdefault("upload_s", time.perf_counter() - t0)
             seg["error"] = f"{type(exc).__name__}: {exc}"
