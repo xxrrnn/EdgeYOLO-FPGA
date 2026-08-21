@@ -217,7 +217,6 @@ def run_one_shot_fpga(
     session=None,
 ) -> Path:
     """Run a full one-shot FPGA workload, compare features, and run the host boundary."""
-    runtime = REPO_ROOT / "tests" / "chip" / "runtime"
     tag = _one_shot_tag(network, precision)
     net_dir = "yolo" if network == "yolo" else "resnet"
     output_group = result_group or net_dir
@@ -277,46 +276,31 @@ def run_one_shot_fpga(
         if close_session:
             hw_session.close()
 
-    compare_cmd = [
-        sys.executable, str(runtime / "compare_one_shot.py"),
-        "--build-dir", str(build_dir),
-        "--image", str(img_path),
-        "--output", str(primary),
-        "--atol", str(compare_atol),
-    ]
-    if named_outputs:
-        compare_cmd.extend(["--output-dir", str(feat_dir)])
-    if network == "yolo" and yolo_parsed_dir is not None:
-        compare_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
-    if network == "resnet" and resnet_parsed_dir is not None:
-        compare_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
-    if golden_cache_dir is not None:
-        compare_cmd.extend(["--golden-cache-dir", str(golden_cache_dir)])
-    _run_checked(compare_cmd)
-
-    head_cmd = [
-        sys.executable, str(runtime / "one_shot_host_head.py"),
-        "--build-dir", str(build_dir),
-        "--image", str(img_path),
-        "--output", str(primary),
-        "--json-out", str(head_json),
-    ]
-    if network == "yolo":
-        head_cmd.extend([
-            "--output-dir", str(feat_dir),
-            "--conf", str(conf),
-            "--iou", str(iou),
-        ])
-        if yolo_expect_detections is not None:
-            head_cmd.extend(["--expect-detections", str(yolo_expect_detections)])
-        if yolo_parsed_dir is not None:
-            head_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
-    else:
-        if resnet_expect_top1 is not None:
-            head_cmd.extend(["--expect-top1", str(resnet_expect_top1)])
-        if resnet_parsed_dir is not None:
-            head_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
-    _run_checked(head_cmd)
+    import compare_one_shot
+    import one_shot_host_head
+    compare_one_shot.compare(
+        build_dir,
+        img_path,
+        output=primary,
+        output_dir=feat_dir if named_outputs else None,
+        atol=compare_atol,
+        yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+        parsed_dir=resnet_parsed_dir if network == "resnet" else None,
+        golden_cache_dir=golden_cache_dir,
+    )
+    one_shot_host_head.run_head(
+        build_dir,
+        img_path,
+        output=primary,
+        output_dir=feat_dir if network == "yolo" else None,
+        json_out=head_json,
+        conf=conf,
+        iou=iou,
+        expect_detections=yolo_expect_detections if network == "yolo" else None,
+        expect_top1=resnet_expect_top1 if network == "resnet" else None,
+        yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+        parsed_dir=resnet_parsed_dir if network == "resnet" else None,
+    )
 
     result = json.loads(head_json.read_text())
     detections = list(result.get("detections", []))

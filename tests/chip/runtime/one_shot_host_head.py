@@ -212,6 +212,58 @@ def _run_resnet(plan: dict, image_path: Path, output: Path | None,
     return result
 
 
+def run_head(
+    build_dir: Path,
+    image: Path,
+    *,
+    network: str = "auto",
+    output: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    json_out: str | Path | None = None,
+    conf: float = 0.25,
+    iou: float = 0.45,
+    topk: int = 5,
+    expect_detections: int | None = None,
+    expect_top1: int | None = None,
+    parsed_dir: str | Path | None = None,
+    yolo_parsed_dir: str | Path | None = None,
+) -> dict:
+    build_dir = Path(build_dir)
+    plan = json.loads((build_dir / "plan.json").read_text())
+    network_name = str(plan.get("network", "")).lower()
+    if network != "auto":
+        network_name = network
+    mode = plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8"))
+
+    if "yolo" in network_name:
+        if not output_dir:
+            raise RuntimeError("YOLO host head needs output_dir with PAN_P3/PAN_P4/PAN_P5 blobs")
+        result = _run_yolo(
+            plan, Path(image), Path(output_dir),
+            Path(yolo_parsed_dir) if yolo_parsed_dir else REPO / "model" / "yolov5n" / "parsed",
+            conf, iou, expect_detections,
+        )
+    elif "resnet" in network_name:
+        result = _run_resnet(
+            plan, Path(image), Path(output) if output else None,
+            _resnet_parsed_dir(mode, parsed_dir), topk, expect_top1,
+        )
+    else:
+        raise RuntimeError(f"cannot infer network from plan: {plan.get('network')!r}")
+
+    text = json.dumps(result, indent=2)
+    print(text)
+    if json_out:
+        out = Path(json_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text + "\n")
+    if result.get("top1_match") is False:
+        raise RuntimeError("ResNet Top-1 did not match expected class")
+    if result.get("detections_match") is False:
+        raise RuntimeError("YOLO detection count did not match expected")
+    return result
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run allowed host head from one-shot FPGA features")
     ap.add_argument("--build-dir", required=True)
@@ -231,40 +283,24 @@ def main() -> None:
     ap.add_argument("--yolo-parsed-dir", default=None,
                     help="optional YOLO parsed dir; run.py supplies the current COCO parsed directory")
     args = ap.parse_args()
-
-    build_dir = Path(args.build_dir)
-    plan = json.loads((build_dir / "plan.json").read_text())
-    network = str(plan.get("network", "")).lower()
-    if args.network != "auto":
-        network = args.network
-    mode = plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8"))
-
-    if "yolo" in network:
-        if not args.output_dir:
-            raise SystemExit("YOLO host head needs --output-dir with PAN_P3/PAN_P4/PAN_P5 blobs")
-        result = _run_yolo(
-            plan, Path(args.image), Path(args.output_dir),
-            Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else REPO / "model" / "yolov5n" / "parsed",
-            args.conf, args.iou, args.expect_detections,
+    try:
+        run_head(
+            Path(args.build_dir),
+            Path(args.image),
+            network=args.network,
+            output=args.output,
+            output_dir=args.output_dir,
+            json_out=args.json_out,
+            conf=args.conf,
+            iou=args.iou,
+            topk=args.topk,
+            expect_detections=args.expect_detections,
+            expect_top1=args.expect_top1,
+            parsed_dir=args.parsed_dir,
+            yolo_parsed_dir=args.yolo_parsed_dir,
         )
-    elif "resnet" in network:
-        result = _run_resnet(
-            plan, Path(args.image), Path(args.output) if args.output else None,
-            _resnet_parsed_dir(mode, args.parsed_dir), args.topk, args.expect_top1,
-        )
-    else:
-        raise SystemExit(f"cannot infer network from plan: {plan.get('network')!r}")
-
-    text = json.dumps(result, indent=2)
-    print(text)
-    if args.json_out:
-        json_out = Path(args.json_out)
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(text + "\n")
-    if result.get("top1_match") is False:
-        raise SystemExit(1)
-    if result.get("detections_match") is False:
-        raise SystemExit(1)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

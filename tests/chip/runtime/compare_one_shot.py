@@ -459,6 +459,106 @@ def _stats(got: np.ndarray, ref: np.ndarray) -> dict[str, float]:
     }
 
 
+def compare(
+    build_dir: Path,
+    image: Path,
+    *,
+    network: str = "auto",
+    parsed_dir: str | Path | None = None,
+    yolo_parsed_dir: str | Path | None = None,
+    output: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    atol: float = 1e-3,
+    golden_cache_dir: str | Path | None = None,
+) -> None:
+    build_dir = Path(build_dir)
+    plan = json.loads((build_dir / "plan.json").read_text())
+    mode = plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8"))
+    max_layers = int(plan.get("compile_meta", {}).get("num_conv_layers_compiled", 0)) or None
+    total_layers = int(plan.get("compile_meta", {}).get("num_conv_layers_total", 0)) or max_layers
+    if max_layers == total_layers:
+        max_layers = None
+
+    network_name = str(plan.get("network", "")).lower()
+    if network != "auto":
+        network_name = network
+
+    host = plan["host_io"]
+    outputs = host.get("outputs")
+    is_resnet = "resnet" in network_name
+    has_qdq = False
+    output_dtype = str(host.get("output_dtype", "float32"))
+    if is_resnet:
+        has_qdq = any(
+            rec.get("kind") == "qdq"
+            for rec in plan.get("wb_layout", {}).get("layers", [])
+        )
+        parsed_path = Path(parsed_dir) if parsed_dir else None
+    else:
+        parsed_path = Path(yolo_parsed_dir) if yolo_parsed_dir else None
+
+    identity = _golden_cache_identity(
+        Path(image), network_name, mode, max_layers, parsed_path,
+        has_qdq=has_qdq, output_dtype=output_dtype,
+    )
+    cache_dir = Path(golden_cache_dir) if golden_cache_dir else None
+    cached = _load_golden_cache(cache_dir, identity) if cache_dir is not None else None
+    golden_t0 = time.perf_counter()
+    if cached is not None:
+        primary_ref, named_refs = cached
+        print(f"golden cache load {time.perf_counter() - golden_t0:.3f}s", flush=True)
+    elif is_resnet:
+        primary_ref = run_resnet_compiler_golden(
+            Path(image), mode, max_layers, parsed_dir,
+            quantize_residuals=has_qdq,
+            output_dtype=output_dtype,
+        )
+        named_refs = {}
+        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
+        if cache_dir is not None:
+            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
+    else:
+        primary_ref, named_refs = run_yolo_compiler_golden(
+            Path(image), mode, max_layers, yolo_parsed_dir,
+        )
+        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
+        if cache_dir is not None:
+            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
+
+    failed = False
+    compared = False
+    if output:
+        h, w = [int(x) for x in host["output_hw"]]
+        c = int(host["output_c"])
+        dtype = str(host.get("output_dtype", "float32"))
+        got = _read_blob(Path(output), (h, w, c), dtype)
+        ref = named_refs.get(outputs[-1]["name"], primary_ref) if outputs else primary_ref
+        s = _stats(got, ref)
+        print(f"primary max_abs={s['max_abs']:.6g} mean_abs={s['mean_abs']:.6g} rmse={s['rmse']:.6g}")
+        failed |= s["max_abs"] > atol
+        compared = True
+
+    if output_dir and outputs:
+        out_dir = Path(output_dir)
+        for spec in outputs:
+            name = spec["name"]
+            h, w = [int(x) for x in spec["hw"]]
+            c = int(spec["c"])
+            dtype = str(spec.get("dtype", host.get("output_dtype", "float32")))
+            got = _read_blob(out_dir / f"{name}.bin", (h, w, c), dtype)
+            ref = named_refs[name]
+            s = _stats(got, ref)
+            print(f"{name} max_abs={s['max_abs']:.6g} mean_abs={s['mean_abs']:.6g} rmse={s['rmse']:.6g}")
+            failed |= s["max_abs"] > atol
+            compared = True
+
+    if not compared:
+        print(f"golden shape={primary_ref.shape} dtype={primary_ref.dtype}")
+
+    if failed:
+        raise RuntimeError(f"one-shot compare exceeded atol={atol}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Compare one-shot FPGA output against numpy golden")
     ap.add_argument("--build-dir", required=True)
@@ -477,93 +577,20 @@ def main() -> None:
         help="directory for numpy golden tensors; omit to recompute every image",
     )
     args = ap.parse_args()
-
-    build_dir = Path(args.build_dir)
-    plan = json.loads((build_dir / "plan.json").read_text())
-    mode = plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8"))
-    max_layers = int(plan.get("compile_meta", {}).get("num_conv_layers_compiled", 0)) or None
-    total_layers = int(plan.get("compile_meta", {}).get("num_conv_layers_total", 0)) or max_layers
-    if max_layers == total_layers:
-        max_layers = None
-
-    network_name = str(plan.get("network", "")).lower()
-    if args.network != "auto":
-        network_name = args.network
-
-    host = plan["host_io"]
-    outputs = host.get("outputs")
-    is_resnet = "resnet" in network_name
-    has_qdq = False
-    output_dtype = str(host.get("output_dtype", "float32"))
-    if is_resnet:
-        has_qdq = any(
-            rec.get("kind") == "qdq"
-            for rec in plan.get("wb_layout", {}).get("layers", [])
+    try:
+        compare(
+            Path(args.build_dir),
+            Path(args.image),
+            network=args.network,
+            parsed_dir=args.parsed_dir,
+            yolo_parsed_dir=args.yolo_parsed_dir,
+            output=args.output,
+            output_dir=args.output_dir,
+            atol=args.atol,
+            golden_cache_dir=args.golden_cache_dir,
         )
-        parsed_dir = Path(args.parsed_dir) if args.parsed_dir else None
-    else:
-        parsed_dir = Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else None
-
-    identity = _golden_cache_identity(
-        Path(args.image), network_name, mode, max_layers, parsed_dir,
-        has_qdq=has_qdq, output_dtype=output_dtype,
-    )
-    cache_dir = Path(args.golden_cache_dir) if args.golden_cache_dir else None
-    cached = _load_golden_cache(cache_dir, identity) if cache_dir is not None else None
-    golden_t0 = time.perf_counter()
-    if cached is not None:
-        primary_ref, named_refs = cached
-        print(f"golden cache load {time.perf_counter() - golden_t0:.3f}s", flush=True)
-    elif is_resnet:
-        primary_ref = run_resnet_compiler_golden(
-            Path(args.image), mode, max_layers, args.parsed_dir,
-            quantize_residuals=has_qdq,
-            output_dtype=output_dtype,
-        )
-        named_refs = {}
-        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
-        if cache_dir is not None:
-            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
-    else:
-        primary_ref, named_refs = run_yolo_compiler_golden(
-            Path(args.image), mode, max_layers, args.yolo_parsed_dir,
-        )
-        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
-        if cache_dir is not None:
-            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
-
-    failed = False
-    compared = False
-    if args.output:
-        h, w = [int(x) for x in host["output_hw"]]
-        c = int(host["output_c"])
-        dtype = str(host.get("output_dtype", "float32"))
-        got = _read_blob(Path(args.output), (h, w, c), dtype)
-        ref = named_refs.get(outputs[-1]["name"], primary_ref) if outputs else primary_ref
-        s = _stats(got, ref)
-        print(f"primary max_abs={s['max_abs']:.6g} mean_abs={s['mean_abs']:.6g} rmse={s['rmse']:.6g}")
-        failed |= s["max_abs"] > args.atol
-        compared = True
-
-    if args.output_dir and outputs:
-        out_dir = Path(args.output_dir)
-        for spec in outputs:
-            name = spec["name"]
-            h, w = [int(x) for x in spec["hw"]]
-            c = int(spec["c"])
-            dtype = str(spec.get("dtype", host.get("output_dtype", "float32")))
-            got = _read_blob(out_dir / f"{name}.bin", (h, w, c), dtype)
-            ref = named_refs[name]
-            s = _stats(got, ref)
-            print(f"{name} max_abs={s['max_abs']:.6g} mean_abs={s['mean_abs']:.6g} rmse={s['rmse']:.6g}")
-            failed |= s["max_abs"] > args.atol
-            compared = True
-
-    if not compared:
-        print(f"golden shape={primary_ref.shape} dtype={primary_ref.dtype}")
-
-    if failed:
-        raise SystemExit(1)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":
