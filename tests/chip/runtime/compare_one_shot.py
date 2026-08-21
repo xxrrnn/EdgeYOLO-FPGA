@@ -7,9 +7,11 @@ entry, and VPU ops consume/produce FP32 tensors.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -331,6 +333,106 @@ def run_resnet_compiler_golden(image_path: Path, mode: str, max_layers: int | No
     return cur.astype(np.float32)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _parsed_fingerprint(parsed_dir: Path | None) -> dict:
+    if parsed_dir is None:
+        return {"parsed_dir": None}
+    parsed_dir = parsed_dir.resolve()
+    network_json = parsed_dir / "network.json"
+    weights_dir = parsed_dir / "weights"
+    weights = []
+    if weights_dir.is_dir():
+        for npz in sorted(weights_dir.glob("*.npz")):
+            weights.append({"name": npz.name, "bytes": npz.stat().st_size})
+    return {
+        "parsed_dir": str(parsed_dir),
+        "network_sha256": _sha256_file(network_json) if network_json.is_file() else None,
+        "weights": weights,
+    }
+
+
+def _golden_cache_identity(
+    image_path: Path,
+    network_name: str,
+    mode: str,
+    max_layers: int | None,
+    parsed_dir: Path | None,
+    *,
+    has_qdq: bool,
+    output_dtype: str,
+) -> dict:
+    return {
+        "image_sha256": _sha256_file(image_path),
+        "image_name": image_path.name,
+        "network": network_name,
+        "mode": mode,
+        "max_layers": max_layers,
+        "parsed": _parsed_fingerprint(parsed_dir),
+        "has_qdq": bool(has_qdq),
+        "output_dtype": str(output_dtype),
+    }
+
+
+def _golden_cache_paths(cache_dir: Path, identity: dict) -> tuple[Path, Path]:
+    blob = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(blob).hexdigest()[:24]
+    stem = cache_dir / digest
+    return stem.with_suffix(".json"), stem.with_suffix(".npz")
+
+
+def _load_golden_cache(cache_dir: Path, identity: dict) -> tuple[np.ndarray, dict[str, np.ndarray]] | None:
+    meta_path, npz_path = _golden_cache_paths(cache_dir, identity)
+    if not meta_path.is_file() or not npz_path.is_file():
+        return None
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("identity") != identity:
+        return None
+    with np.load(npz_path, allow_pickle=False) as npz:
+        primary = np.array(npz["primary"], copy=True)
+        named: dict[str, np.ndarray] = {}
+        for name in meta.get("named_names", []):
+            key = f"named_{name}"
+            if key not in npz.files:
+                return None
+            named[name] = np.array(npz[key], copy=True)
+    print(f"golden cache HIT {npz_path.name}", flush=True)
+    return primary, named
+
+
+def _save_golden_cache(
+    cache_dir: Path,
+    identity: dict,
+    primary: np.ndarray,
+    named: dict[str, np.ndarray],
+) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    meta_path, npz_path = _golden_cache_paths(cache_dir, identity)
+    payload = {"primary": np.asarray(primary)}
+    for name, tensor in named.items():
+        payload[f"named_{name}"] = np.asarray(tensor)
+    # numpy savez_compressed appends .npz unless the path already ends with it.
+    tmp_npz = npz_path.with_name(npz_path.stem + ".tmp.npz")
+    np.savez_compressed(tmp_npz, **payload)
+    tmp_npz.replace(npz_path)
+    meta = {
+        "identity": identity,
+        "named_names": list(named.keys()),
+        "primary_shape": list(primary.shape),
+        "primary_dtype": str(primary.dtype),
+    }
+    tmp_meta = meta_path.with_suffix(".json.tmp")
+    tmp_meta.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp_meta.replace(meta_path)
+    print(f"golden cache STORE {npz_path.name}", flush=True)
+
+
 def _read_blob(path: Path, shape: tuple[int, int, int], dtype: str = "float32") -> np.ndarray:
     dtype_map = {
         "float32": np.float32,
@@ -369,6 +471,11 @@ def main() -> None:
     ap.add_argument("--output", default=None, help="primary output blob")
     ap.add_argument("--output-dir", default=None, help="directory containing named output blobs")
     ap.add_argument("--atol", type=float, default=1e-3)
+    ap.add_argument(
+        "--golden-cache-dir",
+        default=None,
+        help="directory for numpy golden tensors; omit to recompute every image",
+    )
     args = ap.parse_args()
 
     build_dir = Path(args.build_dir)
@@ -385,21 +492,45 @@ def main() -> None:
 
     host = plan["host_io"]
     outputs = host.get("outputs")
-    if "resnet" in network_name:
+    is_resnet = "resnet" in network_name
+    has_qdq = False
+    output_dtype = str(host.get("output_dtype", "float32"))
+    if is_resnet:
         has_qdq = any(
             rec.get("kind") == "qdq"
             for rec in plan.get("wb_layout", {}).get("layers", [])
         )
+        parsed_dir = Path(args.parsed_dir) if args.parsed_dir else None
+    else:
+        parsed_dir = Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else None
+
+    identity = _golden_cache_identity(
+        Path(args.image), network_name, mode, max_layers, parsed_dir,
+        has_qdq=has_qdq, output_dtype=output_dtype,
+    )
+    cache_dir = Path(args.golden_cache_dir) if args.golden_cache_dir else None
+    cached = _load_golden_cache(cache_dir, identity) if cache_dir is not None else None
+    golden_t0 = time.perf_counter()
+    if cached is not None:
+        primary_ref, named_refs = cached
+        print(f"golden cache load {time.perf_counter() - golden_t0:.3f}s", flush=True)
+    elif is_resnet:
         primary_ref = run_resnet_compiler_golden(
             Path(args.image), mode, max_layers, args.parsed_dir,
             quantize_residuals=has_qdq,
-            output_dtype=str(host.get("output_dtype", "float32")),
+            output_dtype=output_dtype,
         )
-        named_refs: dict[str, np.ndarray] = {}
+        named_refs = {}
+        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
+        if cache_dir is not None:
+            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
     else:
         primary_ref, named_refs = run_yolo_compiler_golden(
             Path(args.image), mode, max_layers, args.yolo_parsed_dir,
         )
+        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
+        if cache_dir is not None:
+            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
 
     failed = False
     compared = False

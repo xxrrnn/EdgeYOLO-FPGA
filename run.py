@@ -159,6 +159,12 @@ def _one_shot_tag(network: str, precision: str) -> str:
     return "int8" if network == "resnet" and precision == "vai" else precision
 
 
+def _golden_cache_dir(args: argparse.Namespace) -> Path | None:
+    if getattr(args, "no_golden_cache", False):
+        return None
+    return OUT_DIR / "golden_cache"
+
+
 def _hardware_mode(network: str, precision: str) -> str:
     if network == "resnet" and precision == "vai":
         return "int8"
@@ -206,6 +212,7 @@ def run_one_shot_fpga(
     yolo_expect_detections: int | None = 1,
     resnet_expect_top1: int | None = 1,
     result_group: str | None = None,
+    golden_cache_dir: Path | None = None,
 ) -> Path:
     """Run a full one-shot FPGA workload, compare features, and run the host boundary."""
     runtime = REPO_ROOT / "tests" / "chip" / "runtime"
@@ -273,6 +280,8 @@ def run_one_shot_fpga(
         compare_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
     if network == "resnet" and resnet_parsed_dir is not None:
         compare_cmd.extend(["--parsed-dir", str(resnet_parsed_dir)])
+    if golden_cache_dir is not None:
+        compare_cmd.extend(["--golden-cache-dir", str(golden_cache_dir)])
     _run_checked(compare_cmd)
 
     head_cmd = [
@@ -578,6 +587,7 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                         yolo_parsed_dir=Path(yolo_profile["parsed"][precision]),
                         yolo_expect_detections=None,
                         result_group="acceptance/yolo_coco",
+                        golden_cache_dir=_golden_cache_dir(args),
                     )
                     base = out_root / "acceptance" / "yolo_coco" / f"one_shot_{tag}"
                     result = json.loads((base / f"{image.stem}_yolo_{tag}_fpga_oneshot.json").read_text())
@@ -627,6 +637,7 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                         resnet_parsed_dir=parsed_override,
                         resnet_expect_top1=None,
                         result_group="acceptance/resnet",
+                        golden_cache_dir=_golden_cache_dir(args),
                     )
                     base = out_root / "acceptance" / "resnet" / f"one_shot_{tag}"
                     result = json.loads((base / f"{image.stem}_resnet_{tag}_fpga_oneshot.json").read_text())
@@ -741,6 +752,8 @@ def parse_args() -> argparse.Namespace:
                     help="C2H readback chunk size for one-shot named outputs; lower this if XDMA C2H is unstable")
     ap.add_argument("--one-shot-compare-atol", type=float, default=None,
                     help="feature absolute tolerance; auto=0.01 for YOLO native W16A16, 1e-3 otherwise")
+    ap.add_argument("--no-golden-cache", action="store_true",
+                    help="recompute numpy golden for every image instead of using output/golden_cache")
     ap.add_argument("--one-shot-no-soft-reset", action="store_true",
                     help="do not issue decoder soft reset before one-shot execution")
     ap.add_argument("--one-shot-recompile", action="store_true",
@@ -912,6 +925,7 @@ def main() -> int:
                 resnet_parsed_dir=resnet_parsed_dir if network == "resnet" else None,
                 yolo_expect_detections=yolo_expect if network == "yolo" else None,
                 result_group=result_group,
+                golden_cache_dir=_golden_cache_dir(args),
             )
             tag = _one_shot_tag(network, precision)
             timing_path = one_shot_out_root / result_group / f"one_shot_{tag}" / f"{image.stem}_{network}_{tag}_fpga_oneshot_timing.json"
