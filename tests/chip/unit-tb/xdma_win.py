@@ -81,8 +81,8 @@ REGS_BASE = 0x1_0500_0000
 
 DEFAULT_TIMEOUT_S = 60.0
 XDMA_SUBPROC_TIMEOUT_S = 30.0
-# This bitstream hangs C2H at length >= 4096 (HBM and on-chip BRAM). 256 B is proven safe.
-C2H_CHUNK_BYTES = 256
+# This bitstream hangs C2H at length >= 4096. 2048 B is proven on-board; 256 B was the conservative default.
+C2H_CHUNK_BYTES = 2048
 CASE_TIMEOUTS: dict[tuple[str, str], float] = {
     ("im2col", "im2col_6x6_s2_c3"): 180.0,
     ("im2col", "im2col_3x3_s2_c32"): 180.0,
