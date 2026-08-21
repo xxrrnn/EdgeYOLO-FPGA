@@ -95,6 +95,7 @@ def _install_unit_tb_run_module() -> None:
 
 def _setup_imports() -> None:
     sys.path.insert(0, str(UNIT_TB))
+    sys.path.insert(0, str(REPO_ROOT / "tests" / "chip" / "runtime"))
     sys.path.insert(0, str(REPO_ROOT / "rtl" / "tb" / "lite_bd" / "module_tb"))
     sys.path.insert(0, str(REPO_ROOT / "tools"))
     _install_unit_tb_run_module()
@@ -213,6 +214,7 @@ def run_one_shot_fpga(
     resnet_expect_top1: int | None = 1,
     result_group: str | None = None,
     golden_cache_dir: Path | None = None,
+    session=None,
 ) -> Path:
     """Run a full one-shot FPGA workload, compare features, and run the host boundary."""
     runtime = REPO_ROOT / "tests" / "chip" / "runtime"
@@ -246,26 +248,34 @@ def run_one_shot_fpga(
     if named_outputs:
         feat_dir.mkdir(parents=True, exist_ok=True)
 
-    run_cmd = [
-        sys.executable, str(runtime / "hw_runner_win.py"),
-        "--build-dir", str(build_dir),
-        "--output", str(primary),
-        "--poll-timeout-s", str(poll_timeout_s),
-        "--read-chunk-bytes", str(read_chunk_bytes),
-        "--timing-json", str(timing_json),
-    ]
-    run_cmd.extend(["--yolo-image" if network == "yolo" else "--resnet-image", str(img_path)])
-    if named_outputs:
-        run_cmd.extend(["--output-dir", str(feat_dir)])
-    if network == "yolo" and yolo_parsed_dir is not None:
-        run_cmd.extend(["--yolo-parsed-dir", str(yolo_parsed_dir)])
-    if network == "resnet" and resnet_parsed_dir is not None:
-        run_cmd.extend(["--resnet-parsed-dir", str(resnet_parsed_dir)])
-    if quiet_xdma:
-        run_cmd.append("--quiet-xdma")
-    if soft_reset:
-        run_cmd.append("--soft-reset-decoder")
-    _run_checked(run_cmd)
+    import hw_runner_win
+    hw_session = session
+    close_session = False
+    if hw_session is None:
+        hw_session = hw_runner_win.HardwareSession(
+            build_dir,
+            quiet_xdma=quiet_xdma,
+            soft_reset=soft_reset,
+            poll_timeout_s=poll_timeout_s,
+            read_chunk_bytes=read_chunk_bytes,
+        )
+        close_session = True
+    try:
+        input_bytes = hw_session.prepare_input(
+            yolo_image=img_path if network == "yolo" else None,
+            resnet_image=img_path if network == "resnet" else None,
+            yolo_parsed_dir=yolo_parsed_dir,
+            resnet_parsed_dir=resnet_parsed_dir,
+        )
+        hw_session.run(
+            input_bytes, primary,
+            feat_dir if named_outputs else None,
+            timing_json,
+            reuse_program=True,
+        )
+    finally:
+        if close_session:
+            hw_session.close()
 
     compare_cmd = [
         sys.executable, str(runtime / "compare_one_shot.py"),
@@ -561,99 +571,132 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
     if "yolo" in networks:
         _, coco_images = _load_examples(COCO_MANIFEST, limit)
         yolo_profile = YOLO_ONE_SHOT_PROFILES["coco"]
-        for item in coco_images:
-            for precision in yolo_precisions:
-                tag = _one_shot_tag("yolo", precision)
-                image = Path(item["path"])
-                started = time.time()
-                record = {
-                    "network": "yolov5n_coco",
-                    "precision": tag,
-                    "image": image.name,
-                    "image_id": item.get("image_id"),
-                }
-                try:
-                    run_one_shot_fpga(
-                        "yolo", precision, image, out_root,
-                        build_dir=Path(yolo_profile["builds"][precision]),
-                        conf=args.conf,
-                        iou=args.iou,
-                        poll_timeout_s=args.one_shot_poll_timeout_s,
-                        read_chunk_bytes=args.one_shot_read_chunk_bytes,
-                        compare_atol=args.one_shot_compare_atol,
-                        quiet_xdma=not args.verbose_xdma,
-                        soft_reset=not args.one_shot_no_soft_reset,
-                        recompile=False,
-                        yolo_parsed_dir=Path(yolo_profile["parsed"][precision]),
-                        yolo_expect_detections=None,
-                        result_group="acceptance/yolo_coco",
-                        golden_cache_dir=_golden_cache_dir(args),
-                    )
-                    base = out_root / "acceptance" / "yolo_coco" / f"one_shot_{tag}"
-                    result = json.loads((base / f"{image.stem}_yolo_{tag}_fpga_oneshot.json").read_text())
-                    timing = json.loads((base / f"{image.stem}_yolo_{tag}_fpga_oneshot_timing.json").read_text())
-                    record.update({
-                        "status": "PASS",
-                        "detections": len(result.get("detections", [])),
-                        "timing_s": timing,
-                    })
-                except Exception as exc:  # continue to expose every failing image in one report
-                    record.update({"status": "FAIL", "error": f"{type(exc).__name__}: {exc}"})
-                record["wall_s"] = time.time() - started
-                cases.append(record)
+        import hw_runner_win
+        for precision in yolo_precisions:
+            tag = _one_shot_tag("yolo", precision)
+            build_dir = Path(yolo_profile["builds"][precision])
+            parsed_dir = Path(yolo_profile["parsed"][precision])
+            if not (build_dir / "plan.json").exists():
+                print(f"  [compile] missing {build_dir / 'plan.json'}, compiling YOLO {tag.upper()}", flush=True)
+                _compile_one_shot_artifact("yolo", precision, build_dir, parsed_dir)
+            session = hw_runner_win.HardwareSession(
+                build_dir,
+                quiet_xdma=not args.verbose_xdma,
+                soft_reset=not args.one_shot_no_soft_reset,
+                poll_timeout_s=args.one_shot_poll_timeout_s,
+                read_chunk_bytes=args.one_shot_read_chunk_bytes,
+            )
+            try:
+                for item in coco_images:
+                    image = Path(item["path"])
+                    started = time.time()
+                    record = {
+                        "network": "yolov5n_coco",
+                        "precision": tag,
+                        "image": image.name,
+                        "image_id": item.get("image_id"),
+                    }
+                    try:
+                        run_one_shot_fpga(
+                            "yolo", precision, image, out_root,
+                            build_dir=build_dir,
+                            conf=args.conf,
+                            iou=args.iou,
+                            poll_timeout_s=args.one_shot_poll_timeout_s,
+                            read_chunk_bytes=args.one_shot_read_chunk_bytes,
+                            compare_atol=args.one_shot_compare_atol,
+                            quiet_xdma=not args.verbose_xdma,
+                            soft_reset=False,
+                            recompile=False,
+                            yolo_parsed_dir=parsed_dir,
+                            yolo_expect_detections=None,
+                            result_group="acceptance/yolo_coco",
+                            golden_cache_dir=_golden_cache_dir(args),
+                            session=session,
+                        )
+                        base = out_root / "acceptance" / "yolo_coco" / f"one_shot_{tag}"
+                        result = json.loads((base / f"{image.stem}_yolo_{tag}_fpga_oneshot.json").read_text())
+                        timing = json.loads((base / f"{image.stem}_yolo_{tag}_fpga_oneshot_timing.json").read_text())
+                        record.update({
+                            "status": "PASS",
+                            "detections": len(result.get("detections", [])),
+                            "timing_s": timing,
+                        })
+                    except Exception as exc:
+                        record.update({"status": "FAIL", "error": f"{type(exc).__name__}: {exc}"})
+                    record["wall_s"] = time.time() - started
+                    cases.append(record)
+            finally:
+                session.close()
 
     if "resnet" in networks:
         _, imagenet_images = _load_examples(IMAGENET_MANIFEST, limit)
-        for item in imagenet_images:
-            for precision in resnet_precisions:
-                tag = _one_shot_tag("resnet", precision)
-                image = Path(item["path"])
-                started = time.time()
-                record = {
-                    "network": "resnet18_imagenet",
-                    "precision": tag,
-                    "image": image.name,
-                    "synset": item.get("synset"),
-                    "expected_class_id": item.get("class_id"),
-                    "expected_label": item.get("label"),
-                }
-                try:
-                    parsed_override = (
-                        Path(args.one_shot_resnet_parsed_dir)
-                        if args.one_shot_resnet_parsed_dir and precision == "int16"
-                        else ONE_SHOT_COMPILE_PARSED[("resnet", precision)]
-                    )
-                    run_one_shot_fpga(
-                        "resnet", precision, image, out_root,
-                        build_dir=ONE_SHOT_DEFAULT_BUILDS[("resnet", precision)],
-                        conf=args.conf,
-                        iou=args.iou,
-                        poll_timeout_s=args.one_shot_poll_timeout_s,
-                        read_chunk_bytes=args.one_shot_read_chunk_bytes,
-                        compare_atol=args.one_shot_compare_atol,
-                        quiet_xdma=not args.verbose_xdma,
-                        soft_reset=not args.one_shot_no_soft_reset,
-                        recompile=False,
-                        resnet_parsed_dir=parsed_override,
-                        resnet_expect_top1=None,
-                        result_group="acceptance/resnet",
-                        golden_cache_dir=_golden_cache_dir(args),
-                    )
-                    base = out_root / "acceptance" / "resnet" / f"one_shot_{tag}"
-                    result = json.loads((base / f"{image.stem}_resnet_{tag}_fpga_oneshot.json").read_text())
-                    timing = json.loads((base / f"{image.stem}_resnet_{tag}_fpga_oneshot_timing.json").read_text())
-                    top1 = result["topk"][0]
-                    record.update({
-                        "status": "PASS",
-                        "top1_class_id": int(top1["class_id"]),
-                        "top1_class_name": top1["class_name"],
-                        "top1_matches_sample_label": int(top1["class_id"]) == int(item["class_id"]),
-                        "timing_s": timing,
-                    })
-                except Exception as exc:
-                    record.update({"status": "FAIL", "error": f"{type(exc).__name__}: {exc}"})
-                record["wall_s"] = time.time() - started
-                cases.append(record)
+        import hw_runner_win
+        for precision in resnet_precisions:
+            tag = _one_shot_tag("resnet", precision)
+            parsed_override = (
+                Path(args.one_shot_resnet_parsed_dir)
+                if args.one_shot_resnet_parsed_dir and precision == "int16"
+                else ONE_SHOT_COMPILE_PARSED[("resnet", precision)]
+            )
+            build_dir = ONE_SHOT_DEFAULT_BUILDS[("resnet", precision)]
+            if not (build_dir / "plan.json").exists():
+                print(f"  [compile] missing {build_dir / 'plan.json'}, compiling ResNet {tag.upper()}", flush=True)
+                _compile_one_shot_artifact("resnet", precision, build_dir, parsed_override)
+            session = hw_runner_win.HardwareSession(
+                build_dir,
+                quiet_xdma=not args.verbose_xdma,
+                soft_reset=not args.one_shot_no_soft_reset,
+                poll_timeout_s=args.one_shot_poll_timeout_s,
+                read_chunk_bytes=args.one_shot_read_chunk_bytes,
+            )
+            try:
+                for item in imagenet_images:
+                    image = Path(item["path"])
+                    started = time.time()
+                    record = {
+                        "network": "resnet18_imagenet",
+                        "precision": tag,
+                        "image": image.name,
+                        "synset": item.get("synset"),
+                        "expected_class_id": item.get("class_id"),
+                        "expected_label": item.get("label"),
+                    }
+                    try:
+                        run_one_shot_fpga(
+                            "resnet", precision, image, out_root,
+                            build_dir=build_dir,
+                            conf=args.conf,
+                            iou=args.iou,
+                            poll_timeout_s=args.one_shot_poll_timeout_s,
+                            read_chunk_bytes=args.one_shot_read_chunk_bytes,
+                            compare_atol=args.one_shot_compare_atol,
+                            quiet_xdma=not args.verbose_xdma,
+                            soft_reset=False,
+                            recompile=False,
+                            resnet_parsed_dir=parsed_override,
+                            resnet_expect_top1=None,
+                            result_group="acceptance/resnet",
+                            golden_cache_dir=_golden_cache_dir(args),
+                            session=session,
+                        )
+                        base = out_root / "acceptance" / "resnet" / f"one_shot_{tag}"
+                        result = json.loads((base / f"{image.stem}_resnet_{tag}_fpga_oneshot.json").read_text())
+                        timing = json.loads((base / f"{image.stem}_resnet_{tag}_fpga_oneshot_timing.json").read_text())
+                        top1 = result["topk"][0]
+                        record.update({
+                            "status": "PASS",
+                            "top1_class_id": int(top1["class_id"]),
+                            "top1_class_name": top1["class_name"],
+                            "top1_matches_sample_label": int(top1["class_id"]) == int(item["class_id"]),
+                            "timing_s": timing,
+                        })
+                    except Exception as exc:
+                        record.update({"status": "FAIL", "error": f"{type(exc).__name__}: {exc}"})
+                    record["wall_s"] = time.time() - started
+                    cases.append(record)
+            finally:
+                session.close()
 
     vcs = run_vcs_peak(mode=args.vcs, server=args.vcs_server, remote_repo=args.vcs_remote_repo)
     failed = sum(case["status"] != "PASS" for case in cases)
@@ -833,7 +876,11 @@ def main() -> int:
         return [raw]
 
     yolo_precisions = _expand(yolo_raw, ["int8", "int16"])
-    resnet_precisions = _expand(resnet_raw, ["vai", "int16"])
+    if resnet_raw == "both":
+        native = ONE_SHOT_COMPILE_PARSED[("resnet", "int16")] / "network.json"
+        resnet_precisions = ["vai", "int16"] if native.is_file() else ["vai", "int16_widened"]
+    else:
+        resnet_precisions = [resnet_raw]
 
     if args.one_shot_yolo_int8:
         args.one_shot = True

@@ -244,6 +244,221 @@ def _finalize_timing(timing: dict, total_t0: float, timing_json: str | None) -> 
         print(f"[win] wrote timing {timing_json}")
 
 
+class HardwareSession:
+    """Keep XDMA open and upload weights/WB once across many images."""
+
+    def __init__(
+        self,
+        build_dir: Path,
+        *,
+        quiet_xdma: bool = True,
+        soft_reset: bool = True,
+        poll_timeout_s: float = 120.0,
+        poll_interval_s: float = 0.05,
+        read_chunk_bytes: int = 0x20000,
+        write_chunk_bytes: int = 0x100000,
+        force_start_when_busy: bool = False,
+    ) -> None:
+        self.build_dir = Path(build_dir)
+        self.poll_timeout_s = poll_timeout_s
+        self.poll_interval_s = poll_interval_s
+        self.read_chunk_bytes = read_chunk_bytes
+        self.write_chunk_bytes = write_chunk_bytes
+        self.force_start_when_busy = force_start_when_busy
+        self.plan = json.loads((self.build_dir / "plan.json").read_text())
+        self.mode = plan_mode(self.plan)
+        am = self.plan["address_map"]
+        self.obuf_base = int(am["obuf_base"])
+        self.hbm_base = int(am.get("hbm_base", 0))
+        self.programs = load_programs(self.build_dir)
+        self.weights = (
+            (self.build_dir / "weights.bin").read_bytes()
+            if (self.build_dir / "weights.bin").exists() else b""
+        )
+        self.wb_blob = (
+            (self.build_dir / "wb.bin").read_bytes()
+            if (self.build_dir / "wb.bin").exists() else b""
+        )
+        self.xdma = XDMAWin(verbose=not quiet_xdma)
+        if soft_reset:
+            st_after_reset = soft_reset_decoder(self.xdma)
+            print(f"[win] after decoder soft reset DECODER_STATUS=0x{st_after_reset:08x}")
+        self.initial_status = self.xdma.read_u32(REGS_BASE + REG_DECODER_STATUS)
+        print(f"[win] initial DECODER_STATUS=0x{self.initial_status:08x}")
+        if (self.initial_status & 0x1) and not force_start_when_busy:
+            self.close()
+            raise RuntimeError(
+                f"decoder is already busy (DECODER_STATUS=0x{self.initial_status:08x}); "
+                "reset/reprogram the FPGA before running a new compiled plan"
+            )
+        self._static_uploaded = False
+        self._static_timing = {
+            "upload_weights_s": 0.0,
+            "upload_wb_s": 0.0,
+            "zero_obuf_s": 0.0,
+        }
+
+    def close(self) -> None:
+        xdma = getattr(self, "xdma", None)
+        if xdma is not None:
+            xdma.close()
+            self.xdma = None
+
+    def __enter__(self) -> "HardwareSession":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def prepare_input(
+        self,
+        *,
+        input_path: Path | None = None,
+        yolo_image: Path | None = None,
+        resnet_image: Path | None = None,
+        yolo_parsed_dir: Path | None = None,
+        resnet_parsed_dir: Path | None = None,
+    ) -> bytes:
+        if input_path is not None:
+            raw = Path(input_path).read_bytes()
+        elif yolo_image is not None:
+            raw = make_yolo_input(Path(yolo_image), self.mode, yolo_parsed_dir)
+        elif resnet_image is not None:
+            raw = make_resnet_input(Path(resnet_image), self.mode, resnet_parsed_dir)
+        else:
+            raise ValueError("provide input_path, yolo_image, or resnet_image")
+        return _pad_nhwc_input(raw, self.plan, self.mode)
+
+    def _upload_static(self) -> None:
+        if self._static_uploaded:
+            return
+        xdma = self.xdma
+        assert xdma is not None
+        zero_regions = self.plan.get("host_io", {}).get("zero_obuf_regions", [])
+        if zero_regions:
+            self._static_timing["zero_obuf_s"] = zero_obuf_regions(
+                xdma, self.obuf_base, zero_regions, self.write_chunk_bytes
+            )
+        if self.weights:
+            off = int(self.plan.get("host_io", {}).get("weights_hbm_off", 0x200000))
+            print(f"[win] upload weights once: {len(self.weights)} bytes -> HBM 0x{self.hbm_base + off:x}")
+            t0 = time.perf_counter()
+            write_chunked(xdma, self.hbm_base + off, self.weights, self.write_chunk_bytes)
+            verify_write_tail(xdma, self.hbm_base + off, len(self.weights))
+            self._static_timing["upload_weights_s"] = time.perf_counter() - t0
+        if self.wb_blob:
+            scratch_map = self.plan.get("wb_layout", {}).get("scratch_off_by_layer", {})
+            scratch_off = min(int(v) for v in scratch_map.values()) if scratch_map else 0x7C0000
+            print(f"[win] upload wb scratch: {len(self.wb_blob)} bytes -> VPU_BUF 0x{self.obuf_base + scratch_off:x}")
+            t0 = time.perf_counter()
+            write_chunked(xdma, self.obuf_base + scratch_off, self.wb_blob, self.write_chunk_bytes)
+            verify_write_tail(xdma, self.obuf_base + scratch_off, len(self.wb_blob))
+            self._static_timing["upload_wb_s"] = time.perf_counter() - t0
+        self._static_uploaded = True
+
+    def run(
+        self,
+        input_bytes: bytes,
+        output: Path,
+        output_dir: Path | None = None,
+        timing_json: Path | None = None,
+        reuse_program: bool = True,
+    ) -> dict:
+        xdma = self.xdma
+        if xdma is None:
+            raise RuntimeError("HardwareSession is closed")
+        total_t0 = time.perf_counter()
+        self._upload_static()
+        timing = {
+            "build_dir": str(self.build_dir),
+            "network": self.plan.get("network"),
+            "mode": self.plan.get("mode", self.plan.get("compile_meta", {}).get("mode")),
+            "initial_decoder_status": self.initial_status,
+            "weights_bytes": len(self.weights),
+            "wb_bytes": len(self.wb_blob),
+            "input_bytes": len(input_bytes),
+            "segments": [],
+            "outputs": [],
+            "reused_static": True,
+            **self._static_timing,
+        }
+        in_off = int(self.plan["host_io"]["input_obuf_off"])
+        print(f"[win] upload input: {len(input_bytes)} bytes -> VPU_BUF 0x{self.obuf_base + in_off:x}")
+        t0 = time.perf_counter()
+        write_chunked(xdma, self.obuf_base + in_off, input_bytes, self.write_chunk_bytes)
+        verify_write_tail(xdma, self.obuf_base + in_off, len(input_bytes))
+        timing["upload_input_s"] = time.perf_counter() - t0
+
+        skip_program = reuse_program and getattr(self, "_program_resident", False)
+        for idx, path, program in self.programs:
+            print(f"[win] {'keep' if skip_program else 'upload'} segment {idx}: {len(program)} bytes ({path.name}) -> INST 0x{INST_BASE:x}")
+            seg = {
+                "index": idx,
+                "path": str(path),
+                "bytes": len(program),
+                "words": len(program) // 4,
+            }
+            timing["segments"].append(seg)
+            t0 = time.perf_counter()
+            try:
+                if not skip_program:
+                    write_chunked(xdma, INST_BASE, program, self.write_chunk_bytes)
+                    verify_write_tail(xdma, INST_BASE, len(program))
+                    seg["upload_s"] = time.perf_counter() - t0
+                else:
+                    seg["upload_s"] = 0.0
+                # Multi-segment programs overwrite INST_BRAM each segment, so only
+                # a single-segment program can stay resident across images.
+                if len(self.programs) > 1:
+                    skip_program = False
+                seg["execute_s"] = start_and_poll(
+                    xdma, len(program) // 4, self.poll_timeout_s, f"segment {idx}",
+                    poll_interval_s=self.poll_interval_s,
+                )
+            except Exception as exc:
+                seg.setdefault("upload_s", time.perf_counter() - t0)
+                seg["error"] = f"{type(exc).__name__}: {exc}"
+                timing["failed_segment"] = idx
+                timing["error"] = seg["error"]
+                _finalize_timing(timing, total_t0, str(timing_json) if timing_json else None)
+                raise
+        self._program_resident = len(self.programs) == 1
+
+        outputs = output_specs(self.plan)
+        primary = outputs[-1]
+        out_off = int(primary["obuf_off"])
+        nbytes = output_nbytes(primary)
+        print(f"[win] read output {primary['name']}: {nbytes} bytes <- VPU_BUF 0x{self.obuf_base + out_off:x}")
+        t0 = time.perf_counter()
+        data = read_chunked(xdma, self.obuf_base + out_off, nbytes, self.read_chunk_bytes)
+        read_s = time.perf_counter() - t0
+        timing["outputs"].append({"name": primary["name"], "bytes": nbytes, "read_s": read_s})
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_bytes(data)
+        print(f"[win] wrote {output}")
+
+        if output_dir:
+            out_dir = Path(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for spec in outputs:
+                name = str(spec["name"]).replace("/", "_").replace("\\", "_")
+                path = out_dir / f"{name}.bin"
+                if spec is primary:
+                    blob = data
+                else:
+                    off = int(spec["obuf_off"])
+                    nb = output_nbytes(spec)
+                    print(f"[win] read output {name}: {nb} bytes <- VPU_BUF 0x{self.obuf_base + off:x}")
+                    t0 = time.perf_counter()
+                    blob = read_chunked(xdma, self.obuf_base + off, nb, self.read_chunk_bytes)
+                    timing["outputs"].append({"name": name, "bytes": nb, "read_s": time.perf_counter() - t0})
+                path.write_bytes(blob)
+                print(f"[win] wrote {path}")
+
+        _finalize_timing(timing, total_t0, str(timing_json) if timing_json else None)
+        return timing
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -283,153 +498,40 @@ def main() -> None:
                     help="optional path to write upload/execute/readback timing summary")
     args = ap.parse_args()
 
-    total_t0 = time.perf_counter()
-    build_dir = Path(args.build_dir)
-    plan = json.loads((build_dir / "plan.json").read_text())
-    am = plan["address_map"]
-    obuf_base = int(am["obuf_base"])
-    hbm_base = int(am.get("hbm_base", 0))
-
-    xdma = XDMAWin(verbose=not args.quiet_xdma)
-    if args.soft_reset_decoder:
-        st_after_reset = soft_reset_decoder(xdma)
-        print(f"[win] after decoder soft reset DECODER_STATUS=0x{st_after_reset:08x}")
-    initial_status = xdma.read_u32(REGS_BASE + REG_DECODER_STATUS)
-    print(f"[win] initial DECODER_STATUS=0x{initial_status:08x}")
-    if args.status_only:
-        return
-    if (initial_status & 0x1) and not args.force_start_when_busy:
-        raise SystemExit(
-            f"decoder is already busy (DECODER_STATUS=0x{initial_status:08x}); "
-            "reset/reprogram the FPGA before running a new compiled plan"
+    session = HardwareSession(
+        Path(args.build_dir),
+        quiet_xdma=args.quiet_xdma,
+        soft_reset=args.soft_reset_decoder,
+        poll_timeout_s=args.poll_timeout_s,
+        poll_interval_s=args.poll_interval_s,
+        read_chunk_bytes=args.read_chunk_bytes,
+        write_chunk_bytes=args.write_chunk_bytes,
+        force_start_when_busy=args.force_start_when_busy,
+    )
+    try:
+        if args.status_only:
+            return
+        if not args.output:
+            raise SystemExit("provide --output unless --status-only is used")
+        input_bytes = session.prepare_input(
+            input_path=Path(args.input) if args.input else None,
+            yolo_image=Path(args.yolo_image) if args.yolo_image else None,
+            resnet_image=Path(args.resnet_image) if args.resnet_image else None,
+            yolo_parsed_dir=Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else None,
+            resnet_parsed_dir=Path(args.resnet_parsed_dir) if args.resnet_parsed_dir else None,
         )
-    if not args.output:
-        raise SystemExit("provide --output unless --status-only is used")
-
-    mode = plan_mode(plan)
-    if args.input:
-        input_bytes = Path(args.input).read_bytes()
-    elif args.yolo_image:
-        input_bytes = make_yolo_input(
-            Path(args.yolo_image), mode,
-            Path(args.yolo_parsed_dir) if args.yolo_parsed_dir else None,
+        session.run(
+            input_bytes,
+            Path(args.output),
+            Path(args.output_dir) if args.output_dir else None,
+            Path(args.timing_json) if args.timing_json else None,
+            reuse_program=False,
         )
-    elif args.resnet_image:
-        input_bytes = make_resnet_input(
-            Path(args.resnet_image), mode,
-            Path(args.resnet_parsed_dir) if args.resnet_parsed_dir else None,
-        )
-    else:
-        raise SystemExit("provide --input, --yolo-image, or --resnet-image")
-    input_bytes = _pad_nhwc_input(input_bytes, plan, mode)
-
-    programs = load_programs(build_dir)
-    weights = (build_dir / "weights.bin").read_bytes() if (build_dir / "weights.bin").exists() else b""
-    wb_blob = (build_dir / "wb.bin").read_bytes() if (build_dir / "wb.bin").exists() else b""
-
-    timing = {
-        "build_dir": str(build_dir),
-        "network": plan.get("network"),
-        "mode": plan.get("mode", plan.get("compile_meta", {}).get("mode")),
-        "initial_decoder_status": initial_status,
-        "weights_bytes": len(weights),
-        "wb_bytes": len(wb_blob),
-        "input_bytes": len(input_bytes),
-        "segments": [],
-        "outputs": [],
-    }
-    zero_regions = plan.get("host_io", {}).get("zero_obuf_regions", [])
-    if zero_regions:
-        timing["zero_obuf_s"] = zero_obuf_regions(xdma, obuf_base, zero_regions, args.write_chunk_bytes)
-    else:
-        timing["zero_obuf_s"] = 0.0
-
-    if weights:
-        off = int(plan.get("host_io", {}).get("weights_hbm_off", 0x200000))
-        print(f"[win] upload weights once: {len(weights)} bytes -> HBM 0x{hbm_base + off:x}")
-        t0 = time.perf_counter()
-        write_chunked(xdma, hbm_base + off, weights, args.write_chunk_bytes)
-        verify_write_tail(xdma, hbm_base + off, len(weights))
-        timing["upload_weights_s"] = time.perf_counter() - t0
-    else:
-        timing["upload_weights_s"] = 0.0
-
-    if wb_blob:
-        scratch_map = plan.get("wb_layout", {}).get("scratch_off_by_layer", {})
-        scratch_off = min(int(v) for v in scratch_map.values()) if scratch_map else 0x7C0000
-        print(f"[win] upload wb scratch: {len(wb_blob)} bytes -> VPU_BUF 0x{obuf_base + scratch_off:x}")
-        t0 = time.perf_counter()
-        write_chunked(xdma, obuf_base + scratch_off, wb_blob, args.write_chunk_bytes)
-        verify_write_tail(xdma, obuf_base + scratch_off, len(wb_blob))
-        timing["upload_wb_s"] = time.perf_counter() - t0
-    else:
-        timing["upload_wb_s"] = 0.0
-
-    in_off = int(plan["host_io"]["input_obuf_off"])
-    print(f"[win] upload input: {len(input_bytes)} bytes -> VPU_BUF 0x{obuf_base + in_off:x}")
-    t0 = time.perf_counter()
-    write_chunked(xdma, obuf_base + in_off, input_bytes, args.write_chunk_bytes)
-    verify_write_tail(xdma, obuf_base + in_off, len(input_bytes))
-    timing["upload_input_s"] = time.perf_counter() - t0
-
-    for idx, path, program in programs:
-        print(f"[win] upload segment {idx}: {len(program)} bytes ({path.name}) -> INST 0x{INST_BASE:x}")
-        seg = {
-            "index": idx,
-            "path": str(path),
-            "bytes": len(program),
-            "words": len(program) // 4,
-        }
-        timing["segments"].append(seg)
-        t0 = time.perf_counter()
-        try:
-            write_chunked(xdma, INST_BASE, program, args.write_chunk_bytes)
-            verify_write_tail(xdma, INST_BASE, len(program))
-            seg["upload_s"] = time.perf_counter() - t0
-            seg["execute_s"] = start_and_poll(
-                xdma, len(program) // 4, args.poll_timeout_s, f"segment {idx}",
-                poll_interval_s=args.poll_interval_s,
-            )
-        except Exception as exc:
-            seg.setdefault("upload_s", time.perf_counter() - t0)
-            seg["error"] = f"{type(exc).__name__}: {exc}"
-            timing["failed_segment"] = idx
-            timing["error"] = seg["error"]
-            _finalize_timing(timing, total_t0, args.timing_json)
-            raise
-
-    outputs = output_specs(plan)
-    primary = outputs[-1]
-    out_off = int(primary["obuf_off"])
-    nbytes = output_nbytes(primary)
-    print(f"[win] read output {primary['name']}: {nbytes} bytes <- VPU_BUF 0x{obuf_base + out_off:x}")
-    t0 = time.perf_counter()
-    data = read_chunked(xdma, obuf_base + out_off, nbytes, args.read_chunk_bytes)
-    read_s = time.perf_counter() - t0
-    timing["outputs"].append({"name": primary["name"], "bytes": nbytes, "read_s": read_s})
-    Path(args.output).write_bytes(data)
-    print(f"[win] wrote {args.output}")
-
-    if args.output_dir:
-        out_dir = Path(args.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for spec in outputs:
-            name = str(spec["name"]).replace("/", "_").replace("\\", "_")
-            path = out_dir / f"{name}.bin"
-            if spec is primary:
-                blob = data
-            else:
-                off = int(spec["obuf_off"])
-                nb = output_nbytes(spec)
-                print(f"[win] read output {name}: {nb} bytes <- VPU_BUF 0x{obuf_base + off:x}")
-                t0 = time.perf_counter()
-                blob = read_chunked(xdma, obuf_base + off, nb, args.read_chunk_bytes)
-                timing["outputs"].append({"name": name, "bytes": nb, "read_s": time.perf_counter() - t0})
-            path.write_bytes(blob)
-            print(f"[win] wrote {path}")
-
-    _finalize_timing(timing, total_t0, args.timing_json)
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":
     main()
+
+
