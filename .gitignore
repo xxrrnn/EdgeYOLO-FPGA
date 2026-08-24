@@ -1,100 +1,85 @@
 # ==============================================================================
 # EdgeYOLO-FPGA source whitelist
 # ==============================================================================
-# The repo generates many large files. Keep source files visible, keep generated
-# artifacts local unless they are explicitly force-added for a milestone.
-
 *
 !*/
 
-# Root project files
 !.gitignore
 !.gitattributes
-!Makefile
-!makefile
 !README.md
 !README*
+!requirements*.txt
+!Makefile
+!makefile
+
+# Deployment image at repo root
+!/top.bit
+!/top.ltx
+
+# Source and tests
+!project/
+!project/**/
+!test/
+!test/**/
+
 !*.md
 !*.py
 !*.sh
 !*.tcl
 !*.f
-!*.data
-!*.gtkw
-!requirements*.txt
+!*.sv
+!*.svh
+!*.v
+!*.vh
+!*.vhd
+!*.cpp
+!*.h
+!*.xdc
+!*.yaml
+!*.yml
+!*.json
+!*.cfg
+!*.jpg
+!*.JPEG
+!*.exe
 
-# Final project documents (render intermediates remain under ignored tmp/).
-!docs/**/*.docx
-
-# Source trees
-!rtl/
-!rtl/**/
-!rtl/**/*.v
-!rtl/**/*.sv
-!rtl/**/*.svh
-!rtl/**/*.vh
-!rtl/**/*.vhd
-!rtl/**/*.cpp
-!rtl/**/*.h
-!rtl/**/.gitignore
-
-!scripts/
-!scripts/**/
-!scripts/**/*.tcl
-!scripts/**/*.sh
-!scripts/**/*.py
-
-!tools/
-!tools/**/
-!tools/**/*.py
-!tools/**/*.sh
-!tools/**/*.tcl
-!tools/Makefile
-
-!tests/
-!tests/**/
-!tests/**/*.py
-!tests/**/*.sh
-!tests/**/*.yaml
-!tests/**/*.yml
-!tests/bin/*.exe
-
-# Reproducible TEST harness sources and configuration files.
-!TEST/**/*.sv
-!TEST/**/*.py
-!TEST/**/*.sh
-!TEST/**/*.tcl
-!TEST/**/*.md
-!TEST/**/*.cfg
-!TEST/**/*.cpp
-!TEST/**/*.h
-
-!xdc/
-!xdc/**/
-!xdc/**/*.xdc
-
-# Model metadata and checked-in parsed weights used by current flows.
-!model/
-!model/**/
-!model/**/*.md
-!model/**/*.json
-!model/**/*.yaml
-!model/**/*.yml
-!model/model_inputs_manifest.json
-!model/resnet18/parsed_vai/weights/*.npz
-!model/resnet18/parsed_vai_int16_widened/weights/*.npz
-
-!examples/
-!examples/**/
-!examples/**/*.md
-!examples/**/*.json
-!examples/**/*.jpg
-!examples/**/*.JPEG
+# Model weights that must stay in git
+!project/model/model_inputs_manifest.json
+!project/model/**/*.md
+!project/model/**/*.json
+!project/model/**/*.yaml
+!project/model/**/*.yml
+!project/model/resnet18/parsed_vai/weights/*.npz
+!project/model/resnet18/parsed_vai_int16_widened/weights/*.npz
+!project/model/yolov5n_coco50k_qat/
+!project/model/yolov5n_coco50k_qat/**/
+!project/model/yolov5n_coco50k_qat/README.txt
+!project/model/yolov5n_coco50k_qat/parse_quant_export.py
+!project/model/yolov5n_coco50k_qat/int8/best.pt
+!project/model/yolov5n_coco50k_qat/int8/best.onnx
+!project/model/yolov5n_coco50k_qat/int8/best.quant.onnx
+!project/model/yolov5n_coco50k_qat/int16/best.pt
+!project/model/yolov5n_coco50k_qat/int16/best.onnx
+!project/model/yolov5n_coco50k_qat/int16/best.quant.onnx
+!project/model/yolov5n_coco50k_qat/parsed_int8/network.json
+!project/model/yolov5n_coco50k_qat/parsed_int8/activation_scales.json
+!project/model/yolov5n_coco50k_qat/parsed_int8/weights/*.npz
+!project/model/yolov5n_coco50k_qat/parsed_int16/network.json
+!project/model/yolov5n_coco50k_qat/parsed_int16/activation_scales.json
+!project/model/yolov5n_coco50k_qat/parsed_int16/weights/*.npz
+!project/model/resnet18/resnet18_fp32.onnx
+!project/model/resnet18/resnet18_w8a8.onnx
 
 # ==============================================================================
-# Generated Vivado/build artifacts
+# Generated artifacts
 # ==============================================================================
 build/**
+project/build/**
+test/network/output/**
+test/tops/output/**
+test/topsw/output/**
+test/precision/output/**
+output/**
 logs/**
 .Xil/
 *.jou
@@ -118,60 +103,31 @@ logs/**
 *.srcs/
 *.runs/
 /bd/
-rtl/chip/build/
-scripts/chip-lite/tmp/
-sim/lite_bd_export/**
 
-# ==============================================================================
-# Runtime outputs and temporary probes
-# ==============================================================================
-output/**
+# Re-allow the two root programming files after the generic *.bit/*.ltx ignore.
+!/top.bit
+!/top.ltx
 
-# Downloaded model packages and external algorithm repos
+# Downloaded / extra model packages
 weihgts/
 weights/
-model/**/*.onnx
-model/**/*.pt
-model/**/*.pth
-model/**/*.pkl
-model/**/*.pb
-model/**/*.tar.gz
-model/**/*.onnx.bak
-model/algorithm/Infrared-Object-Detection/
-model/algorithm/Resnet18-quantization/
-model/algorithm/quantized-yolov5/
-model/algorithm/quantized-yolov5_arcive/
+project/model/**/*.onnx
+project/model/**/*.pt
+project/model/**/*.pth
+project/model/**/*.pkl
+project/model/**/*.pb
+project/model/**/*.tar.gz
+project/model/**/*.onnx.bak
+!project/model/yolov5n_coco50k_qat/int8/best.pt
+!project/model/yolov5n_coco50k_qat/int8/best.onnx
+!project/model/yolov5n_coco50k_qat/int8/best.quant.onnx
+!project/model/yolov5n_coco50k_qat/int16/best.pt
+!project/model/yolov5n_coco50k_qat/int16/best.onnx
+!project/model/yolov5n_coco50k_qat/int16/best.quant.onnx
+!project/model/resnet18/resnet18_fp32.onnx
+!project/model/resnet18/resnet18_w8a8.onnx
 
-# Self-contained 80832ec attempt1 release.  Keep the one deployment image and
-# offline model inputs; compiler/runtime outputs remain ignored under output/.
-!bitstream/
-!bitstream/*.bit
-!bitstream/*.json
-!bitstream/*.md
-!model/yolov5n_coco50k_qat/
-!model/yolov5n_coco50k_qat/**/
-!model/yolov5n_coco50k_qat/README.txt
-!model/yolov5n_coco50k_qat/parse_quant_export.py
-!model/yolov5n_coco50k_qat/int8/
-!model/yolov5n_coco50k_qat/int8/best.pt
-!model/yolov5n_coco50k_qat/int8/best.onnx
-!model/yolov5n_coco50k_qat/int8/best.quant.onnx
-!model/yolov5n_coco50k_qat/int16/
-!model/yolov5n_coco50k_qat/int16/best.pt
-!model/yolov5n_coco50k_qat/int16/best.onnx
-!model/yolov5n_coco50k_qat/int16/best.quant.onnx
-!model/yolov5n_coco50k_qat/parsed_int8/network.json
-!model/yolov5n_coco50k_qat/parsed_int8/activation_scales.json
-!model/yolov5n_coco50k_qat/parsed_int8/weights/*.npz
-!model/yolov5n_coco50k_qat/parsed_int16/network.json
-!model/yolov5n_coco50k_qat/parsed_int16/activation_scales.json
-!model/yolov5n_coco50k_qat/parsed_int16/weights/*.npz
-!model/resnet18/resnet18_fp32.onnx
-!model/resnet18/resnet18_w8a8.onnx
-
-# ==============================================================================
 # Simulation and tool byproducts
-# ==============================================================================
 __pycache__/
 *.pyc
 .venv/
@@ -182,36 +138,18 @@ venv/
 .pytest_cache/
 /tmp/
 .cursor/
-
-rtl/ref/YOLOv11-RTL/
-rtl/**/spyglass/
-rtl/**/.project*
-rtl/**/.design*
-rtl/**/.CurrentSessionRunSummaryFiles
-rtl/**/xsim.dir/
-rtl/**/sim/build_*/
-rtl/tb/lite_bd/module_tb/sim/compile/
-rtl/**/simv*
-rtl/**/simv*.daidir/
-rtl/**/csrc/
-rtl/**/verdiLog/
-rtl/**/vfastLog/
-rtl/**/ucli.key
-rtl/**/novas*.log
-rtl/**/*.fsdb
-rtl/**/*.wdb
-rtl/**/xelab.*
-rtl/**/xvlog.*
-rtl/**/xsim*.jou
-rtl/**/xsim*.log
-rtl/**/xsim*.pb
-
-.cxl.vcs*.version
-synopsys_sim.setup
-
-# Local scratch. Must come after !*.py / !TEST/**/*.py or those globs
-# would keep probe scripts and leftover checkouts visible.
 temp/
 temp/**
-TEST/end2end/output/
-TEST/end2end/output/**
+
+project/rtl/ref/YOLOv11-RTL/
+project/rtl/**/spyglass/
+project/rtl/**/.project*
+project/rtl/**/.design*
+project/rtl/**/xsim.dir/
+project/rtl/**/sim/build_*/
+project/rtl/**/simv*
+project/rtl/**/csrc/
+project/rtl/**/verdiLog/
+project/rtl/**/*.fsdb
+.cxl.vcs*.version
+synopsys_sim.setup

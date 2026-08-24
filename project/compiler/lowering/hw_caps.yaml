@@ -1,0 +1,37 @@
+# Hardware capability contract for the chip-v3 full-network compiler.
+# Values mirror rtl/chip/chip_defines.vh and the BD address map.
+address_map:
+  hbm_base: 0x0
+  ibuf_base: 0x100000000
+  ibuf_size: 0x80000
+  tile_obuf_base: 0x101000000
+  tile_obuf_size: 0x40000
+  obuf_base: 0x102000000
+  obuf_size: 0x800000
+  vpu_buf_size: 0x800000
+  wb_base: 0x103000000
+  wb_size: 0x8000
+  inst_base: 0x104000000
+  inst_size: 0x20000
+  regs_base: 0x105000000
+  regs_size: 0x1000
+
+units:
+  dcim:
+    acc_depth_max: 80
+
+op_lowering:
+  Conv:
+    requires:
+      group: 1
+      kernel_max: 7
+      stride_max: 2
+      pad_max: 3
+  MaxPool:
+    requires:
+      kernel: [5, 5]
+      stride: 1
+      pad: 2
+  Resize:
+    requires:
+      mode: nearest
