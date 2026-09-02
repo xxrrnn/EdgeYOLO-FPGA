@@ -459,18 +459,25 @@ def _stats(got: np.ndarray, ref: np.ndarray) -> dict[str, float]:
     }
 
 
-def compare(
+def compute_golden_refs(
     build_dir: Path,
     image: Path,
     *,
     network: str = "auto",
     parsed_dir: str | Path | None = None,
     yolo_parsed_dir: str | Path | None = None,
-    output: str | Path | None = None,
-    output_dir: str | Path | None = None,
-    atol: float = 1e-3,
     golden_cache_dir: str | Path | None = None,
-) -> None:
+    golden_mode: str = "auto",
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Load or compute the host compiler golden for a one-shot plan.
+
+    golden_mode:
+      * ``auto`` — cache hit, else compute
+      * ``cache`` — cache only; miss is an error
+      * ``compute`` — always run host golden, then refresh cache
+    """
+    if golden_mode not in {"auto", "cache", "compute"}:
+        raise ValueError(f"unsupported golden_mode {golden_mode!r}")
     build_dir = Path(build_dir)
     plan = json.loads((build_dir / "plan.json").read_text())
     mode = plan.get("mode", plan.get("compile_meta", {}).get("mode", "int8"))
@@ -484,7 +491,6 @@ def compare(
         network_name = network
 
     host = plan["host_io"]
-    outputs = host.get("outputs")
     is_resnet = "resnet" in network_name
     has_qdq = False
     output_dtype = str(host.get("output_dtype", "float32"))
@@ -502,28 +508,70 @@ def compare(
         has_qdq=has_qdq, output_dtype=output_dtype,
     )
     cache_dir = Path(golden_cache_dir) if golden_cache_dir else None
-    cached = _load_golden_cache(cache_dir, identity) if cache_dir is not None else None
+    if golden_mode != "compute" and cache_dir is not None:
+        golden_t0 = time.perf_counter()
+        cached = _load_golden_cache(cache_dir, identity)
+        if cached is not None:
+            primary_ref, named_refs = cached
+            print(f"golden cache load {time.perf_counter() - golden_t0:.3f}s", flush=True)
+            return primary_ref, named_refs
+        if golden_mode == "cache":
+            raise RuntimeError(
+                "golden cache miss; rerun with --golden to compute host golden"
+            )
+    elif golden_mode == "cache":
+        raise RuntimeError(
+            "golden cache disabled; rerun with --golden to compute host golden"
+        )
+
     golden_t0 = time.perf_counter()
-    if cached is not None:
-        primary_ref, named_refs = cached
-        print(f"golden cache load {time.perf_counter() - golden_t0:.3f}s", flush=True)
-    elif is_resnet:
+    if is_resnet:
         primary_ref = run_resnet_compiler_golden(
             Path(image), mode, max_layers, parsed_dir,
             quantize_residuals=has_qdq,
             output_dtype=output_dtype,
         )
-        named_refs = {}
-        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
-        if cache_dir is not None:
-            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
+        named_refs: dict[str, np.ndarray] = {}
     else:
         primary_ref, named_refs = run_yolo_compiler_golden(
             Path(image), mode, max_layers, yolo_parsed_dir,
         )
-        print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
-        if cache_dir is not None:
-            _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
+    print(f"golden compute {time.perf_counter() - golden_t0:.3f}s", flush=True)
+    if cache_dir is not None:
+        _save_golden_cache(cache_dir, identity, primary_ref, named_refs)
+    return primary_ref, named_refs
+
+
+def compare(
+    build_dir: Path,
+    image: Path,
+    *,
+    network: str = "auto",
+    parsed_dir: str | Path | None = None,
+    yolo_parsed_dir: str | Path | None = None,
+    output: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    atol: float = 1e-3,
+    golden_cache_dir: str | Path | None = None,
+    refs: tuple[np.ndarray, dict[str, np.ndarray]] | None = None,
+    golden_mode: str = "auto",
+) -> bool:
+    build_dir = Path(build_dir)
+    plan = json.loads((build_dir / "plan.json").read_text())
+    host = plan["host_io"]
+    outputs = host.get("outputs")
+    if refs is None:
+        primary_ref, named_refs = compute_golden_refs(
+            build_dir,
+            image,
+            network=network,
+            parsed_dir=parsed_dir,
+            yolo_parsed_dir=yolo_parsed_dir,
+            golden_cache_dir=golden_cache_dir,
+            golden_mode=golden_mode,
+        )
+    else:
+        primary_ref, named_refs = refs
 
     failed = False
     compared = False
@@ -557,6 +605,7 @@ def compare(
 
     if failed:
         raise RuntimeError(f"one-shot compare exceeded atol={atol}")
+    return compared
 
 
 def main() -> None:

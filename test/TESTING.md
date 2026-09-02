@@ -28,6 +28,8 @@ python test/network/run.py --self-check
 ```powershell
 python test/network/run.py --num 1
 python test/network/run.py --network yolo --precision int8 --num 1
+python test/network/run.py --network yolo --precision int8 --num 1 --golden
+python test/network/run.py --network yolo --precision int8 --num 1 --golden --verbose
 python test/network/run.py --network yolo --precision int16 --num 1
 python test/network/run.py --network resnet --precision int8 --num 1
 python test/network/run.py --network resnet --precision int16 --num 1
@@ -43,7 +45,7 @@ python test/network/run.py --network resnet --precision int8 --num 20
 python test/network/run.py --network resnet --precision int16 --num 20
 ```
 
-硬门限是 FPGA 特征与 compiler golden 数值一致。产物：单图在 `test/network/output/inference/`，全部在 `test/network/output/acceptance/`。
+`--num 1` 默认把 FPGA 特征与 golden cache 比对；加 `--golden` 则 FPGA 跑完后再在主机计算 compiler golden。默认只打印检测类别/置信度和醒目的 `result: same`；`--verbose` 才输出 [win]/golden/路径等细节。硬门限仍是特征数值一致。产物：单图在 `test/network/output/inference/`，全部在 `test/network/output/acceptance/`。
 
 **单图实测：四套 golden max_abs=0。**
 

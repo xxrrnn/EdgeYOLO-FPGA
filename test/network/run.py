@@ -7,9 +7,13 @@
 
     python test/network/run.py --self-check
     python test/network/run.py --network yolo --precision int8 --num 1
+    python test/network/run.py --network yolo --precision int8 --num 1 --golden
     python test/network/run.py --network resnet --precision int16 --num 1
-    python test/network/run.py --network all --precision both --num 1
     python test/network/run.py --network all --precision both --num 20
+
+``--num 1`` 默认把 FPGA 特征与 golden cache 比对；加 ``--golden`` 则先跑 FPGA，
+再在主机计算 compiler golden 后比对。默认只打印检测结果和 ``result: same``；
+``--verbose`` 才输出 [win]/golden/路径等细节。
 
 硬件运行仍要求 FPGA 已烧录仓库根目录的 top.bit，并已安装 Xilinx
 XDMA 驱动；这两项是板卡/驱动状态，不是仓库文件配置。Python 依赖见 README。
@@ -17,9 +21,11 @@ XDMA 驱动；这两项是板卡/驱动状态，不是仓库文件配置。Pytho
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import importlib
+import io
 import json
 import os
 import subprocess
@@ -115,7 +121,7 @@ def _display_path(path: Path) -> Path:
         return resolved
 
 
-def _clear_result_jpgs(out_dir: Path) -> None:
+def _clear_result_jpgs(out_dir: Path, *, quiet: bool = False) -> None:
     if not out_dir.is_dir():
         return
     removed = []
@@ -127,8 +133,40 @@ def _clear_result_jpgs(out_dir: Path) -> None:
         seen.add(key)
         path.unlink()
         removed.append(path)
-    if removed:
+    if removed and not quiet:
         print(f"  [clean  ] removed {len(removed)} result image(s) in {_display_path(out_dir)}", flush=True)
+
+
+@contextlib.contextmanager
+def _muted_stdout(enabled: bool):
+    if not enabled:
+        yield
+        return
+    with contextlib.redirect_stdout(io.StringIO()):
+        yield
+
+
+def _print_compact_predictions(network: str, result: dict) -> None:
+    if network == "yolo":
+        detections = list(result.get("detections", []))
+        if not detections:
+            print("(no detections)")
+            return
+        for det in detections:
+            name = det.get("class_name", f"class_{det.get('class_id', '?')}")
+            print(f"{name} {float(det['conf']):.3f}")
+        return
+    top = result["topk"][0]
+    print(f"{top['class_name']} {float(top['score']):.4f}")
+
+
+def _print_result_banner(same: bool) -> None:
+    text = "result: same" if same else "result: different"
+    bar = "=" * 28
+    print()
+    print(bar)
+    print(f"  {text}")
+    print(bar, flush=True)
 
 
 def _run_checked(cmd: list[str], *, cwd: Path = REPO_ROOT) -> subprocess.CompletedProcess:
@@ -214,6 +252,12 @@ def _golden_cache_dir(args: argparse.Namespace) -> Path | None:
     return OUT_DIR / "golden_cache"
 
 
+def _golden_mode(args: argparse.Namespace, *, single_shot: bool) -> str:
+    if getattr(args, "golden", False):
+        return "compute"
+    return "cache" if single_shot else "auto"
+
+
 def _hardware_mode(network: str, precision: str) -> str:
     if network == "resnet" and precision == "vai":
         return "int8"
@@ -263,6 +307,9 @@ def run_one_shot_fpga(
     result_group: str | None = None,
     golden_cache_dir: Path | None = None,
     session=None,
+    golden_mode: str = "auto",
+    announce_compare: bool = False,
+    verbose: bool = True,
 ) -> Path:
     """Run a full one-shot FPGA workload, compare features, and run the host boundary."""
     tag = _one_shot_tag(network, precision)
@@ -295,89 +342,105 @@ def run_one_shot_fpga(
     if named_outputs:
         feat_dir.mkdir(parents=True, exist_ok=True)
 
-    import hw_runner_win
-    hw_session = session
-    close_session = False
-    if hw_session is None:
-        hw_session = hw_runner_win.HardwareSession(
-            build_dir,
-            quiet_xdma=quiet_xdma,
-            soft_reset=soft_reset,
-            poll_timeout_s=poll_timeout_s,
-            read_chunk_bytes=read_chunk_bytes,
-        )
-        close_session = True
-    try:
-        input_bytes = hw_session.prepare_input(
-            yolo_image=img_path if network == "yolo" else None,
-            resnet_image=img_path if network == "resnet" else None,
-            yolo_parsed_dir=yolo_parsed_dir,
-            resnet_parsed_dir=resnet_parsed_dir,
-        )
-        hw_session.run(
-            input_bytes, primary,
-            feat_dir if named_outputs else None,
-            timing_json,
-            reuse_program=True,
-        )
-    finally:
-        if close_session:
-            hw_session.close()
-
     import compare_one_shot
+    import hw_runner_win
     import one_shot_host_head
-    compare_one_shot.compare(
-        build_dir,
-        img_path,
-        output=primary,
-        output_dir=feat_dir if named_outputs else None,
-        atol=compare_atol,
-        yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
-        parsed_dir=resnet_parsed_dir if network == "resnet" else None,
-        golden_cache_dir=golden_cache_dir,
-    )
-    one_shot_host_head.run_head(
-        build_dir,
-        img_path,
-        output=primary,
-        output_dir=feat_dir if network == "yolo" else None,
-        json_out=head_json,
-        conf=conf,
-        iou=iou,
-        expect_detections=yolo_expect_detections if network == "yolo" else None,
-        expect_top1=resnet_expect_top1 if network == "resnet" else None,
-        yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
-        parsed_dir=resnet_parsed_dir if network == "resnet" else None,
-    )
+    compare_ok = True
+    compare_exc: BaseException | None = None
+    with _muted_stdout(not verbose):
+        hw_session = session
+        close_session = False
+        if hw_session is None:
+            hw_session = hw_runner_win.HardwareSession(
+                build_dir,
+                quiet_xdma=quiet_xdma,
+                soft_reset=soft_reset,
+                poll_timeout_s=poll_timeout_s,
+                read_chunk_bytes=read_chunk_bytes,
+            )
+            close_session = True
+        try:
+            input_bytes = hw_session.prepare_input(
+                yolo_image=img_path if network == "yolo" else None,
+                resnet_image=img_path if network == "resnet" else None,
+                yolo_parsed_dir=yolo_parsed_dir,
+                resnet_parsed_dir=resnet_parsed_dir,
+            )
+            hw_session.run(
+                input_bytes, primary,
+                feat_dir if named_outputs else None,
+                timing_json,
+                reuse_program=True,
+            )
+        finally:
+            if close_session:
+                hw_session.close()
+        try:
+            compare_one_shot.compare(
+                build_dir,
+                img_path,
+                output=primary,
+                output_dir=feat_dir if named_outputs else None,
+                atol=compare_atol,
+                yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+                parsed_dir=resnet_parsed_dir if network == "resnet" else None,
+                golden_cache_dir=golden_cache_dir,
+                golden_mode=golden_mode,
+            )
+        except RuntimeError as exc:
+            compare_ok = False
+            compare_exc = exc
+            if "exceeded atol" not in str(exc):
+                raise
+        head = one_shot_host_head.run_head(
+            build_dir,
+            img_path,
+            output=primary,
+            output_dir=feat_dir if network == "yolo" else None,
+            json_out=head_json,
+            conf=conf,
+            iou=iou,
+            expect_detections=yolo_expect_detections if network == "yolo" else None,
+            expect_top1=resnet_expect_top1 if network == "resnet" else None,
+            yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+            parsed_dir=resnet_parsed_dir if network == "resnet" else None,
+        )
 
-    result = json.loads(head_json.read_text())
+    result = head if isinstance(head, dict) else json.loads(head_json.read_text())
     detections = list(result.get("detections", []))
     if network == "yolo":
         _draw_yolo_detections(img_path, detections, result_img)
     else:
         _draw_resnet_classification(img_path, list(result.get("topk", [])), result_img)
 
-    timing = json.loads(timing_json.read_text())
-    summary = f"{len(detections)} det" if network == "yolo" else result["topk"][0]["class_name"]
-    print(f"  [fpga   ] {label} one-shot: {summary}")
-    print(
-        "            timing: "
-        f"total={float(timing.get('total_s', 0.0)):.3f}s, "
-        f"execute={float(timing.get('execute_s', 0.0)):.3f}s, "
-        f"weights={float(timing.get('upload_weights_s', 0.0)):.3f}s, "
-        f"read={float(timing.get('read_outputs_s', 0.0)):.3f}s"
-    )
-    if network == "yolo":
-        for det in detections:
-            bbox = ", ".join(f"{v:.1f}" for v in det["bbox"])
-            print(f"            bbox=[{bbox}], conf={float(det['conf']):.4f}, class={int(det['class_id'])}")
-        print(f"            image -> {_display_path(result_img)}")
-    else:
-        top = result["topk"][0]
-        print(f"            top1={top['class_name']}({int(top['class_id'])}), score={float(top['score']):.4f}")
-        print(f"            image -> {_display_path(result_img)}")
-    print(f"            json  -> {_display_path(head_json)}")
-    print(f"            time  -> {_display_path(timing_json)}")
+    if announce_compare:
+        _print_compact_predictions(network, result)
+        _print_result_banner(compare_ok)
+
+    if verbose:
+        timing = json.loads(timing_json.read_text())
+        summary = f"{len(detections)} det" if network == "yolo" else result["topk"][0]["class_name"]
+        print(f"  [fpga   ] {label} one-shot: {summary}")
+        print(
+            "            timing: "
+            f"total={float(timing.get('total_s', 0.0)):.3f}s, "
+            f"execute={float(timing.get('execute_s', 0.0)):.3f}s, "
+            f"weights={float(timing.get('upload_weights_s', 0.0)):.3f}s, "
+            f"read={float(timing.get('read_outputs_s', 0.0)):.3f}s"
+        )
+        if network == "yolo":
+            for det in detections:
+                bbox = ", ".join(f"{v:.1f}" for v in det["bbox"])
+                print(f"            bbox=[{bbox}], conf={float(det['conf']):.4f}, class={int(det['class_id'])}")
+            print(f"            image -> {_display_path(result_img)}")
+        else:
+            top = result["topk"][0]
+            print(f"            top1={top['class_name']}({int(top['class_id'])}), score={float(top['score']):.4f}")
+            print(f"            image -> {_display_path(result_img)}")
+        print(f"            json  -> {_display_path(head_json)}")
+        print(f"            time  -> {_display_path(timing_json)}")
+    if compare_exc is not None:
+        raise compare_exc
     return result_img
 
 
@@ -406,9 +469,9 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_release_bundle(*, require_xdma: bool) -> dict:
+def _verify_release_bundle(*, require_xdma: bool, quiet: bool = False) -> dict:
     """Fail early if a fresh clone is missing any maintained runtime asset."""
-    bitstream = _verify_release_bitstream()
+    bitstream = _verify_release_bitstream(quiet=quiet)
     checked_hashes = 1
 
     model_manifest = json.loads(MODEL_INPUTS_MANIFEST.read_text(encoding="utf-8"))
@@ -458,16 +521,17 @@ def _verify_release_bundle(*, require_xdma: bool) -> dict:
         "imagenet_images": len(imagenet_images),
         "xdma_tools": len(xdma_files) if require_xdma else "not-required",
     }
-    print(
-        "Release bundle PASS: "
-        f"{result['compile_on_demand_workloads']} compile-on-demand workloads, "
-        f"{result['model_inputs']} model inputs, "
-        f"{result['coco_images']} COCO + {result['imagenet_images']} ImageNet images, "
-        f"{result['hashed_files']} SHA256 checks"
-    )
+    if not quiet:
+        print(
+            "Release bundle PASS: "
+            f"{result['compile_on_demand_workloads']} compile-on-demand workloads, "
+            f"{result['model_inputs']} model inputs, "
+            f"{result['coco_images']} COCO + {result['imagenet_images']} ImageNet images, "
+            f"{result['hashed_files']} SHA256 checks"
+        )
     return result
 
-def _verify_release_bitstream() -> dict:
+def _verify_release_bitstream(*, quiet: bool = False) -> dict:
     bit_path = BITSTREAM_PATH
     if not bit_path.is_file():
         raise FileNotFoundError(f"top.bit not found: {bit_path}")
@@ -485,7 +549,8 @@ def _verify_release_bitstream() -> dict:
     }
     if result["status"] != "PASS":
         raise RuntimeError(f"release bitstream integrity check failed: {bit_path}")
-    print(f"Release bitstream PASS: {bit_path.name} sha256={actual[:16]}...")
+    if not quiet:
+        print(f"Release bitstream PASS: {bit_path.name} sha256={actual[:16]}...")
     return result
 
 
@@ -558,6 +623,7 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                             yolo_expect_detections=None,
                             result_group="acceptance/yolo_coco",
                             golden_cache_dir=_golden_cache_dir(args),
+                            golden_mode=_golden_mode(args, single_shot=False),
                             session=session,
                         )
                         base = out_root / "acceptance" / "yolo_coco" / f"one_shot_{tag}"
@@ -626,6 +692,7 @@ def run_acceptance_suite(args: argparse.Namespace, networks: list[str],
                             resnet_expect_top1=None,
                             result_group="acceptance/resnet",
                             golden_cache_dir=_golden_cache_dir(args),
+                            golden_mode=_golden_mode(args, single_shot=False),
                             session=session,
                         )
                         base = out_root / "acceptance" / "resnet" / f"one_shot_{tag}"
@@ -712,6 +779,10 @@ def parse_args() -> argparse.Namespace:
                     help="YOLO 主机端 NMS IoU 阈值")
     ap.add_argument("--out-dir", default=None,
                     help="输出根目录；单图默认 test/network/output/inference")
+    ap.add_argument("--golden", action="store_true",
+                    help="FPGA 跑完后在主机计算 compiler golden 再比对；默认只用 golden cache")
+    ap.add_argument("--verbose", action="store_true",
+                    help="打印 [win]/golden/路径等细节；默认 --num 1 只输出检测与 result: same")
     ap.add_argument("--yolo-precision", choices=["int8", "int16", "both"], default=None,
                     help=argparse.SUPPRESS)
     ap.add_argument("--resnet-precision",
@@ -735,6 +806,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    verbose = bool(args.verbose)
     if args.self_check:
         try:
             result = _verify_release_bundle(require_xdma=(os.name == "nt"))
@@ -743,15 +815,8 @@ def main() -> int:
             return 1
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
-    try:
-        _verify_release_bundle(require_xdma=(os.name == "nt"))
-    except (OSError, ValueError, KeyError, RuntimeError) as exc:
-        print(f"  [ERROR] release preflight failed: {exc}")
-        return 1
-    _setup_imports()
 
     networks = ["yolo", "resnet"] if args.network == "all" else [args.network]
-
     shared = _normalize_cli_precision(args.precision)
     yolo_raw = shared if shared is not None else _normalize_cli_precision(args.yolo_precision)
     resnet_raw = shared if shared is not None else _normalize_cli_precision(args.resnet_precision)
@@ -768,6 +833,14 @@ def main() -> int:
     args.num = int(args.num)
     if args.num > 1:
         args.acceptance = True
+    compact = (not args.acceptance) and (not verbose)
+
+    try:
+        _verify_release_bundle(require_xdma=(os.name == "nt"), quiet=compact)
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"  [ERROR] release preflight failed: {exc}")
+        return 1
+    _setup_imports()
 
     if args.acceptance:
         return run_acceptance_suite(args, networks, yolo_precisions, resnet_precisions)
@@ -801,12 +874,13 @@ def main() -> int:
             )
             return 1
 
-    print("=" * 60)
-    print("EdgeYOLO-FPGA Full One-Shot Inference")
-    print(f"  Workloads     : {', '.join(f'{n}:{_one_shot_tag(n, p)}' for n, p, _ in workloads)}")
     one_shot_out_root = Path(args.out_dir) if args.out_dir else INFERENCE_OUT_DIR
-    print(f"  Output        : {one_shot_out_root.resolve()}")
-    print("=" * 60)
+    if verbose:
+        print("=" * 60)
+        print("EdgeYOLO-FPGA Full One-Shot Inference")
+        print(f"  Workloads     : {', '.join(f'{n}:{_one_shot_tag(n, p)}' for n, p, _ in workloads)}")
+        print(f"  Output        : {one_shot_out_root.resolve()}")
+        print("=" * 60)
     t0 = time.time()
     total_timing = 0.0
     for network, precision, image in workloads:
@@ -831,31 +905,46 @@ def main() -> int:
             result_group = "resnet"
         tag = _one_shot_tag(network, precision)
         build_dir = Path(args.one_shot_build_dir) if args.one_shot_build_dir else default_build
-        print(f"\n--- {network.upper()} {tag.upper()} One-Shot [{image.name}] ---")
-        _clear_result_jpgs(one_shot_out_root / result_group / f"one_shot_{tag}")
-        run_one_shot_fpga(
-            network, precision, image, one_shot_out_root,
-            build_dir=build_dir,
-            conf=args.conf,
-            iou=args.iou,
-            poll_timeout_s=args.one_shot_poll_timeout_s,
-            read_chunk_bytes=args.one_shot_read_chunk_bytes,
-            compare_atol=args.one_shot_compare_atol,
-            quiet_xdma=not args.verbose_xdma,
-            soft_reset=not args.one_shot_no_soft_reset,
-            recompile=args.one_shot_recompile,
-            yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
-            resnet_parsed_dir=resnet_parsed_dir if network == "resnet" else None,
-            yolo_expect_detections=yolo_expect if network == "yolo" else None,
-            result_group=result_group,
-            golden_cache_dir=_golden_cache_dir(args),
+        if verbose:
+            print(f"\n--- {network.upper()} {tag.upper()} One-Shot [{image.name}] ---")
+        _clear_result_jpgs(
+            one_shot_out_root / result_group / f"one_shot_{tag}",
+            quiet=compact,
         )
+        try:
+            run_one_shot_fpga(
+                network, precision, image, one_shot_out_root,
+                build_dir=build_dir,
+                conf=args.conf,
+                iou=args.iou,
+                poll_timeout_s=args.one_shot_poll_timeout_s,
+                read_chunk_bytes=args.one_shot_read_chunk_bytes,
+                compare_atol=args.one_shot_compare_atol,
+                quiet_xdma=not (verbose or args.verbose_xdma),
+                soft_reset=not args.one_shot_no_soft_reset,
+                recompile=args.one_shot_recompile,
+                yolo_parsed_dir=yolo_parsed_dir if network == "yolo" else None,
+                resnet_parsed_dir=resnet_parsed_dir if network == "resnet" else None,
+                yolo_expect_detections=yolo_expect if network == "yolo" else None,
+                result_group=result_group,
+                golden_cache_dir=_golden_cache_dir(args),
+                golden_mode=_golden_mode(args, single_shot=True),
+                announce_compare=True,
+                verbose=verbose,
+            )
+        except RuntimeError as exc:
+            if compact:
+                if "exceeded atol" not in str(exc):
+                    print(f"  [ERROR] {exc}")
+                return 1
+            raise
         timing_path = one_shot_out_root / result_group / f"one_shot_{tag}" / f"{image.stem}_{network}_{tag}_fpga_oneshot_timing.json"
         if timing_path.exists():
             total_timing += float(json.loads(timing_path.read_text()).get("total_s", 0.0))
-    print(f"\nDone in {time.time() - t0:.1f}s")
-    if total_timing:
-        print(f"FPGA runner total across workloads: {total_timing:.3f}s")
+    if verbose:
+        print(f"\nDone in {time.time() - t0:.1f}s")
+        if total_timing:
+            print(f"FPGA runner total across workloads: {total_timing:.3f}s")
     return 0
 
 if __name__ == "__main__":
